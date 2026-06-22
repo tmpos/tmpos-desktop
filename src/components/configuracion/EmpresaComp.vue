@@ -1,0 +1,231 @@
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import InputText from 'primevue/inputtext'
+import Button from 'primevue/button'
+import Fieldset from 'primevue/fieldset'
+import { useToast } from 'primevue/usetoast'
+import Toast from 'primevue/toast'
+
+const toast = useToast()
+const loading = ref(false)
+const guardando = ref(false)
+const empresa = ref<any>(null)
+
+const logoInput = ref<HTMLInputElement | null>(null)
+const logoPreview = ref('')
+
+const form = ref({
+  nombre: '',
+  legal: '',
+  encargado: '',
+  telefono: '',
+  email: '',
+  direccion: '',
+  logo: '',
+})
+
+async function cargarEmpresa() {
+  loading.value = true
+  try {
+    const res = await window.db.getAll('empresa')
+    if (res.success && res.data?.length > 0) {
+      empresa.value = res.data[0]
+      form.value = {
+        nombre: res.data[0].nombre || '',
+        legal: res.data[0].legal || '',
+        encargado: res.data[0].encargado || '',
+        telefono: res.data[0].telefono || '',
+        email: res.data[0].email || '',
+        direccion: res.data[0].direccion || '',
+        logo: res.data[0].logo || '',
+      }
+      logoPreview.value = res.data[0].logo || ''
+    }
+  } catch (error) {
+    console.error(error)
+  } finally {
+    loading.value = false
+  }
+}
+
+function seleccionarLogo() {
+  logoInput.value?.click()
+}
+
+function procesarLogo(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  if (!file.type.startsWith('image/')) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona una imagen valida', life: 3000 })
+    return
+  }
+
+  if (file.size > 2 * 1024 * 1024) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'La imagen no debe superar 2MB', life: 3000 })
+    return
+  }
+
+  const reader = new FileReader()
+  reader.onload = () => {
+    logoPreview.value = reader.result as string
+    form.value.logo = reader.result as string
+  }
+  reader.readAsDataURL(file)
+}
+
+function quitarLogo() {
+  logoPreview.value = ''
+  form.value.logo = ''
+  if (logoInput.value) logoInput.value.value = ''
+}
+
+async function guardar() {
+  if (!form.value.nombre.trim()) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El nombre de la empresa es requerido', life: 3000 })
+    return
+  }
+
+  guardando.value = true
+  try {
+    const data = {
+      nombre: form.value.nombre.trim().toUpperCase(),
+      legal: form.value.legal.trim().toUpperCase(),
+      encargado: form.value.encargado.trim().toUpperCase(),
+      telefono: form.value.telefono.trim(),
+      email: form.value.email.trim().toLowerCase(),
+      direccion: form.value.direccion.trim().toUpperCase(),
+      logo: form.value.logo || '',
+    }
+
+    if (empresa.value?.id) {
+      const res = await window.db.update('empresa', empresa.value.id, data)
+      if (res.success) {
+        toast.add({ severity: 'success', summary: 'Exito', detail: 'Empresa actualizada', life: 3000 })
+        empresa.value = { ...empresa.value, ...data }
+      } else {
+        toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo actualizar', life: 3000 })
+      }
+    } else {
+      const res = await window.db.insert('empresa', data)
+      if (res.success) {
+        toast.add({ severity: 'success', summary: 'Exito', detail: 'Empresa creada', life: 3000 })
+        empresa.value = { id: res.data.id, ...data }
+      } else {
+        toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo crear', life: 3000 })
+      }
+    }
+  } catch (error) {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'Error al guardar', life: 3000 })
+  } finally {
+    guardando.value = false
+  }
+}
+
+onMounted(async () => {
+  await cargarEmpresa()
+})
+</script>
+
+<template>
+  <div>
+    <Toast />
+
+    <div v-if="loading" class="flex items-center justify-center py-20 text-surface-400 gap-3">
+      <i class="pi pi-spin pi-spinner text-2xl"></i>
+      <span>Cargando datos de la empresa...</span>
+    </div>
+
+    <div v-else class="max-w-3xl mx-auto space-y-6">
+      <div class="flex items-center gap-3 pb-2 border-b border-surface-200 dark:border-surface-700">
+        <div class="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center">
+          <i class="pi pi-building text-primary text-lg"></i>
+        </div>
+        <div>
+          <h2 class="text-xl font-bold">Datos de la Empresa</h2>
+          <p class="text-sm text-surface-500">Informacion general del negocio</p>
+        </div>
+      </div>
+
+      <div class="flex flex-col sm:flex-row gap-8">
+        <div class="flex-shrink-0 flex flex-col items-center sm:items-start">
+          <div
+            class="relative w-40 h-40 rounded-2xl border-2 border-dashed border-surface-300 dark:border-surface-600 flex items-center justify-center overflow-hidden bg-surface-50 dark:bg-surface-800 group cursor-pointer transition-colors hover:border-primary-300 dark:hover:border-primary-600"
+            @click="seleccionarLogo"
+          >
+            <img v-if="logoPreview" :src="logoPreview" class="w-full h-full object-contain p-3" alt="Logo" />
+            <div v-else class="flex flex-col items-center gap-2 text-surface-400">
+              <i class="pi pi-image text-4xl"></i>
+              <span class="text-xs font-medium">Click para subir</span>
+            </div>
+            <div class="absolute inset-0 bg-surface-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-2xl">
+              <i class="pi pi-camera text-white text-2xl"></i>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 mt-3">
+            <Button icon="pi pi-upload" size="small" severity="secondary" outlined @click="seleccionarLogo">Subir</Button>
+            <Button v-if="logoPreview" icon="pi pi-trash" size="small" severity="danger" text @click="quitarLogo">Quitar</Button>
+          </div>
+          <p class="text-[11px] text-surface-400 mt-1.5">PNG, JPG. Max 2MB.</p>
+          <input ref="logoInput" type="file" accept="image/*" class="hidden" @change="procesarLogo" />
+        </div>
+
+        <div class="flex-1 space-y-5">
+          <div class="space-y-1.5">
+            <label class="text-sm font-semibold flex items-center gap-1.5">
+              <i class="pi pi-building text-surface-400 text-xs"></i>
+              Nombre <span class="text-red-400">*</span>
+            </label>
+            <InputText v-model="form.nombre" placeholder="Nombre de la empresa" fluid class="uppercase" style="text-transform: uppercase;" />
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div class="space-y-1.5">
+              <label class="text-sm font-semibold flex items-center gap-1.5">
+                <i class="pi pi-id-card text-surface-400 text-xs"></i>
+                RNC / Legal
+              </label>
+              <InputText v-model="form.legal" placeholder="RNC" fluid class="uppercase" style="text-transform: uppercase;" />
+            </div>
+            <div class="space-y-1.5">
+              <label class="text-sm font-semibold flex items-center gap-1.5">
+                <i class="pi pi-phone text-surface-400 text-xs"></i>
+                Telefono
+              </label>
+              <InputText v-model="form.telefono" placeholder="Telefono" fluid />
+            </div>
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="text-sm font-semibold flex items-center gap-1.5">
+              <i class="pi pi-user text-surface-400 text-xs"></i>
+              Encargado
+            </label>
+            <InputText v-model="form.encargado" placeholder="Nombre del encargado" fluid class="uppercase" style="text-transform: uppercase;" />
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="text-sm font-semibold flex items-center gap-1.5">
+              <i class="pi pi-envelope text-surface-400 text-xs"></i>
+              Email
+            </label>
+            <InputText v-model="form.email" placeholder="correo@dominio.com" fluid />
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="text-sm font-semibold flex items-center gap-1.5">
+              <i class="pi pi-map-marker text-surface-400 text-xs"></i>
+              Direccion
+            </label>
+            <InputText v-model="form.direccion" placeholder="Direccion de la empresa" fluid class="uppercase" style="text-transform: uppercase;" />
+          </div>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-3 pt-4 border-t border-surface-200 dark:border-surface-700">
+        <Button label="Guardar Cambios" icon="pi pi-check" :loading="guardando" @click="guardar" />
+      </div>
+    </div>
+  </div>
+</template>

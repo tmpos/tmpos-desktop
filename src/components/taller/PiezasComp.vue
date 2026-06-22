@@ -1,0 +1,430 @@
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
+import IconField from 'primevue/iconfield'
+import InputIcon from 'primevue/inputicon'
+import DataTable from 'primevue/datatable'
+import Column from 'primevue/column'
+import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
+import InputText from 'primevue/inputtext'
+import InputNumber from 'primevue/inputnumber'
+import Textarea from 'primevue/textarea'
+import Select from 'primevue/select'
+import Fieldset from 'primevue/fieldset'
+import { useToast } from 'primevue/usetoast'
+import Toast from 'primevue/toast'
+
+import { envioElectron } from '@/funciones/funciones.js'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+
+const toast = useToast()
+const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
+const piezas = ref<any[]>([])
+const loading = ref(false)
+const viewMode = ref<'table' | 'cards'>('cards')
+const dialogVisible = ref(false)
+const deleteDialogVisible = ref(false)
+const isEditing = ref(false)
+const selectedPieza = ref<any>(null)
+const busqueda = ref('')
+
+const camposArray = [
+  'nombre',
+  'costo',
+  'precio_venta',
+  'cantidad',
+  'alerta',
+  'proveedor',
+  'descripcion',
+  'created_at',
+  'updated_at',
+]
+
+const link = ref('')
+const api = ref('')
+const token = ref('')
+const patronTelefono = ref('')
+const linkImpresora = ref('')
+const patroncedula = ref('')
+const tokenCorto = ref('')
+
+const formDefault = () => ({
+  nombre: '',
+  costo: 0,
+  precio_venta: 0,
+  cantidad: 0,
+  alerta: 1,
+  proveedor: '',
+  descripcion: '',
+})
+
+const form = ref(formDefault())
+
+const proveedores = ref<any[]>([])
+const dialogNuevoProveedor = ref(false)
+const nuevoProveedorForm = ref({ nombre: '', telefono: '' })
+const guardandoProveedor = ref(false)
+
+const piezasFiltradas = computed(() => {
+  const texto = busqueda.value.toLowerCase().trim()
+  if (!texto) return piezas.value
+  return piezas.value.filter(p =>
+    p.nombre?.toLowerCase().includes(texto) ||
+    p.proveedor?.toLowerCase().includes(texto) ||
+    p.descripcion?.toLowerCase().includes(texto)
+  )
+})
+
+async function cargarPiezas() {
+  loading.value = true
+  try {
+    const [piezasRes, proveedoresRes] = await Promise.all([
+      window.db.getAll('piezas'),
+      window.db.getAll('proveedores'),
+    ])
+    if (piezasRes.success) {
+      piezas.value = filterByAlmacen(piezasRes.data || [])
+    }
+    if (proveedoresRes.success) {
+      proveedores.value = proveedoresRes.data || []
+    }
+  } catch (error) {
+    console.error(error)
+  } finally {
+    loading.value = false
+  }
+}
+
+function abrirCrear() {
+  isEditing.value = false
+  selectedPieza.value = null
+  form.value = formDefault()
+  dialogVisible.value = true
+}
+
+function abrirEditar(pieza: any) {
+  isEditing.value = true
+  selectedPieza.value = pieza
+  form.value = {
+    nombre: pieza.nombre || '',
+    costo: pieza.costo || 0,
+    precio_venta: pieza.precio_venta || 0,
+    cantidad: pieza.cantidad || 0,
+    alerta: pieza.alerta || 1,
+    proveedor: pieza.proveedor || '',
+    descripcion: pieza.descripcion || '',
+  }
+  dialogVisible.value = true
+}
+
+function confirmarBorrar(pieza: any) {
+  selectedPieza.value = pieza
+  deleteDialogVisible.value = true
+}
+
+function formatCurrency(value: number) {
+  return value != null ? `$${Number(value).toFixed(2)}` : '$0.00'
+}
+
+async function guardar() {
+  if (!form.value.nombre.trim()) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El nombre es requerido', life: 3000 })
+    return
+  }
+
+  try {
+    const data = {
+      nombre: form.value.nombre.trim().toUpperCase(),
+      costo: form.value.costo || 0,
+      precio_venta: form.value.precio_venta || 0,
+      cantidad: form.value.cantidad || 0,
+      alerta: form.value.alerta || 1,
+      proveedor: form.value.proveedor.trim().toUpperCase(),
+      descripcion: form.value.descripcion.trim(),
+    }
+
+    if (isEditing.value) {
+      const res = await window.db.update('piezas', selectedPieza.value.id, data)
+      if (res.success) {
+        toast.add({ severity: 'success', summary: 'Exito', detail: 'Pieza actualizada', life: 3000 })
+      } else {
+        toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo actualizar', life: 3000 })
+        return
+      }
+    } else {
+      const res = await window.db.insert('piezas', addAlmacenId(data))
+      if (res.success) {
+        toast.add({ severity: 'success', summary: 'Exito', detail: 'Pieza creada', life: 3000 })
+      } else {
+        toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo crear', life: 3000 })
+        return
+      }
+    }
+
+    dialogVisible.value = false
+    await cargarPiezas()
+  } catch (error) {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'Error al guardar', life: 3000 })
+  }
+}
+
+async function borrar() {
+  try {
+    const res = await window.db.delete('piezas', selectedPieza.value.id)
+    if (res.success) {
+      toast.add({ severity: 'success', summary: 'Exito', detail: 'Pieza eliminada', life: 3000 })
+    } else {
+      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo eliminar', life: 3000 })
+      return
+    }
+    deleteDialogVisible.value = false
+    await cargarPiezas()
+  } catch (error) {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'Error al eliminar', life: 3000 })
+  }
+}
+
+async function guardarNuevoProveedor() {
+  if (!nuevoProveedorForm.value.nombre.trim()) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El nombre del proveedor es requerido', life: 3000 })
+    return
+  }
+  guardandoProveedor.value = true
+  try {
+    const res = await window.db.insert('proveedores', {
+      nombre: nuevoProveedorForm.value.nombre.trim().toUpperCase(),
+      telefono: nuevoProveedorForm.value.telefono.trim(),
+    })
+    if (res.success) {
+      form.value.proveedor = nuevoProveedorForm.value.nombre.trim().toUpperCase()
+      dialogNuevoProveedor.value = false
+      await cargarPiezas()
+      toast.add({ severity: 'success', summary: 'Creado', detail: 'Proveedor agregado', life: 2000 })
+    } else {
+      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo crear', life: 3000 })
+    }
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 3000 })
+  } finally {
+    guardandoProveedor.value = false
+  }
+}
+
+onMounted(async () => {
+  try {
+    const datosJSON = await envioElectron('datosarchivo')
+    if (datosJSON) {
+      link.value = datosJSON.VITE_LINKURL || ''
+      api.value = datosJSON.VITE_LINK_API || ''
+      token.value = datosJSON.VITE_TOKEN || ''
+      patronTelefono.value = datosJSON.VITE_PATRON_TELEFONO || ''
+      linkImpresora.value = datosJSON.VITE_IMPRESORA_LOCAL || ''
+      patroncedula.value = datosJSON.VITE_PATRON_CEDULA || ''
+      tokenCorto.value = datosJSON.VITE_TOKEN_CORTO || ''
+    }
+  } catch (error) {
+    console.error('Error cargando configuracion:', error)
+  }
+
+  await cargarPiezas()
+})
+</script>
+
+<template>
+  <div>
+    <Toast />
+
+    <Fieldset legend="Piezas">
+      <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
+        <IconField>
+          <InputIcon class="pi pi-search" />
+          <InputText v-model="busqueda" placeholder="Buscar pieza..." />
+        </IconField>
+
+        <div class="flex items-center gap-2">
+          <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
+            <button
+              class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"
+              :class="viewMode === 'table'
+                ? 'bg-primary text-primary-contrast'
+                : 'bg-surface-0 dark:bg-surface-800 text-surface-600 dark:text-surface-300 hover:bg-surface-100 dark:hover:bg-surface-700'"
+              @click="viewMode = 'table'"
+            >
+              <i class="pi pi-list"></i>
+            </button>
+            <button
+              class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer border-l border-surface-200 dark:border-surface-700"
+              :class="viewMode === 'cards'
+                ? 'bg-primary text-primary-contrast'
+                : 'bg-surface-0 dark:bg-surface-800 text-surface-600 dark:text-surface-300 hover:bg-surface-100 dark:hover:bg-surface-700'"
+              @click="viewMode = 'cards'"
+            >
+              <i class="pi pi-th-large"></i>
+            </button>
+          </div>
+          <Button label="Nueva Pieza" icon="pi pi-plus" @click="abrirCrear" />
+        </div>
+      </div>
+
+      <DataTable
+        v-if="viewMode === 'table'"
+        :value="piezasFiltradas"
+        :loading="loading"
+        stripedRows
+        paginator
+        :rows="10"
+        :rowsPerPageOptions="[10, 25, 50]"
+        dataKey="id"
+        responsiveLayout="scroll"
+      >
+        <Column header="Acciones" style="width: 8rem">
+          <template #body="{ data }">
+            <div class="flex gap-1">
+              <Button icon="pi pi-pencil" severity="info" text rounded @click.stop="abrirEditar(data)" v-tooltip="'Editar'" />
+              <Button icon="pi pi-trash" severity="danger" text rounded @click.stop="confirmarBorrar(data)" v-tooltip="'Eliminar'" />
+            </div>
+          </template>
+        </Column>
+        <Column field="id" header="ID" style="width: 5rem" />
+        <Column field="nombre" header="Nombre" sortable />
+        <Column field="cantidad" header="Cant." sortable style="width: 6rem" />
+        <Column field="costo" header="Costo" sortable style="width: 7rem">
+          <template #body="{ data }">{{ formatCurrency(data.costo) }}</template>
+        </Column>
+        <Column field="precio_venta" header="Venta" sortable style="width: 7rem">
+          <template #body="{ data }">{{ formatCurrency(data.precio_venta) }}</template>
+        </Column>
+        <Column field="proveedor" header="Proveedor" sortable />
+
+        <template #empty>
+          <div class="text-center py-6 text-surface-500">No hay piezas registradas.</div>
+        </template>
+      </DataTable>
+
+      <div v-else>
+        <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
+        <div v-else-if="piezasFiltradas.length === 0" class="text-center py-10 text-surface-500">No hay piezas registradas.</div>
+        <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          <div
+            v-for="pieza in piezasFiltradas"
+            :key="pieza.id"
+            class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-3 transition-shadow hover:shadow-md hover:border-primary-300 dark:hover:border-primary-600 cursor-pointer"
+            @click="abrirEditar(pieza)"
+          >
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-mono text-surface-400">#{{ pieza.id }}</span>
+              <span
+                class="text-xs font-semibold px-2 py-0.5 rounded-full"
+                :class="pieza.cantidad <= pieza.alerta
+                  ? 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300'
+                  : 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'"
+              >
+                Stock: {{ pieza.cantidad }}
+              </span>
+            </div>
+
+            <div class="min-w-0">
+              <h4 class="font-bold text-lg leading-tight uppercase truncate">{{ pieza.nombre }}</h4>
+              <p class="text-sm text-surface-500 dark:text-surface-400 truncate">{{ pieza.proveedor || 'Sin proveedor' }}</p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 text-sm">
+              <div>
+                <span class="block text-surface-400 text-xs">Costo</span>
+                <span class="font-semibold">{{ formatCurrency(pieza.costo) }}</span>
+              </div>
+              <div>
+                <span class="block text-surface-400 text-xs">Venta</span>
+                <span class="font-semibold">{{ formatCurrency(pieza.precio_venta) }}</span>
+              </div>
+            </div>
+
+            <div class="flex gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
+              <Button icon="pi pi-pencil" severity="info" text rounded size="small" @click.stop="abrirEditar(pieza)" v-tooltip="'Editar'" />
+              <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click.stop="confirmarBorrar(pieza)" v-tooltip="'Eliminar'" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </Fieldset>
+
+    <Dialog
+      v-model:visible="dialogVisible"
+      :header="isEditing ? 'Editar Pieza' : 'Nueva Pieza'"
+      modal
+      :style="{ width: '34rem' }"
+    >
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+        <div class="flex flex-col gap-1 sm:col-span-2">
+          <label class="font-semibold text-sm">Nombre</label>
+          <InputText v-model="form.nombre" placeholder="Nombre de la pieza" fluid class="uppercase" style="text-transform: uppercase;" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Costo</label>
+          <InputNumber v-model="form.costo" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Precio Venta</label>
+          <InputNumber v-model="form.precio_venta" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Cantidad</label>
+          <InputNumber v-model="form.cantidad" :min="0" fluid @focus="(e) => e.target.select()" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Alerta</label>
+          <InputNumber v-model="form.alerta" :min="0" fluid @focus="(e) => e.target.select()" />
+        </div>
+        <div class="flex flex-col gap-1 sm:col-span-2">
+          <label class="font-semibold text-sm">Proveedor</label>
+          <div class="flex gap-2">
+            <Select v-model="form.proveedor" :options="proveedores.map(p => p.nombre)" editable placeholder="Seleccionar proveedor" fluid class="uppercase" />
+            <Button icon="pi pi-plus" severity="info" @click="dialogNuevoProveedor = true" v-tooltip="'Nuevo proveedor'" />
+          </div>
+        </div>
+        <div class="flex flex-col gap-1 sm:col-span-2">
+          <label class="font-semibold text-sm">Descripcion</label>
+          <Textarea v-model="form.descripcion" rows="3" placeholder="Descripcion" />
+        </div>
+      </div>
+
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" @click="guardar" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogNuevoProveedor" header="Nuevo Proveedor" modal :style="{ width: 'min(24rem, 95vw)' }">
+      <div class="flex flex-col gap-4 pt-2">
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Nombre <span class="text-red-400">*</span></label>
+          <InputText v-model="nuevoProveedorForm.nombre" placeholder="Nombre del proveedor" fluid class="uppercase" style="text-transform: uppercase;" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Telefono</label>
+          <InputText v-model="nuevoProveedorForm.telefono" placeholder="Telefono" fluid />
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogNuevoProveedor = false" />
+        <Button label="Guardar" icon="pi pi-check" :loading="guardandoProveedor" @click="guardarNuevoProveedor" />
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="deleteDialogVisible"
+      header="Confirmar"
+      modal
+      :style="{ width: '24rem' }"
+    >
+      <div class="flex items-center gap-3">
+        <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
+        <span>Seguro que deseas eliminar <strong>{{ selectedPieza?.nombre }}</strong>?</span>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
+        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="borrar" />
+      </template>
+    </Dialog>
+  </div>
+</template>
