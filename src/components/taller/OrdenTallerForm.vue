@@ -385,7 +385,7 @@ onMounted(async () => {
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Total</label>
-                <InputNumber :value="totalCalculado" disabled fluid />
+                <InputNumber :modelValue="totalCalculado" disabled fluid />
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Abono</label>
@@ -393,7 +393,7 @@ onMounted(async () => {
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Pendiente</label>
-                <InputNumber :value="pendienteCalculado" disabled fluid />
+                <InputNumber :modelValue="pendienteCalculado" disabled fluid />
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Metodo Pago</label>
