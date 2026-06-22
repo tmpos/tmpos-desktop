@@ -410,7 +410,6 @@ async function crearFacturaPieza() {
     no_factura: `F-${Date.now().toString(36).toUpperCase()}`,
     nombre_cliente: orden.nombre || '',
     telefono_cliente: orden.telefono || '',
-    cedula: orden.cedula || '',
     productos: JSON.stringify([{ nombre: texto, cantidad: 1, precio: valor, costo: 0 }]),
     total: valor,
     subtotal: valor,
@@ -421,7 +420,6 @@ async function crearFacturaPieza() {
     hora,
     estado_factura: 'PENDIENTE',
     vendedor: '',
-    no_orden: orden.no_orden || '',
   }
   const res = await window.db.insert('facturas', factura)
   if (res.success) {
