@@ -4,7 +4,6 @@ import { useRouter, useRoute } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth.store'
 import { useAlmacenStore } from '@/stores/almacen.store'
-import { useEmpresa } from '@/composables/useEmpresa'
 import { useAlertas } from '@/composables/useAlertas'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
@@ -14,9 +13,21 @@ const route = useRoute()
 const themeStore = useThemeStore()
 const auth = useAuthStore()
 const almacenStore = useAlmacenStore()
-const { cargar: cargarEmpresa, nombre: empresaNombre, logo: empresaLogo } = useEmpresa()
-
 const cambiandoAlmacen = ref(false)
+const empresaNombre = ref('')
+const empresaLogo = ref('')
+
+async function cargarEmpresa() {
+  try {
+    const res = await window.db.getAll('empresa')
+    if (res.success && res.data?.length > 0) {
+      const almacenId = almacenStore.activeId || 0
+      const e = res.data.find((r: any) => Number(r.almacen_id) === almacenId) || res.data.find((r: any) => !r.almacen_id || Number(r.almacen_id) === 0) || res.data[0]
+      empresaNombre.value = e.nombre || ''
+      empresaLogo.value = e.logo || ''
+    }
+  } catch (_) {}
+}
 let licenciaInterval: ReturnType<typeof setInterval> | null = null
 let updateInterval: ReturnType<typeof setInterval> | null = null
 let licenciaVerificando = false
@@ -262,7 +273,7 @@ onUnmounted(() => {
               :key="item.to"
               class="nav-item"
               :class="{ 'nav-item-active': isActive(item.to) }"
-              v-tooltip.top="item.label"
+              v-tooltip="item.label"
               @click="navigate(item.to)"
             >
               <i :class="item.icon" class="nav-icon"></i>
