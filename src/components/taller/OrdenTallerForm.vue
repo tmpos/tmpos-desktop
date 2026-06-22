@@ -75,13 +75,19 @@ watch(() => props.orderId, async (newId) => {
   if (newId == null) {
     resetForm()
     form.value.no_orden = await generarNoOrden()
+  } else {
+    await cargarDatos()
   }
 })
 
 watch(() => props.visible, async (v) => {
-  if (v && !props.orderId) {
-    resetForm()
-    form.value.no_orden = await generarNoOrden()
+  if (v) {
+    if (!props.orderId) {
+      resetForm()
+      form.value.no_orden = await generarNoOrden()
+    } else {
+      await cargarDatos()
+    }
   }
 })
 
