@@ -52,6 +52,10 @@ const dialogPiezaCard = ref(false)
 const piezaOrdenActual = ref<any>(null)
 const piezasLista = ref<any[]>([])
 const buscarPiezaCard = ref('')
+
+const dialogAbonoCard = ref(false)
+const abonoOrdenActual = ref<any>(null)
+const abonoMonto = ref(0)
 const deleteOtpEmail = ref('')
 const deleteOtpError = ref('')
 const busqueda = ref('')
@@ -387,6 +391,26 @@ async function seleccionarPiezaCard(pieza: any) {
   orden.total = nuevoTotal
   orden.pendiente = nuevoPendiente
   dialogPiezaCard.value = false
+}
+
+function abrirAbonoModal(orden: any) {
+  abonoOrdenActual.value = orden
+  abonoMonto.value = 0
+  dialogAbonoCard.value = true
+}
+
+async function guardarAbono() {
+  const orden = abonoOrdenActual.value
+  if (!orden || abonoMonto.value <= 0) return
+  const nuevoAbono = (Number(orden.abono) || 0) + abonoMonto.value
+  const nuevoPendiente = (Number(orden.total) || 0) - nuevoAbono
+  await window.db.update('ordenes_taller', orden.id, {
+    abono: nuevoAbono,
+    pendiente: nuevoPendiente,
+  })
+  orden.abono = nuevoAbono
+  orden.pendiente = nuevoPendiente
+  dialogAbonoCard.value = false
 }
 
 function imprimirOrden(orden: any) {
@@ -1024,6 +1048,15 @@ defineExpose({ cargarOrdenes })
                     v-tooltip="'Etiqueta'"
                   />
                   <Button
+                    icon="pi pi-dollar"
+                    severity="success"
+                    text
+                    rounded
+                    size="small"
+                    @click.stop="abrirAbonoModal(orden)"
+                    v-tooltip="'Agregar Abono'"
+                  />
+                  <Button
                     icon="pi pi-cog"
                     severity="warn"
                     text
@@ -1278,6 +1311,25 @@ defineExpose({ cargarOrdenes })
           </div>
         </div>
       </div>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogAbonoCard" header="Agregar Abono" :modal="true" :style="{ width: 'min(24rem, 95vw)' }">
+      <div class="flex flex-col gap-4">
+        <p class="text-sm text-surface-500">
+          Cliente: <strong>{{ abonoOrdenActual?.nombre }}</strong><br/>
+          Total: <strong>${{ formatCurrency(abonoOrdenActual?.total || 0) }}</strong> &nbsp;| 
+          Abono actual: <strong>${{ formatCurrency(abonoOrdenActual?.abono || 0) }}</strong><br/>
+          Pendiente: <strong :class="(abonoOrdenActual?.pendiente || 0) > 0 ? 'text-red-500' : 'text-green-600'">${{ formatCurrency(abonoOrdenActual?.pendiente || 0) }}</strong>
+        </p>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Monto del Abono</label>
+          <InputNumber v-model="abonoMonto" :min="0" fluid placeholder="0" />
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogAbonoCard = false" />
+        <Button label="Guardar Abono" icon="pi pi-check" :disabled="abonoMonto <= 0" @click="guardarAbono" />
+      </template>
     </Dialog>
 
     <TicketTallerPrint ref="ticketTallerRef" />
