@@ -11,6 +11,7 @@ import InputNumber from 'primevue/inputnumber'
 import Textarea from 'primevue/textarea'
 import Select from 'primevue/select'
 import Fieldset from 'primevue/fieldset'
+import Tag from 'primevue/tag'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
@@ -27,6 +28,10 @@ const deleteDialogVisible = ref(false)
 const isEditing = ref(false)
 const selectedPieza = ref<any>(null)
 const busqueda = ref('')
+
+const dialogMovimientos = ref(false)
+const movimientosPieza = ref<any[]>([])
+const piezaMovimiento = ref<any>(null)
 
 const camposArray = [
   'nombre',
@@ -122,8 +127,13 @@ function confirmarBorrar(pieza: any) {
   deleteDialogVisible.value = true
 }
 
-function formatCurrency(value: number) {
-  return value != null ? `$${Number(value).toFixed(2)}` : '$0.00'
+async function verMovimientos(pieza: any) {
+  piezaMovimiento.value = pieza
+  try {
+    const res = await window.db.getWhere('movimientos_piezas', 'pieza_id = ?', [pieza.id])
+    if (res.success) movimientosPieza.value = (res.data || []).reverse()
+  } catch { movimientosPieza.value = [] }
+  dialogMovimientos.value = true
 }
 
 async function guardar() {
@@ -144,8 +154,22 @@ async function guardar() {
     }
 
     if (isEditing.value) {
+      const cantidadAnterior = selectedPieza.value.cantidad || 0
       const res = await window.db.update('piezas', selectedPieza.value.id, data)
       if (res.success) {
+        if (Number(data.cantidad) !== Number(cantidadAnterior)) {
+          const ahora = new Date()
+          await window.db.insert('movimientos_piezas', {
+            pieza_id: selectedPieza.value.id,
+            pieza_nombre: data.nombre,
+            tipo: 'AJUSTE',
+            cantidad_antes: cantidadAnterior,
+            cantidad_despues: data.cantidad,
+            referencia: 'Edicion manual',
+            fecha: ahora.toISOString().split('T')[0],
+            hora: ahora.toTimeString().split(' ')[0].slice(0, 5),
+          })
+        }
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Pieza actualizada', life: 3000 })
       } else {
         toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo actualizar', life: 3000 })
@@ -154,6 +178,17 @@ async function guardar() {
     } else {
       const res = await window.db.insert('piezas', addAlmacenId(data))
       if (res.success) {
+        const ahora = new Date()
+        await window.db.insert('movimientos_piezas', {
+          pieza_id: res.data.id,
+          pieza_nombre: data.nombre,
+          tipo: 'ENTRADA',
+          cantidad_antes: 0,
+          cantidad_despues: data.cantidad,
+          referencia: 'Creacion inicial',
+          fecha: ahora.toISOString().split('T')[0],
+          hora: ahora.toTimeString().split(' ')[0].slice(0, 5),
+        })
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Pieza creada', life: 3000 })
       } else {
         toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo crear', life: 3000 })
@@ -340,6 +375,7 @@ onMounted(async () => {
             </div>
 
             <div class="flex gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
+              <Button icon="pi pi-history" severity="secondary" text rounded size="small" @click.stop="verMovimientos(pieza)" v-tooltip="'Movimientos'" />
               <Button icon="pi pi-pencil" severity="info" text rounded size="small" @click.stop="abrirEditar(pieza)" v-tooltip="'Editar'" />
               <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click.stop="confirmarBorrar(pieza)" v-tooltip="'Eliminar'" />
             </div>
@@ -424,6 +460,33 @@ onMounted(async () => {
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
         <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="borrar" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogMovimientos" :header="`Movimientos - ${piezaMovimiento?.nombre || ''}`" :modal="true" :style="{ width: 'min(34rem, 95vw)' }">
+      <div class="max-h-96 overflow-y-auto">
+        <div v-if="movimientosPieza.length > 0" class="flex flex-col gap-1">
+          <div
+            v-for="(m, i) in movimientosPieza"
+            :key="i"
+            class="flex items-center gap-3 px-3 py-2 rounded-lg border border-surface-100 dark:border-surface-700 text-sm"
+          >
+            <Tag :value="m.tipo" :severity="m.tipo === 'SALIDA' ? 'danger' : m.tipo === 'ENTRADA' ? 'success' : 'info'" />
+            <div class="flex-1 min-w-0">
+              <p class="font-medium truncate">{{ m.referencia || '-' }}</p>
+              <p class="text-xs text-surface-500">{{ m.fecha }} {{ m.hora }}</p>
+            </div>
+            <span class="text-xs tabular-nums whitespace-nowrap" :class="m.tipo === 'SALIDA' ? 'text-red-500' : 'text-green-600'">
+              {{ m.cantidad_antes }} → {{ m.cantidad_despues }}
+            </span>
+          </div>
+        </div>
+        <div v-else class="text-center py-6 text-surface-400 text-sm">
+          Sin movimientos registrados.
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cerrar" severity="secondary" text @click="dialogMovimientos = false" />
       </template>
     </Dialog>
   </div>

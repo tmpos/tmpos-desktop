@@ -428,6 +428,17 @@ async function crearFacturaPieza() {
   if (res.success) {
     const nuevaCantidad = Math.max(0, cantidad - 1)
     await window.db.update('piezas', piezaId, { cantidad: nuevaCantidad })
+    const ahora = new Date()
+    await window.db.insert('movimientos_piezas', {
+      pieza_id: piezaId,
+      pieza_nombre: texto,
+      tipo: 'SALIDA',
+      cantidad_antes: cantidad,
+      cantidad_despues: nuevaCantidad,
+      referencia: `Orden #${orden.id}`,
+      fecha: ahora.toISOString().split('T')[0],
+      hora: ahora.toTimeString().split(' ')[0].slice(0, 5),
+    })
     const idx = piezasLista.value.findIndex((p: any) => p.id === piezaId)
     if (idx >= 0) piezasLista.value[idx].cantidad = nuevaCantidad
     toast.add({ severity: 'success', summary: 'Factura creada', detail: `Factura para pieza: ${texto}`, life: 3000 })
