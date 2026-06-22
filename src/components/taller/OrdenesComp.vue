@@ -59,6 +59,7 @@ const abonoMonto = ref(0)
 
 const dialogFacturaPieza = ref(false)
 const piezaSeleccionadaInfo = ref<any>(null)
+const creandoFactura = ref(false)
 const deleteOtpEmail = ref('')
 const deleteOtpError = ref('')
 const busqueda = ref('')
@@ -400,8 +401,10 @@ async function seleccionarPiezaCard(pieza: any) {
 }
 
 async function crearFacturaPieza() {
+  if (creandoFactura.value) return
   const info = piezaSeleccionadaInfo.value
   if (!info) return
+  creandoFactura.value = true
   const { orden, texto, valor, piezaId, cantidad } = info
   const fecha = new Date().toISOString().split('T')[0]
   const ahora = new Date()
@@ -431,11 +434,13 @@ async function crearFacturaPieza() {
   } else {
     toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo crear la factura', life: 3000 })
   }
+  creandoFactura.value = false
   dialogFacturaPieza.value = false
 }
 
 function cerrarFacturaPieza() {
   dialogFacturaPieza.value = false
+  creandoFactura.value = false
 }
 
 function imprimirOrden(orden: any) {
@@ -1369,8 +1374,8 @@ defineExpose({ cargarOrdenes })
         <p class="text-sm">¿Deseas crear una factura por esta pieza?</p>
       </div>
       <template #footer>
-        <Button label="No" severity="secondary" text @click="cerrarFacturaPieza" />
-        <Button label="Sí, crear factura" icon="pi pi-check" @click="crearFacturaPieza" />
+        <Button label="No" severity="secondary" text @click="cerrarFacturaPieza" :disabled="creandoFactura" />
+        <Button label="Sí, crear factura" icon="pi pi-check" @click="crearFacturaPieza" :loading="creandoFactura" />
       </template>
     </Dialog>
 
