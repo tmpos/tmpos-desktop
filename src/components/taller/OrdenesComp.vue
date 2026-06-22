@@ -1067,9 +1067,7 @@ defineExpose({ cargarOrdenes })
                 </div>
               </div>
 
-              <div class="flex items-center justify-between gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
-                <span class="text-xs text-surface-500">{{ orden.fecha_entrada || 'Sin fecha' }}</span>
-                <div class="flex gap-1">
+              <div class="flex justify-end gap-1 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700 flex-wrap">
                   <Button
                     icon="pi pi-print"
                     severity="info"
@@ -1142,7 +1140,6 @@ defineExpose({ cargarOrdenes })
                     @click.stop="confirmarBorrar(orden)"
                     v-tooltip="'Eliminar'"
                   />
-                </div>
               </div>
             </div>
           </div>
