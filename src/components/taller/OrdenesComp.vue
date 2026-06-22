@@ -395,14 +395,14 @@ async function seleccionarPiezaCard(pieza: any) {
   orden.total = nuevoTotal
   orden.pendiente = nuevoPendiente
   dialogPiezaCard.value = false
-  piezaSeleccionadaInfo.value = { orden, texto, valor: valorPieza }
+  piezaSeleccionadaInfo.value = { orden, texto, valor: valorPieza, piezaId: pieza.id, cantidad: pieza.cantidad || 0 }
   dialogFacturaPieza.value = true
 }
 
 async function crearFacturaPieza() {
   const info = piezaSeleccionadaInfo.value
   if (!info) return
-  const { orden, texto, valor } = info
+  const { orden, texto, valor, piezaId, cantidad } = info
   const fecha = new Date().toISOString().split('T')[0]
   const ahora = new Date()
   const hora = ahora.toTimeString().split(' ')[0].slice(0, 5)
@@ -423,6 +423,10 @@ async function crearFacturaPieza() {
   }
   const res = await window.db.insert('facturas', factura)
   if (res.success) {
+    const nuevaCantidad = Math.max(0, cantidad - 1)
+    await window.db.update('piezas', piezaId, { cantidad: nuevaCantidad })
+    const idx = piezasLista.value.findIndex((p: any) => p.id === piezaId)
+    if (idx >= 0) piezasLista.value[idx].cantidad = nuevaCantidad
     toast.add({ severity: 'success', summary: 'Factura creada', detail: `Factura para pieza: ${texto}`, life: 3000 })
   } else {
     toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo crear la factura', life: 3000 })
