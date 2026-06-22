@@ -39,6 +39,45 @@ const form = ref({
 const totalCalculado = computed(() => (form.value.precio_pieza || 0) + (form.value.mano_obra || 0))
 const pendienteCalculado = computed(() => totalCalculado.value - (form.value.abono || 0))
 
+function formDefault() {
+  return {
+    no_orden: '', nombre: '', cedula: '', telefono: '', email: '',
+    equipo: '', imei: '', serial: '', marca_modelo: '', clave: '', accesorios: '',
+    fallas: '', piezas: '', tecnico: '', metodo_pago: 'EFECTIVO',
+    fecha_entrada: new Date(), fecha_entrega: null as Date | null,
+    estado: 'RECIBIDO', precio_pieza: 0, mano_obra: 0, abono: 0,
+    pagos: '', beneficio_empresa: 0, beneficio_tecnico: 0,
+    porcentaje_tecnico: 0, estado_pago_tecnico: 'PENDIENTE',
+  }
+}
+
+async function generarNoOrden(): Promise<string> {
+  try {
+    const res = await window.db.getAll('ordenes_taller')
+    const max = (res.data || []).reduce((maxId: number, o: any) => Math.max(maxId, o.id || 0), 0)
+    return `ORD-${String(max + 1).padStart(4, '0')}`
+  } catch { return '' }
+}
+
+function resetForm() {
+  form.value = formDefault()
+  activeTab.value = '0'
+}
+
+watch(() => props.orderId, async (newId) => {
+  if (newId == null) {
+    resetForm()
+    form.value.no_orden = await generarNoOrden()
+  }
+})
+
+watch(() => props.visible, async (v) => {
+  if (v && !props.orderId) {
+    resetForm()
+    form.value.no_orden = await generarNoOrden()
+  }
+})
+
 watch([() => form.value.precio_pieza, () => form.value.mano_obra, () => form.value.abono], () => {
   form.value.total = totalCalculado.value
   form.value.pendiente = pendienteCalculado.value
@@ -195,7 +234,12 @@ async function sincronizarServidor(datos: any) {
   } catch {}
 }
 
-onMounted(cargarDatos)
+onMounted(async () => {
+  await cargarDatos()
+  if (!props.orderId) {
+    form.value.no_orden = await generarNoOrden()
+  }
+})
 </script>
 
 <template>
