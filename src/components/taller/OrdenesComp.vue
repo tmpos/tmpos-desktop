@@ -47,6 +47,11 @@ const deleteOtpEnviado = ref(false)
 const deleteOtpLoading = ref(false)
 const deleteOtpConfirmando = ref(false)
 const deleteOtp = ref('')
+
+const dialogPiezaCard = ref(false)
+const piezaOrdenActual = ref<any>(null)
+const piezasLista = ref<any[]>([])
+const buscarPiezaCard = ref('')
 const deleteOtpEmail = ref('')
 const deleteOtpError = ref('')
 const busqueda = ref('')
@@ -345,6 +350,34 @@ function confirmarBorrarSeleccionadas() {
   deleteOtpEmail.value = ''
   deleteOtpError.value = ''
   deleteDialogVisible.value = true
+}
+
+const piezasFiltradasCard = computed(() => {
+  const q = buscarPiezaCard.value.toLowerCase().trim()
+  if (!q) return piezasLista.value
+  return piezasLista.value.filter((p: any) => (p.nombre || '').toLowerCase().includes(q))
+})
+
+async function abrirPiezaModal(orden: any) {
+  piezaOrdenActual.value = orden
+  buscarPiezaCard.value = ''
+  try {
+    const res = await window.db.getAll('piezas')
+    if (res.success && res.data) piezasLista.value = (res.data || []).filter((p: any) => (p.nombre || '').trim())
+  } catch {}
+  dialogPiezaCard.value = true
+}
+
+async function seleccionarPiezaCard(pieza: any) {
+  const orden = piezaOrdenActual.value
+  if (!orden) return
+  const texto = pieza.nombre || ''
+  const nuevasPiezas = orden.piezas ? orden.piezas + '\n' + texto : texto
+  const nuevoPrecio = (Number(orden.precio_pieza) || 0) + (Number(pieza.precio_venta) || 0)
+  await window.db.update('ordenes_taller', orden.id, { piezas: nuevasPiezas, precio_pieza: nuevoPrecio })
+  orden.piezas = nuevasPiezas
+  orden.precio_pieza = nuevoPrecio
+  dialogPiezaCard.value = false
 }
 
 function imprimirOrden(orden: any) {
@@ -982,6 +1015,15 @@ defineExpose({ cargarOrdenes })
                     v-tooltip="'Etiqueta'"
                   />
                   <Button
+                    icon="pi pi-cog"
+                    severity="warn"
+                    text
+                    rounded
+                    size="small"
+                    @click.stop="abrirPiezaModal(orden)"
+                    v-tooltip="'Agregar Pieza'"
+                  />
+                  <Button
                     icon="pi pi-pencil"
                     severity="info"
                     text
@@ -1204,6 +1246,29 @@ defineExpose({ cargarOrdenes })
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogEtiquetaTaller = false" />
       </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogPiezaCard" header="Agregar Pieza" :modal="true" :style="{ width: 'min(40rem, 95vw)' }">
+      <div class="flex flex-col gap-3">
+        <InputText v-model="buscarPiezaCard" placeholder="Buscar pieza..." fluid />
+        <div class="max-h-80 overflow-y-auto flex flex-col gap-1">
+          <div
+            v-for="p in piezasFiltradasCard"
+            :key="p.id"
+            class="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-surface-100 dark:hover:bg-surface-700 border border-transparent hover:border-surface-200 dark:hover:border-surface-600"
+            @click="seleccionarPiezaCard(p)"
+          >
+            <div>
+              <p class="text-sm font-medium">{{ p.nombre }}</p>
+              <p class="text-xs text-surface-500">Stock: {{ p.cantidad || 0 }}</p>
+            </div>
+            <span class="text-sm font-semibold text-emerald-600">${{ p.precio_venta || 0 }}</span>
+          </div>
+          <div v-if="piezasFiltradasCard.length === 0" class="text-center py-6 text-surface-400 text-sm">
+            No se encontraron piezas.
+          </div>
+        </div>
+      </div>
     </Dialog>
 
     <TicketTallerPrint ref="ticketTallerRef" />
