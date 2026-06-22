@@ -14,6 +14,16 @@ const themeStore = useThemeStore()
 const auth = useAuthStore()
 const almacenStore = useAlmacenStore()
 const cambiandoAlmacen = ref(false)
+
+const { alertas, verificarAlertas } = useAlertas()
+const alertasPanelVisible = ref(false)
+
+function cambiarAlmacen() {
+  localStorage.setItem('almacen_id', String(almacenStore.activeId))
+  cambiandoAlmacen.value = true
+  setTimeout(() => window.location.reload(), 300)
+}
+
 const empresaNombre = ref('')
 const empresaLogo = ref('')
 
