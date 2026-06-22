@@ -26,6 +26,13 @@ const activeTab = ref('0')
 
 const tecnicos = ref<{ nombre: string; porcentaje: number }[]>([])
 
+const fallasComunes = [
+  'NO ENCIENDE', 'NO CARGA', 'PANTALLA ROTA', 'BATERIA DAÑADA',
+  'NO TIENE SEÑAL', 'MOJADO', 'TECLAS NO FUNCIONAN', 'AUDIO NO FUNCIONA',
+  'SE REINICIA SOLO', 'CAMARA NO FUNCIONA', 'NO LEE SIM',
+  'PUERTO DE CARGA DAÑADO', 'HUELLA NO FUNCIONA', 'SE CALIENTA',
+]
+
 const form = ref({
   no_orden: '', nombre: '', cedula: '', telefono: '', email: '',
   equipo: '', imei: '', serial: '', marca_modelo: '', clave: '', accesorios: '',
@@ -328,6 +335,9 @@ onMounted(async () => {
             <div class="flex flex-col gap-4 pt-3">
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Falla Reportada</label>
+                <div class="flex flex-wrap gap-1 mb-1">
+                  <Button v-for="f in fallasComunes" :key="f" :label="f" size="small" severity="secondary" text class="!text-xs !py-1 !px-2" @click="form.fallas = form.fallas ? form.fallas + '\n' + f : f" />
+                </div>
                 <Textarea v-model="form.fallas" rows="3" placeholder="Describe la falla reportada por el cliente" fluid />
               </div>
               <div class="flex flex-col gap-1">
