@@ -199,7 +199,7 @@ function initDatabase(): void {
     db!.exec(`CREATE TABLE piezas (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,cantidad INTEGER DEFAULT 0,alerta INTEGER DEFAULT 1,proveedor TEXT DEFAULT '',descripcion TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   }
 
-  db.exec(`CREATE TABLE IF NOT EXISTS movimientos_piezas (id INTEGER PRIMARY KEY AUTOINCREMENT,pieza_id INTEGER NOT NULL,pieza_nombre TEXT DEFAULT '',tipo TEXT DEFAULT '',cantidad_antes INTEGER DEFAULT 0,cantidad_despues INTEGER DEFAULT 0,referencia TEXT DEFAULT '',fecha TEXT DEFAULT '',hora TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  try { db!.exec(`CREATE TABLE IF NOT EXISTS movimientos_piezas (id INTEGER PRIMARY KEY AUTOINCREMENT,pieza_id INTEGER NOT NULL,pieza_nombre TEXT DEFAULT '',tipo TEXT DEFAULT '',cantidad_antes INTEGER DEFAULT 0,cantidad_despues INTEGER DEFAULT 0,referencia TEXT DEFAULT '',fecha TEXT DEFAULT '',hora TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`) } catch {} 
 
   function ensureTecnicosTable(): void {
     if (tableExists('tecnicos')) {
