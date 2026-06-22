@@ -13,6 +13,7 @@ import InputOtp from 'primevue/inputotp'
 import Select from 'primevue/select'
 import Calendar from 'primevue/calendar'
 import Fieldset from 'primevue/fieldset'
+import Menu from 'primevue/menu'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import TicketFacturaPrint from './TicketFacturaPrint.vue'
@@ -40,6 +41,34 @@ const busqueda = ref('')
 const rangoActivo = ref<string>('todo')
 const rangoPersonalizado = ref<Date[]>([])
 const comprobanteFiltro = ref('')
+
+const actionMenu = ref()
+const facturaAccion = ref<any>(null)
+const actionMenuItems = ref([
+  { label: 'Imprimir', icon: 'pi pi-print', command: () => imprimirFactura(facturaAccion.value) },
+  { label: 'Ver PDF', icon: 'pi pi-file-pdf', command: () => verFacturaPdf(facturaAccion.value) },
+  { label: 'Editar', icon: 'pi pi-pencil', command: () => abrirEditar(facturaAccion.value) },
+  { label: 'WhatsApp', icon: 'pi pi-whatsapp', command: () => compartirWhatsAppFactura(facturaAccion.value) },
+  { separator: true },
+  { label: 'Eliminar', icon: 'pi pi-trash', command: () => confirmarBorrar(facturaAccion.value) },
+])
+
+function toggleActionMenu(event: Event, factura: any) {
+  facturaAccion.value = factura
+  actionMenu.value.toggle(event)
+}
+
+async function compartirWhatsAppFactura(factura: any) {
+  const telefono = factura.telefono_cliente || ''
+  if (!telefono) {
+    toast.add({ severity: 'warn', summary: 'WhatsApp', detail: 'El cliente no tiene telefono registrado', life: 3000 })
+    return
+  }
+  const mensaje = encodeURIComponent(
+    `Factura ${factura.no_factura}\nTotal: RD$${Number(factura.total).toFixed(2)}\nCliente: ${factura.nombre_cliente}\nFecha: ${factura.fecha_emision}`
+  )
+  window.open(`https://wa.me/${telefono.replace(/[^0-9]/g, '')}?text=${mensaje}`, '_blank')
+}
 
 function getRango(key: string): { inicio: string; fin: string } | null {
   if (key === 'todo') return null
@@ -543,14 +572,9 @@ onMounted(async () => {
         responsiveLayout="scroll"
       >
         <Column selectionMode="multiple" headerStyle="width: 3rem" />
-        <Column header="Acciones" style="width: 12rem">
+        <Column header="Acciones" style="width: 5rem">
           <template #body="{ data }">
-            <div class="flex gap-1">
-              <Button icon="pi pi-print" severity="info" text rounded @click.stop="imprimirFactura(data)" v-tooltip="'Imprimir'" />
-              <Button icon="pi pi-file-pdf" severity="danger" text rounded @click.stop="verFacturaPdf(data)" v-tooltip="'Ver PDF'" />
-              <Button icon="pi pi-pencil" severity="info" text rounded @click.stop="abrirEditar(data)" v-tooltip="'Editar'" />
-              <Button icon="pi pi-trash" severity="danger" text rounded @click.stop="confirmarBorrar(data)" v-tooltip="'Eliminar'" />
-            </div>
+            <Button icon="pi pi-ellipsis-v" severity="secondary" text rounded @click.stop="toggleActionMenu($event, data)" v-tooltip="'Acciones'" />
           </template>
         </Column>
         <Column field="id" header="ID" style="width: 5rem" />
@@ -615,10 +639,7 @@ onMounted(async () => {
             </div>
 
             <div class="flex gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
-              <Button icon="pi pi-print" severity="info" text rounded size="small" @click.stop="imprimirFactura(factura)" v-tooltip="'Imprimir'" />
-              <Button icon="pi pi-file-pdf" severity="danger" text rounded size="small" @click.stop="verFacturaPdf(factura)" v-tooltip="'Ver PDF'" />
-              <Button icon="pi pi-pencil" severity="info" text rounded size="small" @click.stop="abrirEditar(factura)" v-tooltip="'Editar'" />
-              <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click.stop="confirmarBorrar(factura)" v-tooltip="'Eliminar'" />
+              <Button icon="pi pi-ellipsis-v" severity="secondary" text rounded size="small" @click.stop="toggleActionMenu($event, factura)" v-tooltip="'Acciones'" />
             </div>
           </div>
         </div>
@@ -677,5 +698,6 @@ onMounted(async () => {
     </Dialog>
     <TicketFacturaPrint ref="ticketPrintRef" />
     <FacturaPdfPrint ref="facturaPdfRef" />
+    <Menu ref="actionMenu" :model="actionMenuItems" popup />
   </div>
 </template>

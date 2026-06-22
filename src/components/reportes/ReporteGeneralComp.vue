@@ -37,6 +37,12 @@ const canvasPago = ref<HTMLCanvasElement | null>(null)
 let chartTopClientes: Chart | null = null
 const canvasTopClientes = ref<HTMLCanvasElement | null>(null)
 
+let chartTopProductos: Chart | null = null
+const canvasTopProductos = ref<HTMLCanvasElement | null>(null)
+
+let chartCategoria: Chart | null = null
+const canvasCategoria = ref<HTMLCanvasElement | null>(null)
+
 let chartTaller: Chart | null = null
 const canvasTaller = ref<HTMLCanvasElement | null>(null)
 
@@ -165,7 +171,121 @@ const totales = computed(() => {
   for (const g of gastos.value) {
     totalGastos += toNumber(g.cantidad)
   }
-  return { total, ganancia, descuento, count, tallerIngresos, tallerGanancia, tallerOrdenes, totalGastos }
+  let costo = 0, itemsCount = 0
+  for (const f of facturasFiltradas.value) {
+    costo += calcularCostoFactura(f)
+    itemsCount += parseProductos(f.productos).length
+  }
+  const margen = total > 0 ? ((total - costo) / total) * 100 : 0
+  const ticketPromedio = count > 0 ? total / count : 0
+  const itemsPorFactura = count > 0 ? itemsCount / count : 0
+  return { total, ganancia, descuento, count, tallerIngresos, tallerGanancia, tallerOrdenes, totalGastos, costo, margen, ticketPromedio, itemsPorFactura, itemsCount }
+})
+
+function parseProductos(productos: any): any[] {
+  if (!productos) return []
+  if (Array.isArray(productos)) return productos
+  try {
+    return JSON.parse(productos)
+  } catch {
+    return []
+  }
+}
+
+function getProductoCantidad(producto: any): number {
+  const cantidad = toNumber(producto?.cantidad ?? producto?.quantity)
+  return cantidad > 0 ? cantidad : 1
+}
+
+function getProductoCostoUnitario(producto: any): number {
+  return toNumber(
+    producto?.costo ??
+    producto?.precio_compra ??
+    producto?.preciocompra ??
+    producto?.cost
+  )
+}
+
+function calcularCostoProductos(productos: any[]): number {
+  return productos.reduce((sum: number, p: any) => (
+    sum + (getProductoCostoUnitario(p) * getProductoCantidad(p))
+  ), 0)
+}
+
+function calcularCostoFactura(factura: any): number {
+  const prods = parseProductos(factura.productos)
+  return calcularCostoProductos(prods)
+}
+
+const topProductos = computed(() => {
+  const mapa = new Map<string, { nombre: string; cantidad: number; total: number; costo: number }>()
+  for (const f of facturas.value) {
+    const prods = parseProductos(f.productos)
+    for (const p of prods) {
+      const key = p.codigo || p.nombre || 'SIN NOMBRE'
+      const entry = mapa.get(key) || { nombre: p.nombre || 'SIN NOMBRE', cantidad: 0, total: 0, costo: 0 }
+      entry.cantidad += toNumber(p.cantidad)
+      entry.total += toNumber(p.total) || (toNumber(p.precio) * toNumber(p.cantidad))
+      entry.costo += toNumber(p.costo) * toNumber(p.cantidad)
+      mapa.set(key, entry)
+    }
+  }
+  return Array.from(mapa.values())
+    .sort((a, b) => b.cantidad - a.cantidad)
+    .slice(0, 10)
+})
+
+const productosVendidos = computed(() => {
+  const items: any[] = []
+  for (const f of facturas.value) {
+    const prods = parseProductos(f.productos)
+    for (const p of prods) {
+      items.push({
+        no_factura: f.no_factura,
+        fecha: f.fecha_emision,
+        cliente: f.nombre_cliente,
+        producto: p.nombre || 'SIN NOMBRE',
+        cantidad: toNumber(p.cantidad),
+        precio: toNumber(p.precio) || toNumber(p.precio_venta) || 0,
+        costo: toNumber(p.costo) || 0,
+        total: toNumber(p.total) || ((toNumber(p.precio) || toNumber(p.precio_venta) || 0) * toNumber(p.cantidad)),
+      })
+    }
+  }
+  return items.sort((a, b) => {
+    if (a.fecha < b.fecha) return 1
+    if (a.fecha > b.fecha) return -1
+    return 0
+  })
+})
+
+const ventasPorCategoria = computed(() => {
+  const mapa = new Map<string, { categoria: string; cantidad: number; total: number; costo: number }>()
+  for (const f of facturas.value) {
+    const prods = parseProductos(f.productos)
+    for (const p of prods) {
+      const cat = p.categoria || p.tipo || 'SIN CATEGORIA'
+      const entry = mapa.get(cat) || { categoria: cat, cantidad: 0, total: 0, costo: 0 }
+      entry.cantidad += toNumber(p.cantidad)
+      entry.total += toNumber(p.total) || ((toNumber(p.precio) || toNumber(p.precio_venta) || 0) * toNumber(p.cantidad))
+      entry.costo += (toNumber(p.costo) || 0) * toNumber(p.cantidad)
+      mapa.set(cat, entry)
+    }
+  }
+  return Array.from(mapa.values()).sort((a, b) => b.total - a.total)
+})
+
+const ventasPorVendedor = computed(() => {
+  const mapa = new Map<string, { vendedor: string; total: number; ganancia: number; count: number }>()
+  for (const f of facturas.value) {
+    const vendedor = f.vendedor || 'SIN VENDEDOR'
+    const entry = mapa.get(vendedor) || { vendedor, total: 0, ganancia: 0, count: 0 }
+    entry.total += toNumber(f.total)
+    entry.ganancia += toNumber(f.ganancia)
+    entry.count++
+    mapa.set(vendedor, entry)
+  }
+  return Array.from(mapa.values()).sort((a, b) => b.total - a.total)
 })
 
 const datosPorDia = computed(() => {
@@ -338,6 +458,8 @@ function crearCharts() {
   if (chartPago) { chartPago.destroy(); chartPago = null }
   if (chartTopClientes) { chartTopClientes.destroy(); chartTopClientes = null }
   if (chartTaller) { chartTaller.destroy(); chartTaller = null }
+  if (chartTopProductos) { chartTopProductos.destroy(); chartTopProductos = null }
+  if (chartCategoria) { chartCategoria.destroy(); chartCategoria = null }
 
   if (canvasDiario.value) {
     chartDiario = new Chart(canvasDiario.value, {
@@ -418,6 +540,73 @@ function crearCharts() {
         },
       })
     }
+
+  if (canvasTopProductos.value && topProductos.value.length > 0) {
+    try {
+      chartTopProductos = new Chart(canvasTopProductos.value, {
+        type: 'bar',
+        data: {
+          labels: topProductos.value.map(p => p.nombre.length > 20 ? p.nombre.slice(0, 18) + '...' : p.nombre),
+          datasets: [
+            {
+              label: 'Cantidad',
+              data: topProductos.value.map(p => p.cantidad),
+              backgroundColor: 'rgba(251, 146, 60, 0.7)',
+              borderColor: 'rgb(251, 146, 60)',
+              borderWidth: 1,
+            },
+            {
+              label: 'Total Venta',
+              data: topProductos.value.map(p => p.total),
+              backgroundColor: 'rgba(59, 130, 246, 0.7)',
+              borderColor: 'rgb(59, 130, 246)',
+              borderWidth: 1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y',
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { position: 'top' } },
+          scales: {
+            x: { beginAtZero: true, title: { display: true, text: 'Cantidad / RD$' } },
+            y: { beginAtZero: true, title: { display: true, text: 'Productos' } },
+          },
+        },
+      })
+    } catch (_) {}
+  }
+
+  if (canvasCategoria.value && ventasPorCategoria.value.length > 0) {
+    try {
+      chartCategoria = new Chart(canvasCategoria.value, {
+        type: 'doughnut',
+        data: {
+          labels: ventasPorCategoria.value.map(c => c.categoria),
+          datasets: [{
+            data: ventasPorCategoria.value.map(c => c.total),
+            backgroundColor: [
+              'rgba(59, 130, 246, 0.7)',
+              'rgba(16, 185, 129, 0.7)',
+              'rgba(251, 146, 60, 0.7)',
+              'rgba(168, 85, 247, 0.7)',
+              'rgba(236, 72, 153, 0.7)',
+              'rgba(245, 158, 11, 0.7)',
+              'rgba(14, 165, 233, 0.7)',
+              'rgba(239, 68, 68, 0.7)',
+            ],
+            borderWidth: 1,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom' } },
+        },
+      })
+    } catch (_) {}
   }
 
   if (canvasTaller.value && tallerTieneDatos.value) {
@@ -474,6 +663,7 @@ function crearCharts() {
       },
     })
   }
+}
 
 function seleccionarRango(key: string) {
   rangoActivo.value = key
@@ -522,15 +712,19 @@ async function generarReportePDF() {
   const cards = [
     { label: 'Ventas', value: `RD$ ${formatCurrency(totales.value.total)}`, color: [37, 99, 235] as [number, number, number] },
     { label: 'Ganancia', value: `RD$ ${formatCurrency(totales.value.ganancia)}`, color: [5, 150, 105] as [number, number, number] },
+    { label: 'Costo Ventas', value: `RD$ ${formatCurrency(totales.value.costo)}`, color: [251, 146, 60] as [number, number, number] },
     { label: 'Descuentos', value: `RD$ ${formatCurrency(totales.value.descuento)}`, color: [245, 158, 11] as [number, number, number] },
     { label: 'Facturas', value: `${totales.value.count}`, color: [124, 58, 237] as [number, number, number] },
     { label: 'Taller Ingresos', value: `RD$ ${formatCurrency(totales.value.tallerIngresos)}`, color: [6, 182, 212] as [number, number, number] },
     { label: 'Taller Ganancia', value: `RD$ ${formatCurrency(totales.value.tallerGanancia)}`, color: [225, 29, 72] as [number, number, number] },
     { label: 'Ordenes Taller', value: `${totales.value.tallerOrdenes}`, color: [14, 165, 233] as [number, number, number] },
     { label: 'Gastos', value: `RD$ ${formatCurrency(totales.value.totalGastos)}`, color: [220, 38, 38] as [number, number, number] },
+    { label: 'Margen %', value: `${totales.value.margen.toFixed(1)}%`, color: [13, 148, 136] as [number, number, number] },
+    { label: 'Ticket Prom.', value: `RD$ ${formatCurrency(totales.value.ticketPromedio)}`, color: [79, 70, 229] as [number, number, number] },
+    { label: 'Items/Fact.', value: `${totales.value.itemsPorFactura.toFixed(1)}`, color: [190, 24, 93] as [number, number, number] },
   ]
 
-  const cardW = (pageW - margin * 2 - 14) / 8
+  const cardW = (pageW - margin * 2 - 22) / 12
   for (let i = 0; i < cards.length; i++) {
     addCard(cards[i].label, cards[i].value, cards[i].color, margin + i * (cardW + 2), cardW)
   }
@@ -542,6 +736,8 @@ async function generarReportePDF() {
     { ref: canvasPago.value, label: 'Por Metodo de Pago' },
     { ref: canvasTaller.value, label: 'Taller' },
     { ref: canvasTopClientes.value, label: 'Top 10 Clientes' },
+    { ref: canvasTopProductos.value, label: 'Top 10 Productos' },
+    { ref: canvasCategoria.value, label: 'Ventas por Categoria' },
   ]
 
   const chartsRow = chartCanvases.filter(c => c.ref)
@@ -567,12 +763,13 @@ async function generarReportePDF() {
   const cols = facturasFiltradas.value.length
   autoTable(doc, {
     startY: y,
-    head: [['Factura', 'Fecha', 'Cliente', 'Pago', 'Total', 'Ganancia']],
+    head: [['Factura', 'Fecha', 'Cliente', 'Pago', 'Costo', 'Total', 'Ganancia']],
     body: facturasFiltradas.value.slice(0, cols).map((f: any) => [
       f.no_factura || '',
       f.fecha_emision || '',
       f.nombre_cliente || '',
       f.metodo_pago || '',
+      `RD$ ${formatCurrency(calcularCostoFactura(f))}`,
       `RD$ ${formatCurrency(f.total)}`,
       `RD$ ${formatCurrency(f.ganancia)}`,
     ]),
@@ -580,6 +777,40 @@ async function generarReportePDF() {
     headStyles: { fillColor: [37, 99, 235], fontSize: 8 },
     bodyStyles: { fontSize: 7 },
     styles: { cellPadding: 2 },
+  })
+
+  autoTable(doc, {
+    startY: (doc as any).lastAutoTable.finalY + 8,
+    head: [['Factura', 'Fecha', 'Cliente', 'Producto', 'Cant.', 'Precio', 'Costo', 'Total']],
+    body: productosVendidos.value.slice(0, 500).map((p: any) => [
+      p.no_factura || '',
+      p.fecha || '',
+      p.cliente || '',
+      p.producto || '',
+      String(p.cantidad),
+      `RD$ ${formatCurrency(p.precio)}`,
+      `RD$ ${formatCurrency(p.costo)}`,
+      `RD$ ${formatCurrency(p.total)}`,
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: [251, 146, 60], fontSize: 7 },
+    bodyStyles: { fontSize: 6 },
+    styles: { cellPadding: 1.5 },
+  })
+
+  autoTable(doc, {
+    startY: (doc as any).lastAutoTable.finalY + 8,
+    head: [['Vendedor', 'Facturas', 'Total', 'Ganancia']],
+    body: ventasPorVendedor.value.map((v: any) => [
+      v.vendedor,
+      String(v.count),
+      `RD$ ${formatCurrency(v.total)}`,
+      `RD$ ${formatCurrency(v.ganancia)}`,
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: [79, 70, 229], fontSize: 7 },
+    bodyStyles: { fontSize: 6 },
+    styles: { cellPadding: 1.5 },
   })
 
   autoTable(doc, {
@@ -671,6 +902,10 @@ onMounted(() => cargarDatos())
           <p class="text-emerald-100 text-xs font-semibold">Ganancia</p>
           <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.ganancia) }}</p>
         </div>
+        <div class="rounded-xl bg-gradient-to-br from-orange-500 to-orange-700 p-4 text-white shadow">
+          <p class="text-orange-100 text-xs font-semibold">Costo Ventas</p>
+          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.costo) }}</p>
+        </div>
         <div class="rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 p-4 text-white shadow">
           <p class="text-amber-100 text-xs font-semibold">Descuentos</p>
           <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.descuento) }}</p>
@@ -694,6 +929,18 @@ onMounted(() => cargarDatos())
         <div class="rounded-xl bg-gradient-to-br from-red-500 to-red-700 p-4 text-white shadow">
           <p class="text-red-100 text-xs font-semibold">Gastos</p>
           <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.totalGastos) }}</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-teal-500 to-teal-700 p-4 text-white shadow">
+          <p class="text-teal-100 text-xs font-semibold">Margen %</p>
+          <p class="text-xl font-bold">{{ totales.margen.toFixed(1) }}%</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 p-4 text-white shadow">
+          <p class="text-indigo-100 text-xs font-semibold">Ticket Promedio</p>
+          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.ticketPromedio) }}</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-pink-500 to-pink-700 p-4 text-white shadow">
+          <p class="text-pink-100 text-xs font-semibold">Items / Factura</p>
+          <p class="text-xl font-bold">{{ totales.itemsPorFactura.toFixed(1) }}</p>
         </div>
       </div>
 
@@ -730,6 +977,90 @@ onMounted(() => cargarDatos())
             <canvas ref="canvasTopClientes"></canvas>
           </div>
         </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+          <h4 class="text-sm font-semibold mb-3">Top 10 Productos Vendidos</h4>
+          <div v-if="loading" class="h-48 flex items-center justify-center text-surface-400 text-sm">Cargando...</div>
+          <div v-else-if="topProductos.length > 0" class="h-48">
+            <canvas ref="canvasTopProductos"></canvas>
+          </div>
+          <div v-else class="h-48 flex flex-col items-center justify-center text-surface-400 text-sm">
+            <i class="pi pi-chart-bar text-2xl mb-2"></i>
+            <span>No hay productos vendidos en este rango.</span>
+          </div>
+        </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+          <h4 class="text-sm font-semibold mb-3">Ventas por Categoria</h4>
+          <div v-if="loading" class="h-48 flex items-center justify-center text-surface-400 text-sm">Cargando...</div>
+          <div v-else-if="ventasPorCategoria.length > 0" class="h-48">
+            <canvas ref="canvasCategoria"></canvas>
+          </div>
+          <div v-else class="h-48 flex flex-col items-center justify-center text-surface-400 text-sm">
+            <i class="pi pi-chart-pie text-2xl mb-2"></i>
+            <span>Sin datos de categoria.</span>
+          </div>
+        </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 col-span-1 sm:col-span-2">
+          <h4 class="text-sm font-semibold mb-3">Productos Vendidos</h4>
+          <DataTable
+            :value="productosVendidos"
+            :loading="loading"
+            stripedRows
+            paginator
+            :rows="10"
+            :rowsPerPageOptions="[10, 25, 50]"
+            dataKey="no_factura"
+            responsiveLayout="scroll"
+            sortField="fecha"
+            :sortOrder="-1"
+            class="!text-xs"
+          >
+            <Column field="no_factura" header="Factura" sortable style="width: 8rem" />
+            <Column field="fecha" header="Fecha" sortable style="width: 7rem" />
+            <Column field="cliente" header="Cliente" sortable />
+            <Column field="producto" header="Producto" sortable />
+            <Column field="cantidad" header="Cant." sortable style="width: 5rem" />
+            <Column field="precio" header="Precio" sortable style="width: 7rem">
+              <template #body="{ data }">${{ formatCurrency(data.precio) }}</template>
+            </Column>
+            <Column field="costo" header="Costo" sortable style="width: 7rem">
+              <template #body="{ data }">${{ formatCurrency(data.costo) }}</template>
+            </Column>
+            <Column field="total" header="Total" sortable style="width: 7rem">
+              <template #body="{ data }"><span class="font-semibold">${{ formatCurrency(data.total) }}</span></template>
+            </Column>
+            <template #empty>
+              <div class="text-center py-6 text-surface-400">No hay productos vendidos en este rango.</div>
+            </template>
+          </DataTable>
+        </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 col-span-1 sm:col-span-2">
+          <h4 class="text-sm font-semibold mb-3">Ventas por Vendedor</h4>
+          <DataTable
+            :value="ventasPorVendedor"
+            :loading="loading"
+            stripedRows
+            paginator
+            :rows="10"
+            :rowsPerPageOptions="[10, 25, 50]"
+            dataKey="vendedor"
+            responsiveLayout="scroll"
+            sortField="total"
+            :sortOrder="-1"
+            class="!text-xs"
+          >
+            <Column field="vendedor" header="Vendedor" sortable />
+            <Column field="count" header="Facturas" sortable style="width: 6rem" />
+            <Column field="total" header="Total" sortable style="width: 8rem">
+              <template #body="{ data }">${{ formatCurrency(data.total) }}</template>
+            </Column>
+            <Column field="ganancia" header="Ganancia" sortable style="width: 8rem">
+              <template #body="{ data }"><span class="text-emerald-600 font-semibold">${{ formatCurrency(data.ganancia) }}</span></template>
+            </Column>
+            <template #empty>
+              <div class="text-center py-6 text-surface-400">Sin datos de vendedor.</div>
+            </template>
+          </DataTable>
+        </div>
       </div>
 
       <div class="flex items-center gap-2 mb-3">
@@ -758,6 +1089,11 @@ onMounted(() => cargarDatos())
           <template #body="{ data }">
             <span v-if="data.descuento > 0" class="text-amber-600 font-semibold">${{ formatCurrency(data.descuento) }}</span>
             <span v-else class="text-surface-300">-</span>
+          </template>
+        </Column>
+        <Column header="Costo" sortable style="width: 7rem">
+          <template #body="{ data }">
+            <span class="text-orange-600 font-semibold">${{ formatCurrency(calcularCostoFactura(data)) }}</span>
           </template>
         </Column>
         <Column field="total" header="Total" sortable style="width: 7rem">

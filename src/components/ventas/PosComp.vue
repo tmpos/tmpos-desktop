@@ -830,7 +830,7 @@ async function soloTicket() {
 async function compartirWhatsApp() {
   const d = ticketData.value
   if (!d) return
-  const telefono = clienteSeleccionado.value?.telefono || ''
+  const telefono = d.telefono || ''
   if (!telefono) {
     toast.add({ severity: 'warn', summary: 'WhatsApp', detail: 'El cliente no tiene telefono registrado', life: 3000 })
     return
@@ -1527,7 +1527,7 @@ async function completarVenta() {
       tipo_comprobante: compTipo,
       fecha: `${fechaStr} ${horaStr}`,
       cliente: (clienteExpress.value || clienteSeleccionado.value?.nombre || 'CONSUMIDOR FINAL').toUpperCase(),
-      telefono: clienteSeleccionado.value?.telefono || '',
+      telefono: clienteSeleccionado.value?.telefono || clienteSeleccionado.value?.whatsapp || '',
       items: JSON.parse(JSON.stringify(cartConComision.value.map((item: any) => {
         const i = { ...item }
         delete i.precioOriginal
