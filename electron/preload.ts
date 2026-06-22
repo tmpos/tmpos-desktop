@@ -23,3 +23,8 @@ contextBridge.exposeInMainWorld('db', {
   bitacoraList: (limite?: number) => ipcRenderer.invoke('db:bitacoraList', limite),
   bitacoraDeleteAll: () => ipcRenderer.invoke('db:bitacoraDeleteAll'),
 })
+
+contextBridge.exposeInMainWorld('config', {
+  get: (clave: string) => ipcRenderer.invoke('config:get', clave),
+  set: (clave: string, valor: string) => ipcRenderer.invoke('config:set', clave, valor),
+})

@@ -528,6 +528,24 @@ function setupIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('config:get', (_event, clave: string) => {
+    try {
+      const row = db!.prepare(`SELECT valor FROM configuracion WHERE clave = ?`).get(clave) as any
+      return { success: true, data: row ? row.valor : '' }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('config:set', (_event, clave: string, valor: string, categoria = 'general') => {
+    try {
+      guardarConfigLocal(clave, valor, categoria)
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
   ipcMain.handle('db:bitacoraList', (_event, limite = 1000) => {
     try {
       const rows = db!.prepare(`SELECT * FROM bitacora ORDER BY id DESC LIMIT ?`).all(limite)

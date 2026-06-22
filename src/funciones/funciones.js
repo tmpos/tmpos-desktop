@@ -175,13 +175,21 @@ export function verificaAutentificado(router = useRouter()){
             router.push('/login');
         }
     }else{
+        const uc = localStorage.getItem('update_autoCheck')
+        const ui = localStorage.getItem('update_autoInstall')
         localStorage.clear();
+        if (uc !== null) localStorage.setItem('update_autoCheck', uc)
+        if (ui !== null) localStorage.setItem('update_autoInstall', ui)
         router.push('/login');
     }
 }
 /******************************************************/
 export async function cerrarSession(){
+        const updateAutoCheck = localStorage.getItem('update_autoCheck')
+        const updateAutoInstall = localStorage.getItem('update_autoInstall')
         localStorage.clear();
+        if (updateAutoCheck !== null) localStorage.setItem('update_autoCheck', updateAutoCheck)
+        if (updateAutoInstall !== null) localStorage.setItem('update_autoInstall', updateAutoInstall)
     }
 /******************************************************/
 export async function enviarDatosPorPost(url, data, token = null) {
@@ -3139,7 +3147,11 @@ export async function logout(link,api,tokenCifrado,toast){
 const verifica = window.localStorage.getItem('usuarioLocal')
 if (!verifica) {
     const router = useRouter();
+    const uc = localStorage.getItem('update_autoCheck')
+    const ui = localStorage.getItem('update_autoInstall')
     localStorage.clear();
+    if (uc !== null) localStorage.setItem('update_autoCheck', uc)
+    if (ui !== null) localStorage.setItem('update_autoInstall', ui)
     //router.push('/login');
 }
 
@@ -3151,7 +3163,11 @@ const datosCaja = await peticiones(`${link}${api}/datoscampo/registrocaja/turno/
 const url = link+api+"/actualizarcampos/registrocaja";
 
    if (!datosCaja) {
+      const uc = localStorage.getItem('update_autoCheck')
+      const ui = localStorage.getItem('update_autoInstall')
       localStorage.clear();
+      if (uc !== null) localStorage.setItem('update_autoCheck', uc)
+      if (ui !== null) localStorage.setItem('update_autoInstall', ui)
       return
    }
 
@@ -3163,7 +3179,11 @@ const url = link+api+"/actualizarcampos/registrocaja";
 
    if (envio[0] == 'ok') {
      mensajetoast(toast, 'Ok', 'Salio de la aplicación', 'success')
+      const uc = localStorage.getItem('update_autoCheck')
+      const ui = localStorage.getItem('update_autoInstall')
       localStorage.clear();
+      if (uc !== null) localStorage.setItem('update_autoCheck', uc)
+      if (ui !== null) localStorage.setItem('update_autoInstall', ui)
       //window.location.href = '/login'
 
    }else{

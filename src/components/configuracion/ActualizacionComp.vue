@@ -12,8 +12,31 @@ const versionInfo = ref<any>(null)
 const revisando = ref(false)
 const descargando = ref(false)
 const estadoDescarga = ref('')
-const autoCheck = ref(localStorage.getItem('update_autoCheck') !== 'false')
-const autoInstall = ref(localStorage.getItem('update_autoInstall') === 'true')
+const autoCheck = ref(true)
+const autoInstall = ref(false)
+
+async function cargarConfig() {
+  try {
+    const [resCheck, resInstall] = await Promise.all([
+      (window as any).config.get('update_autoCheck'),
+      (window as any).config.get('update_autoInstall'),
+    ])
+    if (resCheck.success) autoCheck.value = resCheck.data !== 'false'
+    if (resInstall.success) autoInstall.value = resInstall.data === 'true'
+  } catch {}
+}
+
+async function guardarAutoCheck(v: boolean) {
+  await (window as any).config.set('update_autoCheck', String(v))
+  if (!v) {
+    autoInstall.value = false
+    await (window as any).config.set('update_autoInstall', 'false')
+  }
+}
+
+async function guardarAutoInstall(v: boolean) {
+  await (window as any).config.set('update_autoInstall', String(v))
+}
 
 const hayActualizacion = computed(() => {
   if (!versionInfo.value || !versionActual.value) return false
@@ -64,7 +87,8 @@ async function descargarEInstalar() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await cargarConfig()
   if ((window as any).electron?.invoke) {
     ;(window as any).electron.invoke('app:getVersion').then((v: string) => {
       if (v) versionActual.value = v
@@ -129,14 +153,14 @@ onMounted(() => {
             <p class="text-sm font-medium">Buscar actualizaciones</p>
             <p class="text-xs text-surface-400">Revisar automaticamente cada 30 minutos</p>
           </div>
-          <InputSwitch v-model="autoCheck" @update:model-value="v => localStorage.setItem('update_autoCheck', String(v))" />
+           <InputSwitch v-model="autoCheck" @update:model-value="v => guardarAutoCheck(v)" />
         </div>
         <div class="flex items-center justify-between">
           <div>
             <p class="text-sm font-medium">Descargar e instalar automaticamente</p>
             <p class="text-xs text-surface-400">Si hay actualizacion, descargar e instalar sin intervencion</p>
           </div>
-          <InputSwitch v-model="autoInstall" :disabled="!autoCheck" @update:model-value="v => localStorage.setItem('update_autoInstall', String(v))" />
+           <InputSwitch v-model="autoInstall" :disabled="!autoCheck" @update:model-value="v => guardarAutoInstall(v)" />
         </div>
       </div>
     </div>

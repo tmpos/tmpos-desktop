@@ -72,7 +72,11 @@ async function verificarLicenciaPeriodicamente() {
 
 async function revisarActualizacion() {
   if (!(window as any).electron?.invoke) return
-  const autoCheck = localStorage.getItem('update_autoCheck') !== 'false'
+  let autoCheck = true
+  try {
+    const res = await (window as any).config.get('update_autoCheck')
+    if (res.success) autoCheck = res.data !== 'false'
+  } catch {}
   if (!autoCheck) return
   try {
     const res = await (window as any).electron.invoke('update:check')
@@ -82,7 +86,11 @@ async function revisarActualizacion() {
     if (res.data?.version && res.data.version !== versionActual) {
       updateVersionInfo.value = res.data
       updateUrl.value = res.data.url || ''
-      const autoInstall = localStorage.getItem('update_autoInstall') === 'true'
+      let autoInstall = false
+      try {
+        const ri = await (window as any).config.get('update_autoInstall')
+        if (ri.success) autoInstall = ri.data === 'true'
+      } catch {}
       if (autoInstall && updateUrl.value) {
         updateDescargando.value = true
         updateEstado.value = 'Nueva version detectada. Descargando...'
