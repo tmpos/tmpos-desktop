@@ -283,6 +283,7 @@ onUnmounted(() => {
               :key="item.to"
               class="nav-item"
               :class="{ 'nav-item-active': isActive(item.to) }"
+              :title="item.label"
               @click="navigate(item.to)"
             >
               <i :class="item.icon" class="nav-icon"></i>
