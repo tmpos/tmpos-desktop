@@ -1067,7 +1067,7 @@ defineExpose({ cargarOrdenes })
                 </div>
               </div>
 
-              <div class="flex justify-end gap-1 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700 flex-wrap">
+              <div class="flex justify-evenly gap-1 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700 flex-wrap">
                   <Button
                     icon="pi pi-print"
                     severity="info"
