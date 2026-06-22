@@ -26,6 +26,32 @@ const activeTab = ref('0')
 
 const tecnicos = ref<{ nombre: string; porcentaje: number }[]>([])
 
+const piezasDisponibles = ref<any[]>([])
+const dialogPiezasVisible = ref(false)
+const buscarPieza = ref('')
+
+const piezasFiltradas = computed(() => {
+  const q = buscarPieza.value.toLowerCase().trim()
+  if (!q) return piezasDisponibles.value
+  return piezasDisponibles.value.filter((p: any) => (p.nombre || '').toLowerCase().includes(q))
+})
+
+async function cargarPiezas() {
+  try {
+    const res = await window.db.getAll('piezas')
+    if (res.success && res.data) {
+      piezasDisponibles.value = (res.data || []).filter((p: any) => (p.nombre || '').trim())
+    }
+  } catch {}
+}
+
+function seleccionarPieza(pieza: any) {
+  const texto = pieza.nombre || ''
+  form.value.piezas = form.value.piezas ? form.value.piezas + '\n' + texto : texto
+  form.value.precio_pieza = (form.value.precio_pieza || 0) + (Number(pieza.precio_venta) || 0)
+  dialogPiezasVisible.value = false
+}
+
 const fallasComunes = [
   'NO ENCIENDE', 'NO CARGA', 'PANTALLA ROTA', 'BATERIA DAÑADA',
   'NO TIENE SEÑAL', 'MOJADO', 'TECLAS NO FUNCIONAN', 'AUDIO NO FUNCIONA',
@@ -115,6 +141,7 @@ async function cargarDatos() {
     window.db.getAll('tecnicos'),
     props.orderId ? window.db.getAll('ordenes_taller') : Promise.resolve(null),
   ])
+  cargarPiezas()
   if (tecnicosRes.success) {
     tecnicos.value = (tecnicosRes.data || []).map((t: any) => ({
       nombre: (t.nombre || '').toUpperCase(), porcentaje: t.porcentaje || 0
@@ -351,7 +378,10 @@ onMounted(async () => {
                 <Textarea v-model="form.fallas" rows="3" placeholder="Describe la falla reportada por el cliente" fluid />
               </div>
               <div class="flex flex-col gap-1">
-                <label class="font-semibold text-sm">Piezas a Utilizar</label>
+                <div class="flex items-center justify-between">
+                  <label class="font-semibold text-sm">Piezas a Utilizar</label>
+                  <Button icon="pi pi-plus" label="Agregar Pieza" size="small" severity="info" text @click="dialogPiezasVisible = true" />
+                </div>
                 <Textarea v-model="form.piezas" rows="2" placeholder="Piezas o repuestos necesarios" fluid />
               </div>
             </div>
@@ -441,6 +471,29 @@ onMounted(async () => {
       <div class="flex justify-end gap-2 pt-2">
         <Button label="Cancelar" severity="secondary" text @click="$emit('close')" />
         <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :loading="guardando" @click="guardar" />
+      </div>
+    </div>
+  </Dialog>
+
+  <Dialog v-model:visible="dialogPiezasVisible" header="Seleccionar Pieza" :modal="true" :style="{ width: 'min(40rem, 95vw)' }">
+    <div class="flex flex-col gap-3">
+      <InputText v-model="buscarPieza" placeholder="Buscar pieza..." fluid class="w-full" />
+      <div class="max-h-80 overflow-y-auto flex flex-col gap-1">
+        <div
+          v-for="pieza in piezasFiltradas"
+          :key="pieza.id"
+          class="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-surface-100 dark:hover:bg-surface-700 border border-transparent hover:border-surface-200 dark:hover:border-surface-600"
+          @click="seleccionarPieza(pieza)"
+        >
+          <div>
+            <p class="text-sm font-medium">{{ pieza.nombre }}</p>
+            <p class="text-xs text-surface-500">Stock: {{ pieza.cantidad || 0 }}</p>
+          </div>
+          <span class="text-sm font-semibold text-emerald-600">${{ pieza.precio_venta || 0 }}</span>
+        </div>
+        <div v-if="piezasFiltradas.length === 0" class="text-center py-6 text-surface-400 text-sm">
+          No se encontraron piezas.
+        </div>
       </div>
     </div>
   </Dialog>
