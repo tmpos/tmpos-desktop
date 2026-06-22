@@ -56,6 +56,9 @@ const buscarPiezaCard = ref('')
 const dialogAbonoCard = ref(false)
 const abonoOrdenActual = ref<any>(null)
 const abonoMonto = ref(0)
+
+const dialogFacturaPieza = ref(false)
+const piezaSeleccionadaInfo = ref<any>(null)
 const deleteOtpEmail = ref('')
 const deleteOtpError = ref('')
 const busqueda = ref('')
@@ -377,7 +380,8 @@ async function seleccionarPiezaCard(pieza: any) {
   if (!orden) return
   const texto = pieza.nombre || ''
   const nuevasPiezas = orden.piezas ? orden.piezas + '\n' + texto : texto
-  const nuevoPrecioPieza = (Number(orden.precio_pieza) || 0) + (Number(pieza.precio_venta) || 0)
+  const valorPieza = Number(pieza.precio_venta) || 0
+  const nuevoPrecioPieza = (Number(orden.precio_pieza) || 0) + valorPieza
   const nuevoTotal = nuevoPrecioPieza + (Number(orden.mano_obra) || 0)
   const nuevoPendiente = nuevoTotal - (Number(orden.abono) || 0)
   await window.db.update('ordenes_taller', orden.id, {
@@ -391,26 +395,45 @@ async function seleccionarPiezaCard(pieza: any) {
   orden.total = nuevoTotal
   orden.pendiente = nuevoPendiente
   dialogPiezaCard.value = false
+  piezaSeleccionadaInfo.value = { orden, texto, valor: valorPieza }
+  dialogFacturaPieza.value = true
 }
 
-function abrirAbonoModal(orden: any) {
-  abonoOrdenActual.value = orden
-  abonoMonto.value = 0
-  dialogAbonoCard.value = true
+async function crearFacturaPieza() {
+  const info = piezaSeleccionadaInfo.value
+  if (!info) return
+  const { orden, texto, valor } = info
+  const fecha = new Date().toISOString().split('T')[0]
+  const ahora = new Date()
+  const hora = ahora.toTimeString().split(' ')[0].slice(0, 5)
+  const factura = {
+    no_factura: `F-${Date.now().toString(36).toUpperCase()}`,
+    nombre_cliente: orden.nombre || '',
+    telefono_cliente: orden.telefono || '',
+    cedula: orden.cedula || '',
+    productos: JSON.stringify([{ nombre: texto, cantidad: 1, precio: valor, costo: 0 }]),
+    total: valor,
+    subtotal: valor,
+    descuento: 0,
+    ganancia: valor,
+    metodo_pago: 'EFECTIVO',
+    fecha_emision: fecha,
+    hora,
+    estado_factura: 'PENDIENTE',
+    vendedor: '',
+    no_orden: orden.no_orden || '',
+  }
+  const res = await window.db.insert('facturas', factura)
+  if (res.success) {
+    toast.add({ severity: 'success', summary: 'Factura creada', detail: `Factura para pieza: ${texto}`, life: 3000 })
+  } else {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo crear la factura', life: 3000 })
+  }
+  dialogFacturaPieza.value = false
 }
 
-async function guardarAbono() {
-  const orden = abonoOrdenActual.value
-  if (!orden || abonoMonto.value <= 0) return
-  const nuevoAbono = (Number(orden.abono) || 0) + abonoMonto.value
-  const nuevoPendiente = (Number(orden.total) || 0) - nuevoAbono
-  await window.db.update('ordenes_taller', orden.id, {
-    abono: nuevoAbono,
-    pendiente: nuevoPendiente,
-  })
-  orden.abono = nuevoAbono
-  orden.pendiente = nuevoPendiente
-  dialogAbonoCard.value = false
+function cerrarFacturaPieza() {
+  dialogFacturaPieza.value = false
 }
 
 function imprimirOrden(orden: any) {
@@ -1329,6 +1352,23 @@ defineExpose({ cargarOrdenes })
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogAbonoCard = false" />
         <Button label="Guardar Abono" icon="pi pi-check" :disabled="abonoMonto <= 0" @click="guardarAbono" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogFacturaPieza" header="Crear Factura" :modal="true" :style="{ width: 'min(28rem, 95vw)' }">
+      <div class="flex flex-col gap-4">
+        <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+          <i class="pi pi-file text-amber-600 text-xl"></i>
+          <div>
+            <p class="text-sm font-medium">Pieza: <strong>{{ piezaSeleccionadaInfo?.texto }}</strong></p>
+            <p class="text-sm text-surface-500">Valor: <strong>${{ piezaSeleccionadaInfo?.valor }}</strong></p>
+          </div>
+        </div>
+        <p class="text-sm">¿Deseas crear una factura por esta pieza?</p>
+      </div>
+      <template #footer>
+        <Button label="No" severity="secondary" text @click="cerrarFacturaPieza" />
+        <Button label="Sí, crear factura" icon="pi pi-check" @click="crearFacturaPieza" />
       </template>
     </Dialog>
 
