@@ -373,10 +373,19 @@ async function seleccionarPiezaCard(pieza: any) {
   if (!orden) return
   const texto = pieza.nombre || ''
   const nuevasPiezas = orden.piezas ? orden.piezas + '\n' + texto : texto
-  const nuevoPrecio = (Number(orden.precio_pieza) || 0) + (Number(pieza.precio_venta) || 0)
-  await window.db.update('ordenes_taller', orden.id, { piezas: nuevasPiezas, precio_pieza: nuevoPrecio })
+  const nuevoPrecioPieza = (Number(orden.precio_pieza) || 0) + (Number(pieza.precio_venta) || 0)
+  const nuevoTotal = nuevoPrecioPieza + (Number(orden.mano_obra) || 0)
+  const nuevoPendiente = nuevoTotal - (Number(orden.abono) || 0)
+  await window.db.update('ordenes_taller', orden.id, {
+    piezas: nuevasPiezas,
+    precio_pieza: nuevoPrecioPieza,
+    total: nuevoTotal,
+    pendiente: nuevoPendiente,
+  })
   orden.piezas = nuevasPiezas
-  orden.precio_pieza = nuevoPrecio
+  orden.precio_pieza = nuevoPrecioPieza
+  orden.total = nuevoTotal
+  orden.pendiente = nuevoPendiente
   dialogPiezaCard.value = false
 }
 
