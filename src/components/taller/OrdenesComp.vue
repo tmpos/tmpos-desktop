@@ -954,6 +954,10 @@ defineExpose({ cargarOrdenes })
                     {{ formatCurrency(orden.pendiente) }}
                   </span>
                 </div>
+                <div class="col-span-2">
+                  <span class="block text-surface-400 text-xs">Piezas</span>
+                  <span class="font-medium text-xs break-words">{{ orden.piezas || '-' }}</span>
+                </div>
               </div>
 
               <div class="flex items-center justify-between gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
