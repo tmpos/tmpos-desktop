@@ -112,6 +112,9 @@ async function cargarDatos() {
     tecnicos.value = (tecnicosRes.data || []).map((t: any) => ({
       nombre: (t.nombre || '').toUpperCase(), porcentaje: t.porcentaje || 0
     })).filter(t => t.nombre).sort((a, b) => a.nombre.localeCompare(b.nombre))
+    if (!props.orderId && tecnicos.value.length > 0 && !form.value.tecnico) {
+      form.value.tecnico = tecnicos.value[0].nombre
+    }
   }
   if (ordenRes?.success && ordenRes.data) {
     const orden = ordenRes.data.find((o: any) => o.id === props.orderId)
