@@ -20,7 +20,7 @@ export function useEmpresa() {
   async function cargar() {
     try {
       const almacenId = almacenStore.activeId || 0
-      const res = await (window as any).config.get ? (window as any).config.get('empresa_id') : null
+      const res = (window as any).config ? await (window as any).config.get('empresa_id') : null
       let empresaId = 0
       if (res?.success) empresaId = Number(res.data) || 0
 
