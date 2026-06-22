@@ -97,9 +97,10 @@ watch(() => form.value.tecnico, (nombre) => {
   }
 })
 
-watch(() => form.value.porcentaje_tecnico, (pct) => {
+watch([() => form.value.porcentaje_tecnico, () => form.value.mano_obra], () => {
   const mano = form.value.mano_obra || 0
-  form.value.beneficio_tecnico = Math.round((mano * (pct || 0) / 100) * 100) / 100
+  const pct = form.value.porcentaje_tecnico || 0
+  form.value.beneficio_tecnico = Math.round((mano * pct / 100) * 100) / 100
   form.value.beneficio_empresa = Math.round((mano - form.value.beneficio_tecnico) * 100) / 100
 })
 
