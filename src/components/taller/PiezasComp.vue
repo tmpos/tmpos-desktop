@@ -29,6 +29,10 @@ const isEditing = ref(false)
 const selectedPieza = ref<any>(null)
 const busqueda = ref('')
 
+function formatCurrency(val: number): string {
+  return val != null ? val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'
+}
+
 const dialogMovimientos = ref(false)
 const movimientosPieza = ref<any[]>([])
 const piezaMovimiento = ref<any>(null)
