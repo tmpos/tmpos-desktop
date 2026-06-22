@@ -281,12 +281,12 @@ function initDatabase(): void {
   }
 
   function ensureEmpresaTable(): void {
-    const requiredColumns = ['nombre', 'legal', 'encargado', 'telefono', 'email', 'direccion', 'logo', 'impuesto', 'impuesto_incluido', 'moneda', 'tipo_documento_defecto', 'created_at', 'updated_at']
+    const requiredColumns = ['nombre', 'legal', 'encargado', 'telefono', 'email', 'direccion', 'logo', 'impuesto', 'impuesto_incluido', 'moneda', 'tipo_documento_defecto', 'almacen_id', 'created_at', 'updated_at']
     if (tableExists('empresa')) {
       const columns = tableColumns('empresa')
       if (!columns.includes('id')) {
         db!.exec(`ALTER TABLE empresa RENAME TO empresa_old`)
-        db!.exec(`CREATE TABLE empresa (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT DEFAULT '',legal TEXT DEFAULT '',encargado TEXT DEFAULT '',telefono TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',logo TEXT DEFAULT '',impuesto REAL DEFAULT 18,impuesto_incluido INTEGER DEFAULT 0,moneda TEXT DEFAULT 'RD$',tipo_documento_defecto TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+        db!.exec(`CREATE TABLE empresa (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT DEFAULT '',legal TEXT DEFAULT '',encargado TEXT DEFAULT '',telefono TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',logo TEXT DEFAULT '',impuesto REAL DEFAULT 18,impuesto_incluido INTEGER DEFAULT 0,moneda TEXT DEFAULT 'RD$',tipo_documento_defecto TEXT DEFAULT '',almacen_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
         const copyColumns = requiredColumns.filter(column => columns.includes(column))
         if (copyColumns.length > 0) {
           const columnsSql = copyColumns.map(column => `"${column}"`).join(', ')
@@ -297,13 +297,13 @@ function initDatabase(): void {
       }
       for (const column of requiredColumns) {
         if (!columns.includes(column)) {
-          const isNumeric = ['impuesto', 'impuesto_incluido'].includes(column)
-          db!.exec(`ALTER TABLE empresa ADD COLUMN "${column}" ${isNumeric ? (column === 'impuesto_incluido' ? 'INTEGER' : 'REAL') : 'TEXT'} DEFAULT ${isNumeric ? (column === 'impuesto_incluido' ? '1' : '18') : "''"}`)
+          const isNumeric = ['impuesto', 'impuesto_incluido', 'almacen_id'].includes(column)
+          db!.exec(`ALTER TABLE empresa ADD COLUMN "${column}" ${isNumeric ? (column === 'impuesto_incluido' || column === 'almacen_id' ? 'INTEGER' : 'REAL') : 'TEXT'} DEFAULT ${isNumeric ? (column === 'impuesto_incluido' ? '1' : column === 'almacen_id' ? '0' : '18') : "''"}`)
         }
       }
       return
     }
-    db!.exec(`CREATE TABLE empresa (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT DEFAULT '',legal TEXT DEFAULT '',encargado TEXT DEFAULT '',telefono TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',logo TEXT DEFAULT '',impuesto REAL DEFAULT 18,impuesto_incluido INTEGER DEFAULT 0,moneda TEXT DEFAULT 'RD$',tipo_documento_defecto TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+    db!.exec(`CREATE TABLE empresa (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT DEFAULT '',legal TEXT DEFAULT '',encargado TEXT DEFAULT '',telefono TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',logo TEXT DEFAULT '',impuesto REAL DEFAULT 18,impuesto_incluido INTEGER DEFAULT 0,moneda TEXT DEFAULT 'RD$',tipo_documento_defecto TEXT DEFAULT '',almacen_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
     db!.exec(`INSERT INTO empresa (nombre) VALUES ('MI EMPRESA')`)
   }
 

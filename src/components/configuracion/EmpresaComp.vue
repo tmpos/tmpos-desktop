@@ -5,11 +5,14 @@ import Button from 'primevue/button'
 import Fieldset from 'primevue/fieldset'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { useEmpresa } from '@/composables/useEmpresa'
+import { useAlmacenStore } from '@/stores/almacen.store'
 
 const toast = useToast()
+const almacenStore = useAlmacenStore()
+const { empresa, cargar: cargarEmpresa, guardar: guardarEmpresa, nombre } = useEmpresa()
 const loading = ref(false)
 const guardando = ref(false)
-const empresa = ref<any>(null)
 
 const logoInput = ref<HTMLInputElement | null>(null)
 const logoPreview = ref('')
@@ -24,22 +27,21 @@ const form = ref({
   logo: '',
 })
 
-async function cargarEmpresa() {
+async function cargar() {
   loading.value = true
   try {
-    const res = await window.db.getAll('empresa')
-    if (res.success && res.data?.length > 0) {
-      empresa.value = res.data[0]
+    await cargarEmpresa()
+    if (empresa.value) {
       form.value = {
-        nombre: res.data[0].nombre || '',
-        legal: res.data[0].legal || '',
-        encargado: res.data[0].encargado || '',
-        telefono: res.data[0].telefono || '',
-        email: res.data[0].email || '',
-        direccion: res.data[0].direccion || '',
-        logo: res.data[0].logo || '',
+        nombre: empresa.value.nombre || '',
+        legal: empresa.value.legal || '',
+        encargado: empresa.value.encargado || '',
+        telefono: empresa.value.telefono || '',
+        email: empresa.value.email || '',
+        direccion: empresa.value.direccion || '',
+        logo: empresa.value.logo || '',
       }
-      logoPreview.value = res.data[0].logo || ''
+      logoPreview.value = empresa.value.logo || ''
     }
   } catch (error) {
     console.error(error)
@@ -89,7 +91,7 @@ async function guardar() {
 
   guardando.value = true
   try {
-    const data = {
+    const data: Record<string, any> = {
       nombre: form.value.nombre.trim().toUpperCase(),
       legal: form.value.legal.trim().toUpperCase(),
       encargado: form.value.encargado.trim().toUpperCase(),
@@ -97,25 +99,11 @@ async function guardar() {
       email: form.value.email.trim().toLowerCase(),
       direccion: form.value.direccion.trim().toUpperCase(),
       logo: form.value.logo || '',
+      almacen_id: almacenStore.activeId || 0,
     }
 
-    if (empresa.value?.id) {
-      const res = await window.db.update('empresa', empresa.value.id, data)
-      if (res.success) {
-        toast.add({ severity: 'success', summary: 'Exito', detail: 'Empresa actualizada', life: 3000 })
-        empresa.value = { ...empresa.value, ...data }
-      } else {
-        toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo actualizar', life: 3000 })
-      }
-    } else {
-      const res = await window.db.insert('empresa', data)
-      if (res.success) {
-        toast.add({ severity: 'success', summary: 'Exito', detail: 'Empresa creada', life: 3000 })
-        empresa.value = { id: res.data.id, ...data }
-      } else {
-        toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo crear', life: 3000 })
-      }
-    }
+    await guardarEmpresa(data)
+    toast.add({ severity: 'success', summary: 'Exito', detail: 'Empresa actualizada', life: 3000 })
   } catch (error) {
     toast.add({ severity: 'error', summary: 'Error', detail: 'Error al guardar', life: 3000 })
   } finally {
@@ -124,7 +112,7 @@ async function guardar() {
 }
 
 onMounted(async () => {
-  await cargarEmpresa()
+  await cargar()
 })
 </script>
 

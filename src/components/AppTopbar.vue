@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth.store'
 import { useAlmacenStore } from '@/stores/almacen.store'
+import { useEmpresa } from '@/composables/useEmpresa'
 import { useAlertas } from '@/composables/useAlertas'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
@@ -13,20 +14,9 @@ const route = useRoute()
 const themeStore = useThemeStore()
 const auth = useAuthStore()
 const almacenStore = useAlmacenStore()
+const { cargar: cargarEmpresa, nombre: empresaNombre, logo: empresaLogo } = useEmpresa()
 
 const cambiandoAlmacen = ref(false)
-
-const { alertas, verificarAlertas } = useAlertas()
-const alertasPanelVisible = ref(false)
-
-function cambiarAlmacen() {
-  localStorage.setItem('almacen_id', String(almacenStore.activeId))
-  cambiandoAlmacen.value = true
-  setTimeout(() => window.location.reload(), 300)
-}
-const empresaNombre = ref('')
-const empresaLogo = ref('')
-
 let licenciaInterval: ReturnType<typeof setInterval> | null = null
 let updateInterval: ReturnType<typeof setInterval> | null = null
 let licenciaVerificando = false
@@ -123,17 +113,6 @@ async function descargarAhora() {
   } catch {
     updateDescargando.value = false
   }
-}
-
-async function cargarEmpresa() {
-  try {
-    const res = await window.db.getAll('empresa')
-    if (res.success && res.data?.length > 0) {
-      const e = res.data[0]
-      empresaNombre.value = e.nombre || ''
-      empresaLogo.value = e.logo || ''
-    }
-  } catch (_) {}
 }
 
 onMounted(() => {
