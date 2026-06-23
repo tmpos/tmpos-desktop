@@ -1813,20 +1813,23 @@ function abrirDialogDescuento() {
 async function cargarNotasCreditoCliente() {
   const clienteNombre = (clienteSeleccionado.value?.nombre || '').toUpperCase().trim()
   const clienteId = clienteSeleccionado.value?.id ? String(clienteSeleccionado.value.id) : ''
+  console.log('[NC] clienteNombre:', clienteNombre, 'clienteId:', clienteId)
   if (!clienteNombre && !clienteId) { notasCreditoCliente.value = []; return }
   try {
     const res = await window.db.getAll('facturas')
     if (res.success) {
-      notasCreditoCliente.value = (res.data || []).filter((f: any) =>
-        f.tipo_factura === 'NOTA_CREDITO' &&
+      const todasNC = (res.data || []).filter((f: any) => f.tipo_factura === 'NOTA_CREDITO')
+      console.log('[NC] total NC en DB:', todasNC.length, todasNC.map(f => ({ id: f.id, no: f.no_factura, cliente: f.nombre_cliente, cod: f.cod_cliente, estado: f.estado_factura })))
+      notasCreditoCliente.value = todasNC.filter((f: any) =>
         f.estado_factura === 'PENDIENTE' &&
         (
           (clienteId && String(f.cod_cliente || '') === clienteId) ||
           (clienteNombre && String(f.nombre_cliente || '').toUpperCase() === clienteNombre)
         )
       )
+      console.log('[NC] filtradas:', notasCreditoCliente.value.length, notasCreditoCliente.value.map(f => ({ id: f.id, no: f.no_factura })))
     }
-  } catch { notasCreditoCliente.value = [] }
+  } catch (e) { console.error('[NC] error:', e); notasCreditoCliente.value = [] }
 }
 
 function seleccionarNotaCredito(nota: any) {
