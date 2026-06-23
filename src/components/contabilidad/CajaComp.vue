@@ -22,7 +22,7 @@
         </div>
         <div class="flex gap-2">
           <button @click="cargarDatos" :disabled="refreshing" class="w-10 h-10 flex items-center justify-center rounded-lg border border-surface-300 dark:border-surface-600 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors"><i class="pi pi-refresh" :class="{ 'pi-spin': refreshing }"></i></button>
-          <button @click="cerrarTurno" :disabled="cerrandoTurno" class="flex items-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-semibold bg-red-500 hover:bg-red-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"><i class="pi" :class="cerrandoTurno ? 'pi-spin pi-spinner' : 'pi-times-circle'"></i>{{ cerrandoTurno ? 'Cerrando...' : 'Cerrar Turno' }}</button>
+          <button @click="abrirCierreTurno" :disabled="cerrandoTurno" class="flex items-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-semibold bg-red-500 hover:bg-red-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"><i class="pi pi-times-circle"></i>Cerrar Turno</button>
         </div>
       </div>
 
@@ -193,6 +193,50 @@
         <button @click="showDetalleVenta = false" class="px-4 py-2 rounded-lg text-sm font-medium border border-surface-300 dark:border-surface-600 hover:bg-surface-100 dark:hover:bg-surface-700">Cerrar</button>
       </template>
     </Dialog>
+
+    <Dialog v-model:visible="showCierreModal" header="Conteo de Cierre de Caja" modal :style="{ width: '90%', maxWidth: '500px' }" :closable="!cerrandoTurno">
+      <div class="flex flex-col gap-4">
+        <div class="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3">
+          <div class="flex justify-between text-sm">
+            <span class="text-surface-500">Efectivo esperado</span>
+            <span class="font-bold">${{ formatMoney(efectivoEsperado) }}</span>
+          </div>
+          <div class="flex justify-between text-sm mt-1">
+            <span class="text-surface-500">Total contado</span>
+            <span class="font-bold" :class="totalConteo === efectivoEsperado ? 'text-green-600' : 'text-red-600'">${{ formatMoney(totalConteo) }}</span>
+          </div>
+          <div v-if="totalConteo !== efectivoEsperado" class="flex justify-between text-sm mt-1">
+            <span class="text-surface-500">Diferencia</span>
+            <span class="font-bold" :class="totalConteo > efectivoEsperado ? 'text-green-600' : 'text-red-600'">
+              {{ totalConteo > efectivoEsperado ? '+' : '' }}${{ formatMoney(Math.abs(totalConteo - efectivoEsperado)) }}
+            </span>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div v-for="d in denominaciones" :key="d.valor" class="flex flex-col gap-1">
+            <label class="text-xs text-surface-500">{{ d.label }}</label>
+            <div class="flex items-center gap-2">
+              <input
+                v-model.number="conteo[d.valor]"
+                type="number"
+                min="0"
+                placeholder="0"
+                class="w-full h-9 px-2 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 text-sm text-center outline-none focus:border-primary"
+              />
+              <span v-if="conteo[d.valor]" class="text-xs text-surface-400 w-16 text-right">${{ formatMoney(d.valor * (conteo[d.valor] || 0)) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <button @click="showCierreModal = false" :disabled="cerrandoTurno" class="px-4 py-2 rounded-lg text-sm font-medium border border-surface-300 dark:border-surface-600 hover:bg-surface-100 dark:hover:bg-surface-700 disabled:opacity-50">Cancelar</button>
+        <button @click="showCierreModal = false; cerrarTurno()" :disabled="cerrandoTurno" class="px-4 py-2 rounded-lg text-white text-sm font-semibold bg-red-500 hover:bg-red-600 disabled:opacity-50 flex items-center gap-2">
+          <i class="pi" :class="cerrandoTurno ? 'pi-spin pi-spinner' : 'pi-times-circle'"></i>
+          {{ cerrandoTurno ? 'Cerrando...' : 'Confirmar Cierre de Turno' }}
+        </button>
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -212,6 +256,21 @@ const gastosTurno = ref(0)
 const gastosLista = ref([])
 const ultimasVentas = ref([])
 const cerrandoTurno = ref(false)
+
+const showCierreModal = ref(false)
+const denominaciones = [
+  { valor: 2000, label: '$2,000', tipo: 'billete' },
+  { valor: 1000, label: '$1,000', tipo: 'billete' },
+  { valor: 500, label: '$500', tipo: 'billete' },
+  { valor: 200, label: '$200', tipo: 'billete' },
+  { valor: 100, label: '$100', tipo: 'billete' },
+  { valor: 50, label: '$50', tipo: 'billete' },
+  { valor: 25, label: '$25', tipo: 'moneda' },
+  { valor: 10, label: '$10', tipo: 'moneda' },
+  { valor: 5, label: '$5', tipo: 'moneda' },
+  { valor: 1, label: '$1', tipo: 'moneda' },
+]
+const conteo = ref<Record<number, number>>({})
 
 const abrirTurnoModal = ref(false)
 const montoInicial = ref(0)
@@ -641,9 +700,14 @@ function construirEmailCierre(data) {
   </body></html>`
 }
 
+const totalConteo = computed(() => {
+  if (!turnoActual.value) return
+  conteo.value = {}
+  showCierreModal.value = true
+}
+
 async function cerrarTurno() {
   if (cerrandoTurno.value || !turnoActual.value) return
-  if (!confirm('Estas seguro de cerrar el turno? Se imprimira el ticket y se enviara el reporte por correo.')) return
   cerrandoTurno.value = true
   try {
     const cierre = await obtenerResumenCierre()
