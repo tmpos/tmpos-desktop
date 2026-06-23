@@ -701,6 +701,15 @@ function construirEmailCierre(data) {
 }
 
 const totalConteo = computed(() => {
+  let total = 0
+  for (const d of denominaciones) {
+    const cant = Number(conteo.value[d.valor]) || 0
+    total += d.valor * cant
+  }
+  return total
+})
+
+function abrirCierreTurno() {
   if (!turnoActual.value) return
   conteo.value = {}
   showCierreModal.value = true
