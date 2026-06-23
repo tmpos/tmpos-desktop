@@ -17,6 +17,8 @@ const loading = ref(false)
 const dialogVisible = ref(false)
 const selectedUser = ref<any>(null)
 const permisosSeleccionados = ref<string[]>([])
+const deleteDialogVisible = ref(false)
+const selectedDeleteUser = ref<any>(null)
 
 const opcionesPermisos = [
   { label: 'Inicio', key: 'home', grupo: 'General' },
@@ -132,6 +134,27 @@ function togglePermiso(key: string) {
   permisosSeleccionados.value = current
 }
 
+function confirmarBorrar(usuario: any) {
+  selectedDeleteUser.value = usuario
+  deleteDialogVisible.value = true
+}
+
+async function borrarUsuario() {
+  if (!selectedDeleteUser.value) return
+  try {
+    const res = await window.db.delete('usuarios', selectedDeleteUser.value.id)
+    if (res.success) {
+      toast.add({ severity: 'success', summary: 'Eliminado', detail: 'Usuario eliminado', life: 3000 })
+      deleteDialogVisible.value = false
+      await cargarUsuarios()
+    } else {
+      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo eliminar', life: 3000 })
+    }
+  } catch {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'Error al eliminar', life: 3000 })
+  }
+}
+
 onMounted(cargarUsuarios)
 </script>
 
@@ -157,9 +180,12 @@ onMounted(cargarUsuarios)
             <span v-else class="text-surface-400 text-sm">Todos</span>
           </template>
         </Column>
-        <Column header="Acciones" style="width: 8rem">
+        <Column header="Acciones" style="width: 10rem">
           <template #body="{ data }">
-            <Button v-if="!esSoporte(data)" icon="pi pi-shield" label="Permisos" size="small" @click="abrirPermisos(data)" />
+            <div class="flex gap-1" v-if="!esSoporte(data)">
+              <Button icon="pi pi-shield" label="Permisos" size="small" @click="abrirPermisos(data)" />
+              <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click="confirmarBorrar(data)" v-tooltip="'Eliminar'" />
+            </div>
             <span v-else class="text-xs text-surface-400">—</span>
           </template>
         </Column>
@@ -195,6 +221,17 @@ onMounted(cargarUsuarios)
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
         <Button label="Guardar" icon="pi pi-check" @click="guardarPermisos" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="deleteDialogVisible" header="Confirmar Eliminacion" :modal="true" :style="{ width: '400px' }">
+      <div class="flex items-center gap-3">
+        <i class="pi pi-exclamation-triangle text-amber-500 text-2xl"></i>
+        <p>¿Estas seguro de eliminar al usuario <strong>{{ selectedDeleteUser?.nombre }}</strong>?</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
+        <Button label="Eliminar" severity="danger" icon="pi pi-trash" @click="borrarUsuario" />
       </template>
     </Dialog>
   </div>
