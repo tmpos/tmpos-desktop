@@ -35,6 +35,9 @@ function getSaldo(apartado: any): number {
 function buildTicketHtml(apartado: any, tipo: 'apartado' | 'pago' = 'apartado', pago?: any): string {
   const pagos = getPagos(apartado)
   const titulo = tipo === 'pago' ? (getSaldo(apartado) <= 0 ? 'APARTADO COMPLETADO' : 'PAGO DE APARTADO') : 'RECIBO DE APARTADO'
+  const empresaNombre = (window as any).__empresaNombre || 'MI EMPRESA'
+  const empresaDireccion = (window as any).__empresaDireccion || ''
+  const empresaTelefono = (window as any).__empresaTelefono || ''
   const notas = String(apartado?.notas || '')
   const imei = notas.match(/IMEI:\s*([^|]+)/i)?.[1]?.trim() || ''
   const modelo = notas.match(/MODELO:\s*([^|]+)/i)?.[1]?.trim() || ''
@@ -89,8 +92,10 @@ function buildTicketHtml(apartado: any, tipo: 'apartado' | 'pago' = 'apartado', 
   <body>
     <div class="ticket">
       <div class="center">
-        <div class="brand">MRCUTTI TECHNOLOGY</div>
-        <div class="muted">Recibo generado por el sistema</div>
+        <div class="brand">${empresaNombre}</div>
+        ${empresaDireccion ? `<div class="muted">${empresaDireccion}</div>` : ''}
+        ${empresaTelefono ? `<div class="muted">Tel: ${empresaTelefono}</div>` : ''}
+        <div class="sep"></div>
         <div class="title">${titulo}</div>
       </div>
       <div class="sep"></div>

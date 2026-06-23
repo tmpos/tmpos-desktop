@@ -36,6 +36,8 @@ async function cargarEmpresa() {
       empresaNombre.value = e.nombre || ''
       empresaLogo.value = e.logo || ''
       ;(window as any).__empresaNombre = e.nombre || 'MI EMPRESA'
+      ;(window as any).__empresaDireccion = e.direccion || ''
+      ;(window as any).__empresaTelefono = e.telefono || ''
     }
   } catch (_) {}
 }

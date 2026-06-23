@@ -54,6 +54,8 @@ export function useEmpresa() {
       if (emp) {
         empresa.value = emp
         ;(window as any).__empresaNombre = emp.nombre || 'MI EMPRESA'
+        ;(window as any).__empresaDireccion = emp.direccion || ''
+        ;(window as any).__empresaTelefono = emp.telefono || ''
       }
     } catch (_) {}
     loaded.value = true
