@@ -559,6 +559,7 @@ function crearCharts() {
               backgroundColor: 'rgba(251, 146, 60, 0.7)',
               borderColor: 'rgb(251, 146, 60)',
               borderWidth: 1,
+              xAxisID: 'x',
             },
             {
               label: 'Total Venta',
@@ -566,6 +567,7 @@ function crearCharts() {
               backgroundColor: 'rgba(59, 130, 246, 0.7)',
               borderColor: 'rgb(59, 130, 246)',
               borderWidth: 1,
+              xAxisID: 'x1',
             },
           ],
         },
@@ -576,7 +578,8 @@ function crearCharts() {
           interaction: { mode: 'index', intersect: false },
           plugins: { legend: { position: 'top' } },
           scales: {
-            x: { beginAtZero: true, title: { display: true, text: 'Cantidad / RD$' } },
+            x: { position: 'bottom', beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'Cantidad' } },
+            x1: { position: 'top', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'RD$' } },
             y: { beginAtZero: true, title: { display: true, text: 'Productos' } },
           },
         },
