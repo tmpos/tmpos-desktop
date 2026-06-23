@@ -134,10 +134,9 @@ export const useAuthStore = defineStore('auth', () => {
     inventario: ['telefonos', 'accesorios', 'electrodomesticos', 'imei', 'serial', 'categorias', 'marcas', 'etiquetas', 'cambiazo', 'transferencias', 'reporte'],
     taller: ['ordenes', 'orden-express', 'piezas', 'tecnicos', 'reporte'],
     contactos: ['clientes', 'usuarios', 'proveedores'],
-    ventas: ['facturas', 'cotizaciones', 'apartados', 'recibidos', 'notas-credito', 'notas'],
+    ventas: ['facturas', 'cotizaciones', 'apartados', 'recibidos', 'notas-credito', 'notas', 'garantias', 'reclamaciones'],
     reportes: ['general', '606', '607', 'gastos', 'ventas', 'ganancias'],
     contabilidad: ['caja', 'comprar', 'cuadre', 'cxc', 'cxp', 'bancos', 'gastos', 'gastos-fijos', 'utilidades', 'catalogo', 'balance', 'comprobantes'],
-    reclamaciones: [],
   }
 
   function tienePermiso(key) {
