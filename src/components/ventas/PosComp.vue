@@ -1811,7 +1811,7 @@ function abrirDialogDescuento() {
 }
 
 async function cargarNotasCreditoCliente() {
-  const clienteNombre = (clienteSeleccionado.value?.nombre || '').toUpperCase().trim()
+  const clienteNombre = (clienteSeleccionado.value?.nombre || clienteExpress.value || '').toUpperCase().trim()
   const clienteId = clienteSeleccionado.value?.id ? String(clienteSeleccionado.value.id) : ''
   console.log('[NC] clienteNombre:', clienteNombre, 'clienteId:', clienteId)
   if (!clienteNombre && !clienteId) { notasCreditoCliente.value = []; return }
