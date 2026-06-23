@@ -234,6 +234,15 @@ async function crearNotaCreditoInterna(recibido: any) {
   try {
     const nd = JSON.parse(recibido.nota || '{}')
     if (!nd.credit_note_value || nd.credit_note_value <= 0) return
+    const nombreCliente = (nd.customer_name || 'CONSUMIDOR FINAL').toUpperCase()
+    let codCliente = ''
+    try {
+      const resCli = await window.db.getAll('clientes')
+      if (resCli.success) {
+        const found = (resCli.data || []).find((c: any) => (c.nombre || '').toUpperCase() === nombreCliente)
+        if (found) codCliente = String(found.id || '')
+      }
+    } catch {}
     const now = new Date()
     const y = now.getFullYear()
     const m = String(now.getMonth() + 1).padStart(2, '0')
@@ -247,7 +256,8 @@ async function crearNotaCreditoInterna(recibido: any) {
     const res = await window.db.insert('facturas', {
       no_factura: noCredito,
       tipo_factura: 'NOTA_CREDITO',
-      nombre_cliente: (nd.customer_name || 'CONSUMIDOR FINAL').toUpperCase(),
+      cod_cliente: codCliente,
+      nombre_cliente: nombreCliente,
       telefono_cliente: nd.customer_phone || '',
       productos: JSON.stringify([{
         nombre: `RECIBIDO: ${getNombreTelefono(recibido.id_equi) || recibido.nombre || ''}`,
@@ -258,7 +268,7 @@ async function crearNotaCreditoInterna(recibido: any) {
       total: nd.credit_note_value,
       subtotal: nd.credit_note_value,
       metodo_pago: 'EFECTIVO',
-      estado_factura: 'PAGADA',
+      estado_factura: 'PENDIENTE',
       fecha_emision: fechaStr,
       fecha_estado: fechaStr,
       hora: `${h}:${min}`,
@@ -356,6 +366,15 @@ async function generarNotaCredito(recibido: any) {
 
   generandoNC.value = true
   try {
+    const nombreCliente = (nd.customer_name || 'CONSUMIDOR FINAL').toUpperCase()
+    let codCliente = ''
+    try {
+      const resCli = await window.db.getAll('clientes')
+      if (resCli.success) {
+        const foundCli = (resCli.data || []).find((c: any) => (c.nombre || '').toUpperCase() === nombreCliente)
+        if (foundCli) codCliente = String(foundCli.id || '')
+      }
+    } catch {}
     const now = new Date()
     const y = now.getFullYear()
     const m = String(now.getMonth() + 1).padStart(2, '0')
@@ -370,7 +389,8 @@ async function generarNotaCredito(recibido: any) {
     const res = await window.db.insert('facturas', {
       no_factura: noCredito,
       tipo_factura: 'NOTA_CREDITO',
-      nombre_cliente: (nd.customer_name || 'CONSUMIDOR FINAL').toUpperCase(),
+      cod_cliente: codCliente,
+      nombre_cliente: nombreCliente,
       telefono_cliente: nd.customer_phone || '',
       productos: JSON.stringify([{
         nombre: `RECIBIDO: ${getNombreTelefono(recibido.id_equi) || recibido.nombre}`,
@@ -381,7 +401,7 @@ async function generarNotaCredito(recibido: any) {
       total: nd.credit_note_value,
       subtotal: nd.credit_note_value,
       metodo_pago: 'EFECTIVO',
-      estado_factura: 'PAGADA',
+      estado_factura: 'PENDIENTE',
       fecha_emision: fechaStr,
       fecha_estado: fechaStr,
       hora: horaStr,
