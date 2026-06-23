@@ -76,6 +76,7 @@ const descuentoTipo = ref<'fijo' | 'porcentaje' | 'nota_credito'>('fijo')
 const descuentoValor = ref(0)
 const notasCreditoCliente = ref<any[]>([])
 const notaCreditoSeleccionada = ref<any>(null)
+const notaCreditoUsada = ref('')
 const confirmPago = ref(false)
 const dialogMixto = ref(false)
 const pasoMixto = ref<'elegir' | 'montos'>('elegir')
@@ -809,6 +810,7 @@ async function ventaExpress() {
   montoRecibido.value = 0
   nota.value = ''
   noFactura.value = ''
+  notaCreditoUsada.value = ''
   metodoPago.value = 'EFECTIVO'
   clienteSeleccionado.value = null
   localStorage.removeItem(POS_STORAGE_KEY)
@@ -1425,7 +1427,7 @@ async function completarVenta() {
       fecha_estado: fechaStr,
       mes: String(now.getMonth() + 1),
       year: String(now.getFullYear()),
-      nota: nota.value.trim().toUpperCase(),
+      nota: (nota.value.trim() + (notaCreditoUsada.value ? ' | ' + notaCreditoUsada.value : '')).toUpperCase(),
       usuario: 'POS',
       ncf,
       comprobante: compTipo,
@@ -1841,6 +1843,7 @@ function seleccionarNotaCredito(nota: any) {
 async function aplicarDescuento() {
   if (descuentoTipo.value === 'nota_credito' && notaCreditoSeleccionada.value) {
     descuentoFijo.value = Math.min(subtotal.value, Math.max(0, descuentoValor.value))
+    notaCreditoUsada.value = `NC: ${notaCreditoSeleccionada.value.no_factura} - RD$${formatCurrency(descuentoFijo.value)}`
     await window.db.update('facturas', notaCreditoSeleccionada.value.id, { estado_factura: 'UTILIZADA' })
   } else if (descuentoTipo.value === 'porcentaje') {
     descuentoPorc.value = Math.min(100, Math.max(0, descuentoValor.value))
@@ -1858,6 +1861,7 @@ function quitarDescuento() {
   descuentoValor.value = 0
   descuentoTipo.value = 'fijo'
   notaCreditoSeleccionada.value = null
+  notaCreditoUsada.value = ''
   dialogDescuento.value = false
 }
 </script>
