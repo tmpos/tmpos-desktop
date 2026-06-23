@@ -478,8 +478,19 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
     }
 
     for (const { tabla, rows } of uploadBatch) {
-      notify({ running: true, tabla, progreso: `Subiendo ${tabla} (${rows.length} registros)...`, mode })
-      const result = await upsertCloud(tabla, rows)
+      const serverCols = tableSchemaMap.get(tabla)
+      const serverColNames = serverCols ? serverCols.columns.map(c => c.name) : null
+      const cleanRows = serverColNames
+        ? rows.map(r => {
+            const cleaned: any = { uid: r.uid }
+            for (const col of serverColNames) {
+              if (col in r) cleaned[col] = r[col]
+            }
+            return cleaned
+          })
+        : rows
+      notify({ running: true, tabla, progreso: `Subiendo ${tabla} (${cleanRows.length} registros)...`, mode })
+      const result = await upsertCloud(tabla, cleanRows)
       if (result.inserted + result.updated > 0 || result.errors > 0) {
         const ups = result.inserted + result.updated
         details.push({ tabla, downloaded: 0, uploaded: ups, errors: result.errors })
