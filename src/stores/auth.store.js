@@ -131,7 +131,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   const subPermisos = {
-    inventario: ['telefonos', 'accesorios', 'electrodomesticos', 'imei', 'serial', 'categorias', 'marcas', 'etiquetas', 'cambiazo', 'transferencias', 'reporte'],
+    inventario: ['telefonos', 'accesorios', 'electrodomesticos', 'imei', 'serial', 'categorias', 'marcas', 'etiquetas', 'cambiazo', 'transferencias', 'compras', 'reporte'],
     taller: ['ordenes', 'orden-express', 'piezas', 'tecnicos', 'reporte'],
     contactos: ['clientes', 'usuarios', 'proveedores'],
     ventas: ['facturas', 'cotizaciones', 'apartados', 'recibidos', 'notas-credito', 'notas', 'garantias', 'reclamaciones'],

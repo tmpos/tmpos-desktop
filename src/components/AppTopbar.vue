@@ -202,7 +202,6 @@ const navItems: { label: string; icon: string; to: string; permiso: string }[] =
   { label: 'Reportes', icon: 'pi pi-chart-bar', to: '/reportes', permiso: 'reportes' },
   { label: 'Configuracion', icon: 'pi pi-cog', to: '/configuracion', permiso: 'configuracion' },
   { label: 'Vender', icon: 'pi pi-shopping-cart', to: '/vender', permiso: 'vender' },
-  { label: 'Compras', icon: 'pi pi-truck', to: '/compras', permiso: 'compras' },
   { label: 'Soporte', icon: 'pi pi-headset', to: '/soporte', permiso: 'soporte' },
 ]
 

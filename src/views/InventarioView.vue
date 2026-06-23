@@ -16,6 +16,7 @@ import AjustesComp from '@/components/inventario/AjustesComp.vue'
 import HistorialPreciosComp from '@/components/inventario/HistorialPreciosComp.vue'
 import EtiquetasComp from '@/components/inventario/EtiquetasComp.vue'
 import TransferenciasComp from '@/components/transferencias/TransferenciasComp.vue'
+import OrdenesCompraComp from '@/components/compras/OrdenesCompraComp.vue'
 
 const auth = useAuthStore()
 
@@ -30,6 +31,7 @@ const allItems: SubMenuItem[] = [
   { label: 'Etiquetas', icon: 'pi pi-qrcode', key: 'etiquetas' },
   { label: 'Cambiazo', icon: 'pi pi-sync', key: 'cambiazo' },
   { label: 'Transferencias', icon: 'pi pi-arrow-right-arrow-left', key: 'transferencias' },
+  { label: 'Compras', icon: 'pi pi-truck', key: 'compras' },
   { label: 'Reporte de Inventario', icon: 'pi pi-file-export', key: 'reporte' },
   { label: 'Ajustes', icon: 'pi pi-pencil', key: 'ajustes' },
   { label: 'Historial Precios', icon: 'pi pi-history', key: 'historial-precios' },
@@ -48,6 +50,7 @@ const components: Record<string, any> = {
   etiquetas: EtiquetasComp,
   cambiazo: CambiazoComp,
   transferencias: TransferenciasComp,
+  compras: OrdenesCompraComp,
   ajustes: AjustesComp,
   'historial-precios': HistorialPreciosComp,
   reporte: ReporteInventarioComp,
