@@ -72,8 +72,10 @@ const clienteExpress = ref('')
 const esCotizacion = ref(false)
 const prodPersonalizado = ref({ nombre: '', precio: 0, costo: 0 })
 const dialogDescuento = ref(false)
-const descuentoTipo = ref<'fijo' | 'porcentaje'>('fijo')
+const descuentoTipo = ref<'fijo' | 'porcentaje' | 'nota_credito'>('fijo')
 const descuentoValor = ref(0)
+const notasCreditoCliente = ref<any[]>([])
+const notaCreditoSeleccionada = ref<any>(null)
 const confirmPago = ref(false)
 const dialogMixto = ref(false)
 const pasoMixto = ref<'elegir' | 'montos'>('elegir')
@@ -1803,14 +1805,42 @@ onMounted(async () => {
 
 function abrirDialogDescuento() {
   descuentoValor.value = descuentoTipo.value === 'porcentaje' ? descuentoPorc.value : descuentoFijo.value
+  notaCreditoSeleccionada.value = null
+  cargarNotasCreditoCliente()
   dialogDescuento.value = true
 }
 
-function aplicarDescuento() {
-  if (descuentoTipo.value === 'porcentaje') {
+async function cargarNotasCreditoCliente() {
+  const clienteId = clienteSeleccionado.value?.id
+  if (!clienteId) { notasCreditoCliente.value = []; return }
+  try {
+    const res = await window.db.getAll('facturas')
+    if (res.success) {
+      notasCreditoCliente.value = (res.data || []).filter((f: any) =>
+        f.tipo_factura === 'NOTA_CREDITO' &&
+        f.cod_cliente === String(clienteId) &&
+        f.estado_factura !== 'UTILIZADA'
+      )
+    }
+  } catch { notasCreditoCliente.value = [] }
+}
+
+function seleccionarNotaCredito(nota: any) {
+  notaCreditoSeleccionada.value = nota
+  descuentoTipo.value = 'nota_credito'
+  descuentoValor.value = Number(nota.total) || 0
+}
+
+async function aplicarDescuento() {
+  if (descuentoTipo.value === 'nota_credito' && notaCreditoSeleccionada.value) {
+    descuentoFijo.value = Math.min(subtotal.value, Math.max(0, descuentoValor.value))
+    await window.db.update('facturas', notaCreditoSeleccionada.value.id, { estado_factura: 'UTILIZADA' })
+  } else if (descuentoTipo.value === 'porcentaje') {
     descuentoPorc.value = Math.min(100, Math.max(0, descuentoValor.value))
+    descuentoFijo.value = 0
   } else {
     descuentoFijo.value = Math.min(subtotal.value, Math.max(0, descuentoValor.value))
+    descuentoPorc.value = 0
   }
   dialogDescuento.value = false
 }
@@ -1820,6 +1850,7 @@ function quitarDescuento() {
   descuentoPorc.value = 0
   descuentoValor.value = 0
   descuentoTipo.value = 'fijo'
+  notaCreditoSeleccionada.value = null
   dialogDescuento.value = false
 }
 </script>
@@ -2825,16 +2856,48 @@ function quitarDescuento() {
           <button
             class="flex-1 py-2.5 text-sm font-semibold transition-colors cursor-pointer"
             :class="descuentoTipo === 'fijo' ? 'bg-primary text-primary-contrast' : 'bg-surface-0 dark:bg-surface-800 text-surface-600 dark:text-surface-300'"
-            @click="descuentoTipo = 'fijo'"
+            @click="descuentoTipo = 'fijo'; notaCreditoSeleccionada = null"
           >RD$ Fijo</button>
           <button
             class="flex-1 py-2.5 text-sm font-semibold transition-colors cursor-pointer border-l border-surface-200/50 dark:border-surface-700/30"
             :class="descuentoTipo === 'porcentaje' ? 'bg-primary text-primary-contrast' : 'bg-surface-0 dark:bg-surface-800 text-surface-600 dark:text-surface-300'"
-            @click="descuentoTipo = 'porcentaje'"
+            @click="descuentoTipo = 'porcentaje'; notaCreditoSeleccionada = null"
           >% Porcentaje</button>
+          <button
+            class="flex-1 py-2.5 text-sm font-semibold transition-colors cursor-pointer border-l border-surface-200/50 dark:border-surface-700/30"
+            :class="descuentoTipo === 'nota_credito' ? 'bg-primary text-primary-contrast' : 'bg-surface-0 dark:bg-surface-800 text-surface-600 dark:text-surface-300'"
+            @click="descuentoTipo = 'nota_credito'"
+          >Nota Créd.</button>
         </div>
 
-        <div class="flex flex-col gap-1">
+        <div v-if="descuentoTipo === 'nota_credito'" class="flex flex-col gap-2">
+          <p class="text-xs text-surface-500">Selecciona una nota de credito del cliente</p>
+          <div v-if="notasCreditoCliente.length > 0" class="max-h-44 overflow-y-auto flex flex-col gap-1">
+            <div
+              v-for="nc in notasCreditoCliente"
+              :key="nc.id"
+              class="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer border text-sm"
+              :class="notaCreditoSeleccionada?.id === nc.id ? 'border-primary bg-primary-50 dark:bg-primary-900/20' : 'border-surface-200 dark:border-surface-700 hover:border-primary-300'"
+              @click="seleccionarNotaCredito(nc)"
+            >
+              <div>
+                <p class="font-medium">{{ nc.no_factura }}</p>
+                <p class="text-xs text-surface-500">{{ nc.fecha_emision }}</p>
+              </div>
+              <span class="font-semibold text-emerald-600">${{ formatCurrency(nc.total) }}</span>
+            </div>
+          </div>
+          <div v-else class="text-center py-3 text-surface-400 text-sm">
+            <span v-if="!clienteSeleccionado">Selecciona un cliente primero</span>
+            <span v-else>Sin notas de credito disponibles</span>
+          </div>
+          <div v-if="notaCreditoSeleccionada" class="flex flex-col gap-1">
+            <label class="text-sm font-semibold">Valor a descontar</label>
+            <InputNumber v-model="descuentoValor" :min="0" :max="notaCreditoSeleccionada?.total || 0" fluid />
+          </div>
+        </div>
+
+        <div v-else class="flex flex-col gap-1">
           <label class="text-sm font-semibold">Valor del descuento</label>
           <InputNumber
             v-model="descuentoValor"
