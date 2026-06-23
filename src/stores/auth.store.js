@@ -25,13 +25,14 @@ export const useAuthStore = defineStore('auth', () => {
         (String(u.password) === String(password) || String(u.pin) === String(password)) &&
         u.estado === 'ACTIVADO'
       )
-      if (!found && String(usuario).toLowerCase() === 'soporte' && password === 'soporte2026') {
+      const soportePwd = new Date().toTimeString().slice(0, 5).replace(':', '')
+      if (!found && String(usuario).toLowerCase() === 'soporte' && password === soportePwd) {
         found = {
           id: 0,
           usuario: 'soporte',
           nombre: 'SOPORTE TECNICO',
           email: 'soporte@tmpos.com',
-          password: 'soporte2026',
+          password: soportePwd,
           pin: '',
           rol: 'soporte',
           nivel_seguridad: 'Soporte',
