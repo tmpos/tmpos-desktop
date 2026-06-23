@@ -34,6 +34,9 @@ const generandoNC = ref(false)
 const enviandoTaller = ref(false)
 const publicandoImei = ref(false)
 
+const clientesLista = ref<any[]>([])
+const busquedaCliente = ref('')
+
 const dialogGenerarNC = ref(false)
 const dialogEnviarTaller = ref(false)
 const dialogPublicarImei = ref(false)
@@ -235,14 +238,7 @@ async function crearNotaCreditoInterna(recibido: any) {
     const nd = JSON.parse(recibido.nota || '{}')
     if (!nd.credit_note_value || nd.credit_note_value <= 0) return
     const nombreCliente = (nd.customer_name || 'CONSUMIDOR FINAL').toUpperCase()
-    let codCliente = ''
-    try {
-      const resCli = await window.db.getAll('clientes')
-      if (resCli.success) {
-        const found = (resCli.data || []).find((c: any) => (c.nombre || '').toUpperCase() === nombreCliente)
-        if (found) codCliente = String(found.id || '')
-      }
-    } catch {}
+    const codCliente = nd.cliente_id || ''
     const now = new Date()
     const y = now.getFullYear()
     const m = String(now.getMonth() + 1).padStart(2, '0')
@@ -287,6 +283,30 @@ async function crearNotaCreditoInterna(recibido: any) {
   } catch {}
 }
 
+const clientesFiltrados = computed(() => {
+  const q = busquedaCliente.value.toLowerCase().trim()
+  if (!q) return clientesLista.value.slice(0, 20)
+  return clientesLista.value.filter((c: any) =>
+    (c.nombre || '').toLowerCase().includes(q) ||
+    (c.telefono || '').includes(q)
+  )
+})
+
+async function cargarClientes() {
+  try {
+    const res = await window.db.getAll('clientes')
+    if (res.success) clientesLista.value = res.data || []
+  } catch {}
+}
+
+function seleccionarCliente(cliente: any) {
+  const parsed = JSON.parse(form.value.nota_json || '{}')
+  parsed.customer_name = (cliente.nombre || '').toUpperCase()
+  parsed.customer_phone = cliente.telefono || cliente.whatsapp || ''
+  form.value.nota_json = JSON.stringify(parsed)
+  busquedaCliente.value = ''
+}
+
 async function guardarRecibir() {
   if (!form.value.nombre.trim() && !form.value.id_equi) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El IMEI o modelo del telefono es requerido', life: 3000 })
@@ -295,13 +315,32 @@ async function guardarRecibir() {
 
   try {
     const nd = JSON.parse(form.value.nota_json || '{}')
+    const nombreCliente = (nd.customer_name || '').toUpperCase().trim()
+    let clienteId = ''
+    if (nombreCliente && !selectedRecibido.value) {
+      try {
+        const resCli = await window.db.getAll('clientes')
+        if (resCli.success) {
+          const existente = (resCli.data || []).find((c: any) => (c.nombre || '').toUpperCase() === nombreCliente)
+          if (existente) {
+            clienteId = String(existente.id)
+          } else {
+            const resNuevo = await window.db.insert('clientes', {
+              nombre: nombreCliente,
+              telefono: nd.customer_phone || '',
+            })
+            if (resNuevo.success) clienteId = String(resNuevo.data.id)
+          }
+        }
+      } catch {}
+    }
     const data: any = {
       nombre: form.value.nombre.trim().toUpperCase(),
       id_equi: form.value.id_equi,
       color: form.value.color.trim().toUpperCase(),
       capacidad: form.value.capacidad.trim().toUpperCase(),
       estado: 'APARTADO',
-      nota: JSON.stringify(nd),
+      nota: JSON.stringify({ ...nd, cliente_id: clienteId }),
     }
 
     if (selectedRecibido.value) {
@@ -367,14 +406,7 @@ async function generarNotaCredito(recibido: any) {
   generandoNC.value = true
   try {
     const nombreCliente = (nd.customer_name || 'CONSUMIDOR FINAL').toUpperCase()
-    let codCliente = ''
-    try {
-      const resCli = await window.db.getAll('clientes')
-      if (resCli.success) {
-        const foundCli = (resCli.data || []).find((c: any) => (c.nombre || '').toUpperCase() === nombreCliente)
-        if (foundCli) codCliente = String(foundCli.id || '')
-      }
-    } catch {}
+    const codCliente = nd.cliente_id || ''
     const now = new Date()
     const y = now.getFullYear()
     const m = String(now.getMonth() + 1).padStart(2, '0')
@@ -718,6 +750,21 @@ onMounted(async () => {
         </TabPanel>
         <TabPanel header="Cliente / Valor">
           <div class="flex flex-col gap-3 pt-2">
+            <div class="flex flex-col gap-1">
+              <label class="text-sm font-semibold">Buscar Cliente Existente</label>
+              <InputText v-model="busquedaCliente" placeholder="Escribe nombre o telefono..." @focus="cargarClientes" fluid />
+              <div v-if="clientesFiltrados.length > 0 && busquedaCliente" class="max-h-40 overflow-y-auto border border-surface-200 dark:border-surface-700 rounded-lg mt-1">
+                <div
+                  v-for="c in clientesFiltrados"
+                  :key="c.id"
+                  class="px-3 py-2 cursor-pointer hover:bg-surface-100 dark:hover:bg-surface-700 text-sm border-b border-surface-100 dark:border-surface-700 last:border-0"
+                  @click="seleccionarCliente(c)"
+                >
+                  <span class="font-medium">{{ c.nombre }}</span>
+                  <span class="text-surface-500 ml-2">{{ c.telefono || '' }}</span>
+                </div>
+              </div>
+            </div>
             <div class="flex flex-col gap-1">
               <label class="text-sm font-semibold">Nombre del Cliente (dueño del equipo)</label>
               <InputText :value="notaData.customer_name" @input="setCustomerName(($event.target as HTMLInputElement).value)" placeholder="Nombre completo" class="uppercase" style="text-transform: uppercase;" />
