@@ -204,6 +204,7 @@ const navItems: { label: string; icon: string; to: string; permiso: string }[] =
   { label: 'Vender', icon: 'pi pi-shopping-cart', to: '/vender', permiso: 'vender' },
   { label: 'Compras', icon: 'pi pi-truck', to: '/compras', permiso: 'compras' },
   { label: 'Transferencias', icon: 'pi pi-arrow-right-arrow-left', to: '/transferencias', permiso: 'transferencias' },
+  { label: 'Reclamaciones', icon: 'pi pi-exclamation-triangle', to: '/reclamaciones', permiso: 'reclamaciones' },
   { label: 'Soporte', icon: 'pi pi-headset', to: '/soporte', permiso: 'soporte' },
 ]
 

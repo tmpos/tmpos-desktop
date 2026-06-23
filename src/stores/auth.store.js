@@ -137,6 +137,7 @@ export const useAuthStore = defineStore('auth', () => {
     ventas: ['facturas', 'cotizaciones', 'apartados', 'recibidos', 'notas-credito', 'notas'],
     reportes: ['general', '606', '607', 'gastos', 'ventas', 'ganancias'],
     contabilidad: ['caja', 'comprar', 'cuadre', 'cxc', 'cxp', 'bancos', 'gastos', 'gastos-fijos', 'utilidades', 'catalogo', 'balance', 'comprobantes'],
+    reclamaciones: [],
   }
 
   function tienePermiso(key) {

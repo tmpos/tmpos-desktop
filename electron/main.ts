@@ -200,6 +200,7 @@ function initDatabase(): void {
   }
 
   try { db!.exec(`CREATE TABLE IF NOT EXISTS movimientos_piezas (id INTEGER PRIMARY KEY AUTOINCREMENT,pieza_id INTEGER NOT NULL,pieza_nombre TEXT DEFAULT '',tipo TEXT DEFAULT '',cantidad_antes INTEGER DEFAULT 0,cantidad_despues INTEGER DEFAULT 0,referencia TEXT DEFAULT '',fecha TEXT DEFAULT '',hora TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`) } catch {} 
+  try { db!.exec(`CREATE TABLE IF NOT EXISTS reclamaciones (id INTEGER PRIMARY KEY AUTOINCREMENT,no_reclamacion TEXT DEFAULT '',fecha_emision TEXT DEFAULT '',fecha_respuesta TEXT DEFAULT '',fecha_vencimiento TEXT DEFAULT '',no_factura TEXT DEFAULT '',nombre_cliente TEXT DEFAULT '',telefono TEXT DEFAULT '',whatsapp TEXT DEFAULT '',email TEXT DEFAULT '',institucion TEXT DEFAULT '',articulo TEXT DEFAULT '',fecha_compra TEXT DEFAULT '',no_factura_rel TEXT DEFAULT '',estado TEXT DEFAULT 'ABIERTA',resultado TEXT DEFAULT '',respuesta TEXT DEFAULT '',fecha_cierre TEXT DEFAULT '',representante TEXT DEFAULT '',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`) } catch {}
 
   function ensureTecnicosTable(): void {
     if (tableExists('tecnicos')) {

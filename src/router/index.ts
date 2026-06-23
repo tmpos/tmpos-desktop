@@ -13,6 +13,7 @@ import ConfiguracionView from '@/views/ConfiguracionView.vue'
 import ComprasView from '@/views/ComprasView.vue'
 import TransferenciasView from '@/views/TransferenciasView.vue'
 import SoporteView from '@/views/SoporteView.vue'
+import ReclamacionesView from '@/views/ReclamacionesView.vue'
 import EditarFacturaComp from '@/components/ventas/EditarFacturaComp.vue'
 
 const permisoPorRuta: Record<string, string> = {
@@ -28,6 +29,7 @@ const permisoPorRuta: Record<string, string> = {
   '/compras': 'compras',
   '/transferencias': 'transferencias',
   '/soporte': 'soporte',
+  '/reclamaciones': 'reclamaciones',
 }
 
 const router = createRouter({
@@ -79,6 +81,12 @@ const router = createRouter({
       path: '/reportes',
       name: 'reportes',
       component: ReportesView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/reclamaciones',
+      name: 'reclamaciones',
+      component: ReclamacionesView,
       meta: { requiresAuth: true },
     },
     {
