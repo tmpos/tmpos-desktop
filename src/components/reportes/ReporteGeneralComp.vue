@@ -1015,6 +1015,40 @@ onMounted(() => cargarDatos())
           </div>
         </div>
         <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 col-span-1 sm:col-span-2">
+          <h4 class="text-sm font-semibold mb-3">Productos Vendidos</h4>
+          <DataTable
+            :value="productosVendidos"
+            :loading="loading"
+            stripedRows
+            paginator
+            :rows="10"
+            :rowsPerPageOptions="[10, 25, 50]"
+            dataKey="no_factura"
+            responsiveLayout="scroll"
+            sortField="fecha"
+            :sortOrder="-1"
+            class="!text-xs"
+          >
+            <Column field="no_factura" header="Factura" sortable style="width: 8rem" />
+            <Column field="fecha" header="Fecha" sortable style="width: 7rem" />
+            <Column field="cliente" header="Cliente" sortable />
+            <Column field="producto" header="Producto" sortable />
+            <Column field="cantidad" header="Cant." sortable style="width: 5rem" />
+            <Column field="precio" header="Precio" sortable style="width: 7rem">
+              <template #body="{ data }">${{ formatCurrency(data.precio) }}</template>
+            </Column>
+            <Column field="costo" header="Costo" sortable style="width: 7rem">
+              <template #body="{ data }">${{ formatCurrency(data.costo) }}</template>
+            </Column>
+            <Column field="total" header="Total" sortable style="width: 7rem">
+              <template #body="{ data }"><span class="font-semibold">${{ formatCurrency(data.total) }}</span></template>
+            </Column>
+            <template #empty>
+              <div class="text-center py-6 text-surface-400">No hay productos vendidos en este rango.</div>
+            </template>
+          </DataTable>
+        </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 col-span-1 sm:col-span-2">
           <h4 class="text-sm font-semibold mb-3">Ventas por Vendedor</h4>
           <DataTable
             :value="ventasPorVendedor"
