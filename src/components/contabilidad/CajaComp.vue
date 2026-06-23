@@ -270,7 +270,7 @@ const denominaciones = [
   { valor: 5, label: '$5', tipo: 'moneda' },
   { valor: 1, label: '$1', tipo: 'moneda' },
 ]
-const conteo = ref<Record<number, number>>({})
+const conteo = ref({})
 
 const abrirTurnoModal = ref(false)
 const montoInicial = ref(0)
