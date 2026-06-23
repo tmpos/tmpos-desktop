@@ -1437,6 +1437,11 @@ async function completarVenta() {
     console.log('[NC] Factura nota final:', facturaData.nota, '| notaCreditoUsada:', notaCreditoUsada.value)
 
     const resFactura = await window.db.insert('facturas', facturaData)
+    console.log('[NC] Insert result:', resFactura.success, '| id:', resFactura.data?.id)
+    if (resFactura.success) {
+      const check = await window.db.getById('facturas', resFactura.data.id)
+      console.log('[NC] Factura guardada nota:', check.data?.nota)
+    }
     if (!resFactura.success) {
       throw new Error(resFactura.error || 'Error al crear factura')
     }
