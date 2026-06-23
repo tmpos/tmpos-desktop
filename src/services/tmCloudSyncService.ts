@@ -362,7 +362,7 @@ async function syncDeletes(): Promise<number> {
         `${api.url}/${encodeURIComponent(row.tabla)}/${encodeURIComponent(String(uid))}`,
         { method: 'DELETE', headers: tmc.authHeaders(api.key) },
       )
-      if (res.ok || res.status === 404) {
+      if (res.ok || res.status === 404 || res.status === 400) {
         await (window as any).db.delete('sync_deletes', row.id)
         deleted++
       }
