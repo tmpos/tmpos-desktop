@@ -194,18 +194,20 @@
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="showCierreModal" header="Conteo de Cierre de Caja" modal :style="{ width: '90%', maxWidth: '500px' }" :closable="!cerrandoTurno">
-      <div class="flex flex-col gap-4">
-        <div class="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3">
-          <div class="flex justify-between text-sm">
-            <span class="text-surface-500">Efectivo esperado</span>
-            <span class="font-bold">${{ formatMoney(efectivoEsperado) }}</span>
+    <Dialog v-model:visible="showCierreModal" header="Conteo de Cierre de Caja" modal :style="{ width: '90%', maxWidth: '520px' }" :closable="!cerrandoTurno">
+      <div class="flex flex-col gap-5">
+        <div class="rounded-xl bg-surface-50 dark:bg-surface-700/30 border border-surface-200 dark:border-surface-700 p-4">
+          <div class="flex justify-between items-end">
+            <div>
+              <span class="text-xs text-surface-500">Efectivo esperado</span>
+              <div class="text-xl font-bold">${{ formatMoney(efectivoEsperado) }}</div>
+            </div>
+            <div class="text-right">
+              <span class="text-xs text-surface-500">Total contado</span>
+              <div class="text-xl font-bold" :class="totalConteo === efectivoEsperado ? 'text-green-600' : 'text-red-600'">${{ formatMoney(totalConteo) }}</div>
+            </div>
           </div>
-          <div class="flex justify-between text-sm mt-1">
-            <span class="text-surface-500">Total contado</span>
-            <span class="font-bold" :class="totalConteo === efectivoEsperado ? 'text-green-600' : 'text-red-600'">${{ formatMoney(totalConteo) }}</span>
-          </div>
-          <div v-if="totalConteo !== efectivoEsperado" class="flex justify-between text-sm mt-1">
+          <div v-if="totalConteo !== efectivoEsperado" class="mt-2 pt-2 border-t border-surface-200 dark:border-surface-700 flex justify-between text-sm">
             <span class="text-surface-500">Diferencia</span>
             <span class="font-bold" :class="totalConteo > efectivoEsperado ? 'text-green-600' : 'text-red-600'">
               {{ totalConteo > efectivoEsperado ? '+' : '' }}${{ formatMoney(Math.abs(totalConteo - efectivoEsperado)) }}
@@ -213,18 +215,40 @@
           </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <div v-for="d in denominaciones" :key="d.valor" class="flex flex-col gap-1">
-            <label class="text-xs text-surface-500">{{ d.label }}</label>
-            <div class="flex items-center gap-2">
-              <input
-                v-model.number="conteo[d.valor]"
-                type="number"
-                min="0"
-                placeholder="0"
-                class="w-full h-9 px-2 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 text-sm text-center outline-none focus:border-primary"
-              />
-              <span v-if="conteo[d.valor]" class="text-xs text-surface-400 w-16 text-right">${{ formatMoney(d.valor * (conteo[d.valor] || 0)) }}</span>
+        <div>
+          <h4 class="text-xs font-semibold text-surface-500 uppercase tracking-wider mb-2">Billetes</h4>
+          <div class="grid grid-cols-3 gap-2">
+            <div v-for="d in denominaciones.filter(d => d.tipo === 'billete')" :key="d.valor" class="flex flex-col gap-1 p-2.5 rounded-lg bg-surface-0 dark:bg-surface-800 border border-surface-100 dark:border-surface-700">
+              <label class="text-xs font-semibold text-surface-600 dark:text-surface-300">{{ d.label }}</label>
+              <div class="flex items-center gap-1.5">
+                <input
+                  v-model.number="conteo[d.valor]"
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  class="w-full h-10 px-2 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-700/50 text-sm text-center font-bold outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                />
+              </div>
+              <span class="text-xs text-right text-surface-400 tabular-nums">{{ conteo[d.valor] ? '$' + formatMoney(d.valor * (conteo[d.valor] || 0)) : '$0.00' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <h4 class="text-xs font-semibold text-surface-500 uppercase tracking-wider mb-2">Monedas</h4>
+          <div class="grid grid-cols-4 gap-2">
+            <div v-for="d in denominaciones.filter(d => d.tipo === 'moneda')" :key="d.valor" class="flex flex-col gap-1 p-2.5 rounded-lg bg-surface-0 dark:bg-surface-800 border border-surface-100 dark:border-surface-700">
+              <label class="text-xs font-semibold text-surface-600 dark:text-surface-300">{{ d.label }}</label>
+              <div class="flex items-center gap-1.5">
+                <input
+                  v-model.number="conteo[d.valor]"
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  class="w-full h-10 px-2 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-700/50 text-sm text-center font-bold outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                />
+              </div>
+              <span class="text-xs text-right text-surface-400 tabular-nums">{{ conteo[d.valor] ? '$' + formatMoney(d.valor * (conteo[d.valor] || 0)) : '$0.00' }}</span>
             </div>
           </div>
         </div>
