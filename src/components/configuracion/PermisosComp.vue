@@ -31,6 +31,7 @@ const opcionesPermisos = [
   { label: 'Marcas', key: 'marcas', grupo: 'Inventario' },
   { label: 'Etiquetas', key: 'etiquetas', grupo: 'Inventario' },
   { label: 'Cambiazo', key: 'cambiazo', grupo: 'Inventario' },
+  { label: 'Transferencias', key: 'transferencias', grupo: 'Inventario' },
   { label: 'Reporte Inventario', key: 'reporte', grupo: 'Inventario' },
   { label: 'Taller', key: 'taller', grupo: 'Taller' },
   { label: 'Ordenes', key: 'ordenes', grupo: 'Taller' },
