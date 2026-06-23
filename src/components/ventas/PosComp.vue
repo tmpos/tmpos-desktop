@@ -1434,6 +1434,7 @@ async function completarVenta() {
       tipo_comprobante: compTipo,
       comprobante_id: compId,
     }
+    console.log('[NC] Factura nota final:', facturaData.nota, '| notaCreditoUsada:', notaCreditoUsada.value)
 
     const resFactura = await window.db.insert('facturas', facturaData)
     if (!resFactura.success) {
@@ -1844,7 +1845,9 @@ async function aplicarDescuento() {
   if (descuentoTipo.value === 'nota_credito' && notaCreditoSeleccionada.value) {
     descuentoFijo.value = Math.min(subtotal.value, Math.max(0, descuentoValor.value))
     notaCreditoUsada.value = `NC: ${notaCreditoSeleccionada.value.no_factura} - RD$${formatCurrency(descuentoFijo.value)}`
+    console.log('[NC] Aplicando descuento NC, notaCreditoUsada:', notaCreditoUsada.value)
     await window.db.update('facturas', notaCreditoSeleccionada.value.id, { estado_factura: 'UTILIZADA' })
+    console.log('[NC] NC marcada como UTILIZADA')
   } else if (descuentoTipo.value === 'porcentaje') {
     descuentoPorc.value = Math.min(100, Math.max(0, descuentoValor.value))
     descuentoFijo.value = 0
