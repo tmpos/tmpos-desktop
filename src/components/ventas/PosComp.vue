@@ -1819,7 +1819,7 @@ async function cargarNotasCreditoCliente() {
     if (res.success) {
       notasCreditoCliente.value = (res.data || []).filter((f: any) =>
         f.tipo_factura === 'NOTA_CREDITO' &&
-        f.estado_factura !== 'UTILIZADA' &&
+        f.estado_factura === 'PENDIENTE' &&
         (
           (clienteId && String(f.cod_cliente || '') === clienteId) ||
           (clienteNombre && String(f.nombre_cliente || '').toUpperCase() === clienteNombre)
