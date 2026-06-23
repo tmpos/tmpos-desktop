@@ -48,6 +48,7 @@ function buildApartadoPdfHtml(apartado: any): string {
   const pagos = getPagos(apartado)
   const abonado = getTotalAbonado(apartado)
   const saldo = getSaldo(apartado)
+  const empresaNombre = (window as any).__empresaNombre || 'MI EMPRESA'
   const notas = String(apartado?.notas || '')
   const imei = notas.match(/IMEI:\s*([^|]+)/i)?.[1]?.trim() || ''
   const modelo = notas.match(/MODELO:\s*([^|]+)/i)?.[1]?.trim() || ''
@@ -113,7 +114,7 @@ function buildApartadoPdfHtml(apartado: any): string {
     <main class="page">
       <section class="header">
         <div>
-          <div class="brand">MRCUTTI TECHNOLOGY</div>
+          <div class="brand">${empresaNombre}</div>
           <div class="subtitle">Documento profesional de control de apartado</div>
         </div>
         <div class="doc-title">

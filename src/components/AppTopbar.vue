@@ -35,6 +35,7 @@ async function cargarEmpresa() {
       const e = res.data.find((r: any) => Number(r.almacen_id) === almacenId) || res.data.find((r: any) => !r.almacen_id || Number(r.almacen_id) === 0) || res.data[0]
       empresaNombre.value = e.nombre || ''
       empresaLogo.value = e.logo || ''
+      ;(window as any).__empresaNombre = e.nombre || 'MI EMPRESA'
     }
   } catch (_) {}
 }

@@ -51,7 +51,10 @@ export function useEmpresa() {
         const r = await (window as any).electron.invoke('db:getWhere', 'empresa', 'almacen_id = ?', [0])
         if (r.success && r.data?.length > 0) emp = r.data[0]
       }
-      if (emp) empresa.value = emp
+      if (emp) {
+        empresa.value = emp
+        ;(window as any).__empresaNombre = emp.nombre || 'MI EMPRESA'
+      }
     } catch (_) {}
     loaded.value = true
   }
