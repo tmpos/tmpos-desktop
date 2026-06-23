@@ -982,9 +982,31 @@ onMounted(() => cargarDatos())
             <canvas ref="canvasTopClientes"></canvas>
           </div>
         </div>
-        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 overflow-hidden">
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+          <h4 class="text-sm font-semibold mb-3">Top 10 Productos Vendidos</h4>
+          <div v-if="loading" class="h-48 flex items-center justify-center text-surface-400 text-sm">Cargando...</div>
+          <div v-else-if="topProductos.length > 0" class="h-48">
+            <canvas ref="canvasTopProductos"></canvas>
+          </div>
+          <div v-else class="h-48 flex flex-col items-center justify-center text-surface-400 text-sm">
+            <i class="pi pi-chart-bar text-2xl mb-2"></i>
+            <span>No hay productos vendidos en este rango.</span>
+          </div>
+        </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+          <h4 class="text-sm font-semibold mb-3">Ventas por Categoria</h4>
+          <div v-if="loading" class="h-48 flex items-center justify-center text-surface-400 text-sm">Cargando...</div>
+          <div v-else-if="ventasPorCategoria.length > 0" class="h-48">
+            <canvas ref="canvasCategoria"></canvas>
+          </div>
+          <div v-else class="h-48 flex flex-col items-center justify-center text-surface-400 text-sm">
+            <i class="pi pi-chart-pie text-2xl mb-2"></i>
+            <span>Sin datos de categoria.</span>
+          </div>
+        </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 overflow-hidden col-span-1 sm:col-span-2">
           <div class="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-700">
-            <h4 class="font-semibold text-sm flex items-center gap-2"><i class="pi pi-chart-bar text-primary"></i> Productos mas vendidos</h4>
+            <h4 class="font-semibold text-sm flex items-center gap-2"><i class="pi pi-list text-primary"></i> Productos Vendidos</h4>
             <span class="text-xs text-surface-400">{{ rangoLabel }}</span>
           </div>
           <div v-if="loading" class="text-center py-6 text-surface-400 text-sm">Cargando...</div>
@@ -1002,51 +1024,6 @@ onMounted(() => cargarDatos())
               <span class="text-sm font-semibold">${{ formatCurrency(p.total) }}</span>
             </div>
           </div>
-        </div>
-        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
-          <h4 class="text-sm font-semibold mb-3">Ventas por Categoria</h4>
-          <div v-if="loading" class="h-48 flex items-center justify-center text-surface-400 text-sm">Cargando...</div>
-          <div v-else-if="ventasPorCategoria.length > 0" class="h-48">
-            <canvas ref="canvasCategoria"></canvas>
-          </div>
-          <div v-else class="h-48 flex flex-col items-center justify-center text-surface-400 text-sm">
-            <i class="pi pi-chart-pie text-2xl mb-2"></i>
-            <span>Sin datos de categoria.</span>
-          </div>
-        </div>
-        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 col-span-1 sm:col-span-2">
-          <h4 class="text-sm font-semibold mb-3">Productos Vendidos</h4>
-          <DataTable
-            :value="productosVendidos"
-            :loading="loading"
-            stripedRows
-            paginator
-            :rows="10"
-            :rowsPerPageOptions="[10, 25, 50]"
-            dataKey="no_factura"
-            responsiveLayout="scroll"
-            sortField="fecha"
-            :sortOrder="-1"
-            class="!text-xs"
-          >
-            <Column field="no_factura" header="Factura" sortable style="width: 8rem" />
-            <Column field="fecha" header="Fecha" sortable style="width: 7rem" />
-            <Column field="cliente" header="Cliente" sortable />
-            <Column field="producto" header="Producto" sortable />
-            <Column field="cantidad" header="Cant." sortable style="width: 5rem" />
-            <Column field="precio" header="Precio" sortable style="width: 7rem">
-              <template #body="{ data }">${{ formatCurrency(data.precio) }}</template>
-            </Column>
-            <Column field="costo" header="Costo" sortable style="width: 7rem">
-              <template #body="{ data }">${{ formatCurrency(data.costo) }}</template>
-            </Column>
-            <Column field="total" header="Total" sortable style="width: 7rem">
-              <template #body="{ data }"><span class="font-semibold">${{ formatCurrency(data.total) }}</span></template>
-            </Column>
-            <template #empty>
-              <div class="text-center py-6 text-surface-400">No hay productos vendidos en este rango.</div>
-            </template>
-          </DataTable>
         </div>
         <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 col-span-1 sm:col-span-2">
           <h4 class="text-sm font-semibold mb-3">Ventas por Vendedor</h4>
