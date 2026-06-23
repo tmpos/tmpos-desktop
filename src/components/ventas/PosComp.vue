@@ -1811,15 +1811,19 @@ function abrirDialogDescuento() {
 }
 
 async function cargarNotasCreditoCliente() {
-  const clienteId = clienteSeleccionado.value?.id
-  if (!clienteId) { notasCreditoCliente.value = []; return }
+  const clienteNombre = (clienteSeleccionado.value?.nombre || '').toUpperCase().trim()
+  const clienteId = clienteSeleccionado.value?.id ? String(clienteSeleccionado.value.id) : ''
+  if (!clienteNombre && !clienteId) { notasCreditoCliente.value = []; return }
   try {
     const res = await window.db.getAll('facturas')
     if (res.success) {
       notasCreditoCliente.value = (res.data || []).filter((f: any) =>
         f.tipo_factura === 'NOTA_CREDITO' &&
-        f.cod_cliente === String(clienteId) &&
-        f.estado_factura !== 'UTILIZADA'
+        f.estado_factura !== 'UTILIZADA' &&
+        (
+          (clienteId && String(f.cod_cliente || '') === clienteId) ||
+          (clienteNombre && String(f.nombre_cliente || '').toUpperCase() === clienteNombre)
+        )
       )
     }
   } catch { notasCreditoCliente.value = [] }
