@@ -230,6 +230,53 @@ async function crearTelefono() {
   }
 }
 
+async function crearNotaCreditoInterna(recibido: any) {
+  try {
+    const nd = JSON.parse(recibido.nota || '{}')
+    if (!nd.credit_note_value || nd.credit_note_value <= 0) return
+    const now = new Date()
+    const y = now.getFullYear()
+    const m = String(now.getMonth() + 1).padStart(2, '0')
+    const d2 = String(now.getDate()).padStart(2, '0')
+    const h = String(now.getHours()).padStart(2, '0')
+    const min = String(now.getMinutes()).padStart(2, '0')
+    const s = String(now.getSeconds()).padStart(2, '0')
+    const noCredito = `NC-${y}${m}${d2}-${h}${min}${s}`
+    const fechaStr = `${y}-${m}-${d2}`
+
+    const res = await window.db.insert('facturas', {
+      no_factura: noCredito,
+      tipo_factura: 'NOTA_CREDITO',
+      nombre_cliente: (nd.customer_name || 'CONSUMIDOR FINAL').toUpperCase(),
+      telefono_cliente: nd.customer_phone || '',
+      productos: JSON.stringify([{
+        nombre: `RECIBIDO: ${getNombreTelefono(recibido.id_equi) || recibido.nombre || ''}`,
+        cantidad: 1,
+        precio: nd.credit_note_value,
+        total: nd.credit_note_value,
+      }]),
+      total: nd.credit_note_value,
+      subtotal: nd.credit_note_value,
+      metodo_pago: 'EFECTIVO',
+      estado_factura: 'PAGADA',
+      fecha_emision: fechaStr,
+      fecha_estado: fechaStr,
+      hora: `${h}:${min}`,
+      nota: `NOTA DE CREDITO POR EQUIPO RECIBIDO IMEI: ${recibido.nombre || ''}`,
+      mes: m,
+      year: String(y),
+    })
+
+    if (res.success) {
+      nd.credit_note_id = res.data.id
+      nd.credit_note_no = noCredito
+      nd.credit_note_date = fechaStr
+      await window.db.update('imei', recibido.id, { nota: JSON.stringify(nd) })
+      toast.add({ severity: 'success', summary: 'Nota de Credito', detail: `${noCredito} por RD$ ${formatCurrency(nd.credit_note_value)}`, life: 4000 })
+    }
+  } catch {}
+}
+
 async function guardarRecibir() {
   if (!form.value.nombre.trim() && !form.value.id_equi) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El IMEI o modelo del telefono es requerido', life: 3000 })
@@ -259,6 +306,11 @@ async function guardarRecibir() {
       const res = await window.db.insert('imei', data)
       if (res.success) {
         toast.add({ severity: 'success', summary: 'Recibido', detail: 'Equipo recibido correctamente', life: 3000 })
+        const nuevoRecibido = { id: res.data.id, ...data }
+        const ncVal = nd.credit_note_value
+        if (ncVal && ncVal > 0) {
+          await crearNotaCreditoInterna(nuevoRecibido)
+        }
       } else {
         toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo guardar', life: 3000 })
         return
