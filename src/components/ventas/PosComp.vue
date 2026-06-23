@@ -2284,15 +2284,15 @@ function quitarDescuento() {
             </div>
           </div>
 
-          <div class="sticky bottom-0 border-t border-surface-200/50 dark:border-surface-700/50 rounded-b-xl" style="background: var(--p-surface-0);">
-            <div class="hidden lg:block px-4 py-2.5 space-y-1 border-b border-surface-200/50 dark:border-surface-700/30" style="background: var(--p-surface-50);">
+          <div class="sticky bottom-0 border-t border-surface-200/50 dark:border-surface-700/50 rounded-b-xl">
+            <div class="hidden lg:block px-4 py-2.5 space-y-1 border-b border-surface-200/50 dark:border-surface-700/30">
               <div class="flex justify-between text-xs"><span class="text-surface-500">Subtotal</span><span class="font-medium text-surface-800 dark:text-surface-100">${{ formatCurrency(subtotal) }}</span></div>
               <div class="flex items-center justify-between gap-2"><span class="text-xs text-surface-500 flex-shrink-0">Descuento</span><Button :label="descuento > 0 ? '$' + formatCurrency(descuento) : 'Agregar'" :severity="descuento > 0 ? 'warning' : 'secondary'" text size="small" class="!text-xs" @click="abrirDialogDescuento" /></div>
               <div v-if="impuestoIncluido === 0" class="flex justify-between text-xs"><span class="text-surface-500">ITBIS ({{ impuestoPorcentaje }}%)</span><span class="font-medium text-surface-800 dark:text-surface-100">${{ formatCurrency(impuestoMonto) }}</span></div>
               <div v-else-if="impuestoIncluido === 1" class="flex justify-between text-xs"><span class="text-surface-400">ITBIS {{ impuestoPorcentaje }}% incl.</span><span class="text-surface-400">&mdash;</span></div>
               <div v-else class="flex justify-between text-xs"><span class="text-surface-400">ITBIS</span><span class="text-surface-400">Sin impuesto</span></div>
             </div>
-            <div class="flex items-center justify-between px-3 py-2 lg:px-4 border-b border-surface-200/50 dark:border-surface-700/30" style="background: var(--p-surface-50);">
+            <div class="flex items-center justify-between px-3 py-2 lg:px-4 border-b border-surface-200/50 dark:border-surface-700/30">
               <div class="flex items-center gap-3"><span class="text-xs lg:text-sm font-bold text-surface-900 dark:text-surface-50">Total</span><span class="text-sm lg:text-base font-bold text-primary">${{ formatCurrency(total) }}</span></div>
               <Button label="Completar" icon="pi pi-check-circle" class="!py-1.5 !text-xs lg:!py-2.5 lg:!text-sm shadow-md" :disabled="cart.length === 0 || total <= 0" @click="confirmarVenta" />
             </div>
