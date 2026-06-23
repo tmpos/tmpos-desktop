@@ -602,6 +602,7 @@ async function obtenerResumenCierre() {
     efectivoEsperado: Number(turno.monto_inicial || 0) + resumen.efectivo + totalEntradas - totalGastos - totalRetiros,
     cerradoEn,
     duracion: calcularDuracion(turno.created_at, cerradoEn),
+    conteo: { ...conteo.value },
   }
 }
 
@@ -617,6 +618,12 @@ function construirTicketCierre(data) {
     <tr><td colspan="2">${escapeHtml(gasto.comentario || gasto.descripcion || 'Gasto')}</td><td>${dateHtml(gasto.created_at)}</td><td class="right">-${moneyHtml(gasto.cantidad || gasto.monto)}</td></tr>`, 'Sin gastos')
   const movimientos = filasDetalle([...data.entradas, ...data.retiros].sort((a, b) => parseDbDate(a.created_at) - parseDbDate(b.created_at)), item => `
     <tr><td>${escapeHtml(String(item.tipo || '').toUpperCase())}</td><td>${escapeHtml(item.descripcion || '-')}</td><td>${dateHtml(item.created_at)}</td><td class="right">${item.tipo === 'retiro' ? '-' : '+'}${moneyHtml(item.monto)}</td></tr>`, 'Sin movimientos')
+  const denominacionesRows = data.conteo ? Object.entries(data.conteo)
+    .filter(([, cant]) => Number(cant) > 0)
+    .sort(([a], [b]) => Number(b) - Number(a))
+    .map(([valor, cant]) => `<div class="row"><span>$${Number(valor).toLocaleString('es-DO')} x ${cant}</span><span>${moneyHtml(Number(valor) * Number(cant))}</span></div>`)
+    .join('') : ''
+  const denominacionesHtml = denominacionesRows ? `<h2>CONTEO DE EFECTIVO</h2>${denominacionesRows}<div class="row total"><span>TOTAL CONTADO</span><span>${moneyHtml(totalConteo.value)}</span></div>` : ''
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     @page{size:80mm auto;margin:0}*{box-sizing:border-box}body{font-family:Arial,sans-serif;width:76mm;margin:0;padding:3mm;color:#111;font-size:10px}
     h1{font-size:17px;margin:0;text-align:center}h2{font-size:12px;margin:10px 0 4px;padding-bottom:3px;border-bottom:1px dashed #555}
@@ -647,6 +654,7 @@ function construirTicketCierre(data) {
     <div class="row"><span>Gastos</span><span>-${moneyHtml(data.totalGastos)}</span></div>
     <div class="row"><span>Retiros</span><span>-${moneyHtml(data.totalRetiros)}</span></div>
     <div class="row total"><span>EFECTIVO ESPERADO</span><span>${moneyHtml(data.efectivoEsperado)}</span></div>
+    ${denominacionesHtml}
     <h2>VENTAS</h2><table><thead><tr><th>No.</th><th>Metodo</th><th>Fecha</th><th class="right">Total</th></tr></thead><tbody>${ventas}</tbody></table>
     <h2>GASTOS</h2><table><tbody>${gastos}</tbody></table>
     <h2>MOVIMIENTOS</h2><table><tbody>${movimientos}</tbody></table>
