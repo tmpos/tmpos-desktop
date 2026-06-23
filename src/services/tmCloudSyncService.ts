@@ -217,6 +217,10 @@ async function fetchCloudRows(tabla: string, since?: string): Promise<any[]> {
   return all
 }
 
+export async function fetchServerSchema(): Promise<ServerTableInfo[]> {
+  return fetchServerFullSchema()
+}
+
 async function fetchServerFullSchema(): Promise<ServerTableInfo[]> {
   const api = tmc.getCloudApi()
   if (!api) return []

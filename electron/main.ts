@@ -559,7 +559,16 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('db:bitacoraDeleteAll', () => {
     try {
-      db!.prepare(`DELETE FROM bitacora`).run()
+      db!.exec('DELETE FROM bitacora')
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('db:exec', (_event, sql: string) => {
+    try {
+      db!.exec(sql)
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message }

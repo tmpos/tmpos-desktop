@@ -132,6 +132,7 @@
 
       <div class="grid grid-cols-2 gap-2">
         <Button label="Crear Tablas" icon="pi pi-database" severity="secondary" :loading="creandoTablas" @click="createTables" class="w-full justify-start" />
+        <Button label="Crear Local" icon="pi pi-download" severity="warn" :loading="creandoTablasLocales" @click="createLocalTablesFromServer" class="w-full justify-start" />
         <Button label="Descargar Todo" icon="pi pi-cloud-download" severity="warn" :loading="downloadAllLoading" @click="downloadAll" class="w-full justify-start" />
         <Button label="Enviar Todo" icon="pi pi-cloud-upload" severity="help" :loading="pushAllLoading" @click="pushAllData" class="w-full justify-start" />
         <Button label="Sync Cambios" icon="pi pi-arrow-right-arrow-left" severity="info" :loading="syncChangesLoading" @click="syncChanges" class="w-full justify-start" />
@@ -205,6 +206,7 @@ const guardando = ref(false)
 const testLoading = ref(false)
 const syncing = ref(false)
 const creandoTablas = ref(false)
+const creandoTablasLocales = ref(false)
 const pushAllLoading = ref(false)
 const syncChangesLoading = ref(false)
 const downloadAllLoading = ref(false)
@@ -781,6 +783,55 @@ async function createTables() {
     estado.value = { connected: false, error: 'Error de red' }
   } finally {
     creandoTablas.value = false
+  }
+}
+
+async function createLocalTablesFromServer() {
+  if (!form.url || !form.key) {
+    estado.value = { connected: false, error: 'Configura la URL y la Public Key primero' }
+    return
+  }
+  creandoTablasLocales.value = true
+  try {
+    tmc.init({ url: form.url.trim(), key: form.key.trim(), serviceKey: form.serviceKey.trim() })
+    const schema = await tmSync.fetchServerSchema()
+    if (!schema || !schema.length) {
+      estado.value = { connected: false, error: 'No se pudo obtener el esquema del servidor' }
+      return
+    }
+    let creadas = 0
+    for (const table of schema) {
+      if (['sync_deletes', 'sync_queue', 'configuracion'].includes(table.name)) continue
+      const cols = table.columns || []
+      const hasUid = cols.some((c: any) => c.name === 'uid')
+      const hasCreatedAt = cols.some((c: any) => c.name === 'created_at')
+      const hasUpdatedAt = cols.some((c: any) => c.name === 'updated_at')
+      const extraCols = []
+      if (!hasUid) extraCols.push('"uid" TEXT DEFAULT \'\'')
+      if (!hasCreatedAt) extraCols.push('"created_at" TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+      if (!hasUpdatedAt) extraCols.push('"updated_at" TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+      extraCols.push('"almacen_id" INTEGER DEFAULT 0')
+      const columnDefs = cols.map((c: any) => {
+        let type = 'TEXT DEFAULT \'\''
+        if (c.type?.toLowerCase().includes('int')) type = 'INTEGER DEFAULT 0'
+        else if (c.type?.toLowerCase().includes('real') || c.type?.toLowerCase().includes('float') || c.type?.toLowerCase().includes('double') || c.type?.toLowerCase().includes('decimal')) type = 'REAL DEFAULT 0'
+        else if (c.type?.toLowerCase().includes('timestamp') || c.type?.toLowerCase().includes('datetime')) type = 'TEXT DEFAULT \'\''
+        return `"${c.name}" ${type}`
+      })
+      const allCols = [...columnDefs, ...extraCols]
+      const sql = `CREATE TABLE IF NOT EXISTS "${table.name}" (id INTEGER PRIMARY KEY AUTOINCREMENT, ${allCols.join(', ')})`
+      try {
+        await (window as any).electron.invoke('db:exec', sql)
+        creadas++
+      } catch (e) {
+        console.error(`Error creating ${table.name}:`, e)
+      }
+    }
+    estado.value = { connected: true, error: `${creadas} tablas creadas/actualizadas` }
+  } catch (e: any) {
+    estado.value = { connected: false, error: e.message || 'Error de red' }
+  } finally {
+    creandoTablasLocales.value = false
   }
 }
 </script>
