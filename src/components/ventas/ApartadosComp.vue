@@ -55,6 +55,12 @@ const form = ref({
   vendedor: '',
 })
 
+const saldoCalculado = computed(() => {
+  const t = Number(form.value.total) || 0
+  const i = Number(form.value.inicial) || 0
+  return Math.max(0, t - i)
+})
+
 const pagoForm = ref({
   monto: 0,
   metodo_pago: 'EFECTIVO',
