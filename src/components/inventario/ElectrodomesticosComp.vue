@@ -546,27 +546,27 @@ onMounted(async () => {
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
         <div v-else-if="electrodomesticosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay electrodomesticos registrados.</div>
-        <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
           <div
             v-for="elec in electrodomesticosFiltrados"
             :key="elec.id"
-            class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-5 flex flex-col gap-3 transition-shadow hover:shadow-lg hover:border-primary-300 dark:hover:border-primary-600 cursor-pointer"
+            class="rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-2 flex flex-col gap-1.5 transition-shadow hover:shadow-sm cursor-pointer"
             @click="abrirDetalle(elec)"
           >
             <div class="flex items-center justify-between">
-              <span class="text-xs font-mono text-surface-400">#{{ elec.id }}</span>
-              <i class="pi pi-chevron-right text-surface-400"></i>
+              <span class="text-[10px] font-mono text-surface-400">#{{ elec.id }}</span>
+              <i class="pi pi-chevron-right text-[10px] text-surface-400"></i>
             </div>
-            <div v-if="imagenUrl(elec.imagen)" class="-mx-5 -mt-5 mb-2 h-36 overflow-hidden rounded-t-xl">
+            <div v-if="imagenUrl(elec.imagen)" class="-mx-2 -mt-2 mb-1 h-16 overflow-hidden">
               <img :src="imagenUrl(elec.imagen)" class="w-full h-full object-cover" alt="" />
             </div>
-            <div class="flex items-center gap-3">
-              <div v-if="!imagenUrl(elec.imagen)" class="w-12 h-12 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center">
-                <i class="pi pi-sitemap text-primary-600 dark:text-primary-300 text-xl"></i>
+            <div class="flex items-center gap-2">
+              <div v-if="!imagenUrl(elec.imagen)" class="w-8 h-8 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center shrink-0">
+                <i class="pi pi-sitemap text-primary-600 dark:text-primary-300 text-sm"></i>
               </div>
-              <div>
-                <h4 class="font-bold text-lg leading-tight uppercase">{{ elec.nombre }}</h4>
-                <p class="text-sm text-surface-500 dark:text-surface-400">Ver opciones</p>
+              <div class="min-w-0">
+                <h4 class="font-semibold text-xs leading-tight uppercase truncate">{{ elec.nombre }}</h4>
+                <p class="text-[10px] text-surface-400 truncate">Ver opciones</p>
               </div>
             </div>
           </div>

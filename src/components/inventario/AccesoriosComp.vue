@@ -16,7 +16,6 @@ import QRCode from 'qrcode'
 import JsBarcode from 'jsbarcode'
 
 import { envioElectron } from '@/funciones/funciones.js'
-import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
@@ -40,8 +39,6 @@ const escaneandoBT = ref(false)
 const copias = ref(1)
 const busquedaPlantilla = ref('')
 const proveedores = ref<any[]>([])
-const dialogNuevaCategoria = ref(false)
-const nuevaCategoria = ref('')
 const dialogNuevaMarca = ref(false)
 const nuevaMarca = ref('')
 const dialogNuevoProveedor = ref(false)
@@ -53,7 +50,7 @@ const selectedAccesorios = ref<any[]>([])
 const dialogCambioProveedorMulti = ref(false)
 const proveedorMultiSel = ref<any>(null)
 
-const camposArray = ['nombre', 'codigo_barra', 'costo', 'precio_venta', 'precio_min', 'precio_xmayor', 'cantidad', 'alerta', 'marca', 'categoria', 'proveedor_id']
+const camposArray = ['nombre', 'codigo_barra', 'costo', 'precio_venta', 'precio_min', 'precio_xmayor', 'cantidad', 'alerta', 'marca', 'proveedor_id']
 
 const form = ref({
   nombre: '',
@@ -65,7 +62,6 @@ const form = ref({
   cantidad: 1,
   alerta: 10,
   marca: null as number | null,
-  categoria: null as number | null,
   proveedor_id: null as number | null,
   imagen: '',
 })
@@ -80,8 +76,6 @@ const linkImpresora = ref('')
 const patroncedula = ref('')
 const tokenCifrado = ref('')
 const tokenCorto = ref('')
-
-const categorias = ref<any[]>([])
 
 const accesoriosFiltrados = computed(() => {
   const texto = busqueda.value.toLowerCase().trim()
@@ -195,28 +189,15 @@ async function cargarMarcas() {
   }
 }
 
-async function cargarCategorias() {
-  try {
-    const res = await window.db.getAll('categorias')
-    if (res.success) {
-      categorias.value = res.data || []
-    }
-  } catch (error) {
-    console.error(error)
-  }
-}
-
 async function cargarAccesorios() {
   loading.value = true
   try {
     const res = await window.db.getAll('accesorios')
     if (res.success) {
       const marcaMap = new Map(marcas.value.map((m: any) => [m.id, m.nombre]))
-      const catMap = new Map(categorias.value.map((c: any) => [c.id, c.nombre]))
       accesorios.value = filterByAlmacen(res.data || []).map((a: any) => ({
         ...a,
         marca_nombre: marcaMap.get(a.marca) || '',
-        categoria_nombre: catMap.get(a.categoria) || '',
       }))
     }
   } catch (error) {
@@ -237,7 +218,6 @@ function abrirCrear() {
     cantidad: 1,
     alerta: 10,
     marca: null,
-    categoria: null,
     imagen: '',
   }
   dialogVisible.value = true
@@ -256,7 +236,6 @@ function abrirEditar(accesorio: any) {
     cantidad: accesorio.cantidad || 1,
     alerta: accesorio.alerta || 10,
     marca: accesorio.marca || null,
-    categoria: accesorio.categoria || null,
     proveedor_id: accesorio.proveedor_id || null,
     imagen: accesorio.imagen || '',
   }
@@ -479,7 +458,6 @@ async function guardar() {
       cantidad: form.value.cantidad || 1,
       alerta: form.value.alerta || 10,
       marca: form.value.marca,
-      categoria: form.value.categoria,
       proveedor_id: form.value.proveedor_id,
     }
     if (form.value.imagen) data.imagen = form.value.imagen
@@ -546,17 +524,6 @@ async function borrar() {
   }
 }
 
-async function crearCategoria() {
-  if (!nuevaCategoria.value.trim()) return
-  const res = await window.db.insert('categorias', { nombre: nuevaCategoria.value.trim().toUpperCase() })
-  if (res.success) {
-    categorias.value.push({ id: res.data.id, nombre: nuevaCategoria.value.trim().toUpperCase() })
-    form.value.categoria = res.data.id
-    dialogNuevaCategoria.value = false
-    toast.add({ severity: 'success', summary: 'Categoria creada', detail: nuevaCategoria.value.trim().toUpperCase(), life: 2000 })
-  }
-}
-
 async function crearMarca() {
   if (!nuevaMarca.value.trim()) return
   const res = await window.db.insert('marcas', { nombre: nuevaMarca.value.trim().toUpperCase() })
@@ -592,33 +559,34 @@ async function subirImagen() {
     toast.add({ severity: 'warn', summary: 'Solo imagenes', detail: 'Selecciona un archivo de imagen', life: 3000 })
     return
   }
-  if (!tmCloudConnected()) {
-    toast.add({ severity: 'warn', summary: 'TM Cloud no configurado', detail: 'Configura TM Cloud para subir imagenes', life: 3000 })
+  if (file.size > 2 * 1024 * 1024) {
+    toast.add({ severity: 'warn', summary: 'Imagen muy grande', detail: 'Maximo 2MB', life: 3000 })
     return
   }
   subiendoImagen.value = true
   try {
-    const uid = await uploadImage(file, 'accesorios')
-    form.value.imagen = uid
-    toast.add({ severity: 'success', summary: 'Imagen subida', life: 2000 })
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = () => reject(new Error('Error al leer la imagen'))
+      reader.readAsDataURL(file)
+    })
+    form.value.imagen = base64
+    toast.add({ severity: 'success', summary: 'Imagen agregada', life: 2000 })
   } catch (e: any) {
-    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo subir la imagen', life: 4000 })
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo leer la imagen', life: 4000 })
   } finally {
     subiendoImagen.value = false
     input.value = ''
   }
 }
 
-async function eliminarImagen() {
-  if (!form.value.imagen) return
-  try {
-    await deleteImage(form.value.imagen)
-  } catch {}
+function eliminarImagen() {
   form.value.imagen = ''
 }
 
-function imagenUrl(uid: string | null | undefined): string | null {
-  return uid ? getImageUrl(uid) : null
+function imagenUrl(base64: string | null | undefined): string | null {
+  return base64 || null
 }
 
 onMounted(async () => {
@@ -637,7 +605,6 @@ onMounted(async () => {
     console.error("Error cargando configuracion:", error);
   }
 
-  await cargarCategorias()
   await cargarMarcas()
   await cargarAccesorios()
   const resProv = await window.db.getAll('proveedores')
@@ -715,12 +682,6 @@ onMounted(async () => {
             <span v-else class="text-surface-400">—</span>
           </template>
         </Column>
-        <Column field="categoria" header="Categoria" sortable style="width: 8rem">
-          <template #body="{ data }">
-            <span v-if="data.categoria_nombre">{{ data.categoria_nombre }}</span>
-            <span v-else class="text-surface-400">Sin categoria</span>
-          </template>
-        </Column>
         <Column field="marca" header="Marca" sortable style="width: 8rem">
           <template #body="{ data }">
             <span v-if="data.marca_nombre">{{ data.marca_nombre }}</span>
@@ -796,83 +757,38 @@ onMounted(async () => {
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
         <div v-else-if="accesoriosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay accesorios registrados.</div>
-        <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
           <div
             v-for="acc in accesoriosFiltrados"
             :key="acc.id"
-            class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-3 transition-shadow hover:shadow-md"
+            class="rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-2 flex flex-col gap-1.5 transition-shadow hover:shadow-sm"
           >
             <div class="flex items-center justify-between">
-              <span class="text-xs font-mono text-surface-400">#{{ acc.id }}</span>
+              <span class="text-[10px] font-mono text-surface-400">#{{ acc.id }}</span>
               <span
-                class="text-xs font-semibold px-2 py-0.5 rounded-full"
+                class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
                 :class="acc.cantidad <= acc.alerta
                   ? 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300'
                   : 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'"
               >
-                Stock: {{ acc.cantidad }}
+                {{ acc.cantidad }}
               </span>
             </div>
-            <div v-if="imagenUrl(acc.imagen)" class="-mx-4 -mt-4 mb-2 h-36 overflow-hidden">
+            <div v-if="imagenUrl(acc.imagen)" class="-mx-2 -mt-2 mb-1 h-16 overflow-hidden">
               <img :src="imagenUrl(acc.imagen)" class="w-full h-full object-cover" alt="" />
             </div>
             <div>
-              <h4 class="font-bold text-lg leading-tight uppercase">{{ acc.nombre }}</h4>
-              <p v-if="acc.codigo_barra" class="text-xs font-mono text-surface-400">Cod: {{ acc.codigo_barra }}</p>
-              <p class="text-sm text-surface-500 dark:text-surface-400">{{ acc.marca_nombre || 'Sin marca' }}</p>
-              <p v-if="acc.categoria_nombre" class="text-xs text-surface-400">{{ acc.categoria_nombre }}</p>
+              <h4 class="font-semibold text-xs leading-tight uppercase truncate">{{ acc.nombre }}</h4>
+              <p v-if="acc.marca_nombre" class="text-[10px] text-surface-400 truncate">{{ acc.marca_nombre }}</p>
             </div>
-            <div class="grid grid-cols-3 gap-2 text-sm">
-              <div class="text-center">
-                <span class="block text-surface-400 text-xs">Venta</span>
-                <span class="font-semibold">${{ (acc.precio_venta || 0).toFixed(2) }}</span>
-              </div>
-              <div class="text-center">
-                <span class="block text-surface-400 text-xs">Minimo</span>
-                <span class="font-semibold">${{ (acc.precio_min || 0).toFixed(2) }}</span>
-              </div>
-              <div class="text-center">
-                <span class="block text-surface-400 text-xs">Por Mayor</span>
-                <span class="font-semibold">${{ (acc.precio_xmayor || 0).toFixed(2) }}</span>
-              </div>
+            <div class="text-center">
+              <span class="font-bold text-xs text-emerald-600">${{ (acc.precio_venta || 0).toFixed(2) }}</span>
             </div>
-            <div class="flex gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
-              <Button
-                icon="pi pi-plus"
-                severity="success"
-                text
-                rounded
-                size="small"
-                @click.stop="abrirAgregarStock(acc)"
-                v-tooltip="'Agregar stock'"
-              />
-              <Button
-                icon="pi pi-qrcode"
-                severity="success"
-                text
-                rounded
-                size="small"
-                @click="abrirEtiquetaProducto(acc)"
-                v-tooltip="'Etiqueta'"
-              />
-              <Button
-                icon="pi pi-pencil"
-                severity="info"
-                text
-                rounded
-                size="small"
-                @click="abrirEditar(acc)"
-                v-tooltip="'Editar'"
-              />
-              <Button
-                icon="pi pi-trash"
-                severity="danger"
-                text
-                rounded
-                size="small"
-                @click="confirmarBorrar(acc)"
-                v-tooltip="'Eliminar'"
-              />
+            <div class="flex gap-1 justify-center pt-1 border-t border-surface-100 dark:border-surface-700">
+              <Button icon="pi pi-plus" severity="success" text rounded size="small" class="!w-6 !h-6 !text-[10px]" @click.stop="abrirAgregarStock(acc)" v-tooltip="'Agregar stock'" />
+              <Button icon="pi pi-qrcode" severity="success" text rounded size="small" class="!w-6 !h-6 !text-[10px]" @click="abrirEtiquetaProducto(acc)" v-tooltip="'Etiqueta'" />
+              <Button icon="pi pi-pencil" severity="info" text rounded size="small" class="!w-6 !h-6 !text-[10px]" @click="abrirEditar(acc)" v-tooltip="'Editar'" />
+              <Button icon="pi pi-trash" severity="danger" text rounded size="small" class="!w-6 !h-6 !text-[10px]" @click="confirmarBorrar(acc)" v-tooltip="'Eliminar'" />
             </div>
           </div>
         </div>
@@ -921,13 +837,6 @@ onMounted(async () => {
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Alerta Stock</label>
             <InputNumber v-model="form.alerta" fluid />
-          </div>
-        </div>
-        <div class="flex flex-col gap-1">
-          <label class="font-semibold text-sm">Categoria</label>
-          <div class="flex gap-2">
-            <Select v-model="form.categoria" :options="categorias" optionLabel="nombre" optionValue="id" placeholder="Seleccionar categoria" class="flex-1" fluid />
-            <Button icon="pi pi-plus" severity="info" text rounded size="small" @click="dialogNuevaCategoria = true" v-tooltip="'Nueva categoria'" />
           </div>
         </div>
         <div class="flex flex-col gap-1">
@@ -1041,17 +950,6 @@ onMounted(async () => {
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogEtiquetaProducto = false" />
-      </template>
-    </Dialog>
-
-    <Dialog v-model:visible="dialogNuevaCategoria" header="Nueva Categoria" modal :style="{ width: '24rem' }">
-      <div class="flex flex-col gap-3 pt-2">
-        <label class="text-sm font-medium">Nombre</label>
-        <InputText v-model="nuevaCategoria" placeholder="Nombre de la categoria" fluid class="uppercase" style="text-transform: uppercase;" @keyup.enter="crearCategoria" />
-      </div>
-      <template #footer>
-        <Button label="Cancelar" severity="secondary" text @click="dialogNuevaCategoria = false" />
-        <Button label="Crear" icon="pi pi-check" :disabled="!nuevaCategoria.trim()" @click="crearCategoria" />
       </template>
     </Dialog>
 

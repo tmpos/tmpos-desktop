@@ -5,10 +5,12 @@ import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
+import InputOtp from 'primevue/inputotp'
 import Tag from 'primevue/tag'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Fieldset from 'primevue/fieldset'
+import Menu from 'primevue/menu'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import TicketCuentaCobrarPrint from './TicketCuentaCobrarPrint.vue'
@@ -28,11 +30,32 @@ const guardando = ref(false)
 const productosFactura = ref<any[]>([])
 const facturaRelacionada = ref<any>(null)
 
+const selectedCuentas = ref<any[]>([])
+
 const dialogTelefono = ref(false)
 const telefonoInput = ref('')
 const cuentaTelefonoPendiente = ref<any>(null)
 
 const ticketRef = ref<InstanceType<typeof TicketCuentaCobrarPrint> | null>(null)
+
+const deleteDialogVisible = ref(false)
+const deleteOtpEnviado = ref(false)
+const deleteOtpLoading = ref(false)
+const deleteOtpConfirmando = ref(false)
+const deleteOtp = ref('')
+const deleteOtpEmail = ref('')
+const deleteOtpError = ref('')
+
+const actionMenu = ref()
+const cuentaAccion = ref<any>(null)
+const actionMenuItems = ref([
+  { label: 'Abonar', icon: 'pi pi-wallet', command: () => abrirPago(cuentaAccion.value) },
+  { label: 'Imprimir', icon: 'pi pi-print', command: () => imprimirEstadoCuenta(cuentaAccion.value) },
+  { label: 'WhatsApp', icon: 'pi pi-whatsapp', command: () => enviarWhatsApp(cuentaAccion.value) },
+  { label: 'Notificar', icon: 'pi pi-bell', command: () => notificarCliente(cuentaAccion.value) },
+  { separator: true },
+  { label: 'Eliminar', icon: 'pi pi-trash', command: () => { cuentaSelected.value = cuentaAccion.value; abrirDialogEliminar() } },
+])
 
 const estados = [
   { label: 'Todas', value: '' },
@@ -293,6 +316,83 @@ async function cambiarEstado(cuenta: any, estado: string) {
   toast.add({ severity: 'success', summary: 'Estado actualizado', detail: estado, life: 2000 })
 }
 
+function toggleActionMenu(event: Event, cuenta: any) {
+  cuentaAccion.value = cuenta
+  actionMenu.value.toggle(event)
+}
+
+function abrirDialogEliminar() {
+  deleteOtpEnviado.value = false
+  deleteOtp.value = ''
+  deleteOtpEmail.value = ''
+  deleteOtpError.value = ''
+  deleteDialogVisible.value = true
+}
+
+async function solicitarOtpEliminar() {
+  const cuenta = cuentaSelected.value
+  if (!cuenta) return
+  deleteOtpError.value = ''
+  deleteOtp.value = ''
+  deleteOtpLoading.value = true
+  try {
+    const res = await window.electron.invoke('cuentas_cobrar:solicitarOtpEliminar', {
+      id: cuenta.id,
+      entidad: 'cuenta por cobrar',
+      entidadPlural: 'cuentas por cobrar',
+      no_factura: cuenta.no_factura,
+      nombre_cliente: cuenta.nombre_cliente,
+      total: cuenta.total,
+    })
+    if (res.success) {
+      deleteOtpEmail.value = res.data?.email || ''
+      deleteOtpEnviado.value = true
+    } else {
+      deleteOtpError.value = res.error || 'No se pudo enviar el codigo'
+    }
+  } catch (e: any) {
+    deleteOtpError.value = e.message || 'Error solicitando codigo'
+  } finally {
+    deleteOtpLoading.value = false
+  }
+}
+
+async function confirmarEliminar() {
+  const cuenta = cuentaSelected.value
+  if (!cuenta) return
+  deleteOtpError.value = ''
+  const codigo = String(deleteOtp.value || '').replace(/\D/g, '')
+  if (!/^\d{4}$/.test(codigo)) {
+    deleteOtpError.value = 'Introduce el codigo de 4 digitos'
+    return
+  }
+  deleteOtpConfirmando.value = true
+  try {
+    const otpRes = await window.electron.invoke('cuentas_cobrar:confirmarOtpEliminar', {
+      cuentaId: cuenta.id,
+      codigo,
+    })
+    if (!otpRes.success) {
+      deleteOtpError.value = otpRes.error || 'Codigo no valido'
+      return
+    }
+
+    const res = await window.db.delete('cuentas_cobrar', cuenta.id)
+    if (res.success) {
+      toast.add({ severity: 'success', summary: 'Eliminada', detail: `Cuenta #${cuenta.no_factura} eliminada`, life: 3000 })
+      deleteDialogVisible.value = false
+      dialogPago.value = false
+      await cargarCuentas()
+    } else {
+      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo eliminar', life: 3000 })
+    }
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al eliminar', life: 3000 })
+  } finally {
+    deleteOtpConfirmando.value = false
+  }
+}
+
 onMounted(cargarCuentas)
 </script>
 
@@ -315,6 +415,7 @@ onMounted(cargarCuentas)
 
       <DataTable
         :value="cuentasFiltradas"
+        v-model:selection="selectedCuentas"
         :loading="loading"
         stripedRows
         paginator
@@ -324,13 +425,10 @@ onMounted(cargarCuentas)
         responsiveLayout="scroll"
         @row-click="abrirPago($event.data)"
       >
-        <Column header="" style="width: 8rem">
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
+        <Column header="Acciones" style="width: 5rem">
           <template #body="{ data }">
-            <div class="flex gap-1">
-              <Button icon="pi pi-print" severity="info" text rounded size="small" @click.stop="imprimirEstadoCuenta(data)" v-tooltip="'Imprimir recibo'" />
-              <Button icon="pi pi-whatsapp" severity="success" text rounded size="small" @click.stop="enviarWhatsApp(data)" v-tooltip="'Compartir por WhatsApp'" />
-              <Button icon="pi pi-bell" severity="warn" text rounded size="small" @click.stop="notificarCliente(data)" v-tooltip="'Notificar pago pendiente'" />
-            </div>
+            <Button icon="pi pi-ellipsis-v" severity="secondary" text rounded @click.stop="toggleActionMenu($event, data)" v-tooltip="'Acciones'" />
           </template>
         </Column>
         <Column field="no_factura" header="Factura" sortable style="width: 8rem" />
@@ -446,11 +544,58 @@ onMounted(cargarCuentas)
         </div>
       </div>
       <template #footer>
-        <Button label="Imprimir" icon="pi pi-print" severity="info" text :disabled="!cuentaSelected" @click="imprimirEstadoCuenta(cuentaSelected)" />
-        <Button label="WhatsApp" icon="pi pi-whatsapp" severity="success" text @click="enviarWhatsApp(cuentaSelected)" />
-        <Button v-if="cuentaSelected?.saldo > 0" label="Pago Completo" icon="pi pi-wallet" severity="warn" :loading="guardando" @click="pagoCompleto" />
-        <Button label="Cancelar" severity="secondary" text @click="dialogPago = false" />
-        <Button v-if="cuentaSelected?.saldo > 0" label="Registrar Pago" icon="pi pi-check" :loading="guardando" :disabled="montoPago <= 0" @click="registrarPago" />
+        <div class="flex flex-col gap-2 w-full">
+          <div class="flex gap-2 flex-wrap">
+            <Button label="Imprimir" icon="pi pi-print" severity="info" text :disabled="!cuentaSelected" @click="imprimirEstadoCuenta(cuentaSelected)" />
+            <Button label="WhatsApp" icon="pi pi-whatsapp" severity="success" text @click="enviarWhatsApp(cuentaSelected)" />
+            <Button v-if="cuentaSelected?.saldo > 0" label="Pago Completo" icon="pi pi-wallet" severity="warn" :loading="guardando" @click="pagoCompleto" />
+            <Button label="Cancelar" severity="secondary" text @click="dialogPago = false" />
+          </div>
+          <div class="flex gap-2 flex-wrap">
+            <Button label="Eliminar" icon="pi pi-trash" severity="danger" text @click="abrirDialogEliminar" />
+            <Button v-if="cuentaSelected?.saldo > 0" label="Registrar Pago" icon="pi pi-check" :loading="guardando" :disabled="montoPago <= 0" @click="registrarPago" />
+          </div>
+        </div>
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="deleteDialogVisible" header="Eliminar cuenta por cobrar" modal :style="{ width: '24rem' }">
+      <div class="space-y-4">
+        <div class="flex items-center gap-3">
+          <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
+          <span v-if="cuentaSelected">
+            Seguro que deseas eliminar la cuenta <strong>{{ cuentaSelected.no_factura }}</strong> de <strong>{{ cuentaSelected.nombre_cliente }}</strong>?
+          </span>
+        </div>
+        <div v-if="cuentaSelected" class="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-xs text-red-700 dark:text-red-300">
+          Saldo pendiente: <strong>RD$ {{ formatCurrency(cuentaSelected.saldo) }}</strong>
+        </div>
+        <div v-if="deleteOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
+          <p class="text-xs text-surface-500 text-center">
+            Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la licencia' }}.
+          </p>
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly />
+        </div>
+        <p v-if="deleteOtpError" class="text-red-500 text-xs text-center">{{ deleteOtpError }}</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
+        <Button
+          v-if="!deleteOtpEnviado"
+          label="Enviar OTP"
+          icon="pi pi-envelope"
+          severity="danger"
+          :loading="deleteOtpLoading"
+          @click="solicitarOtpEliminar"
+        />
+        <Button
+          v-else
+          label="Eliminar"
+          icon="pi pi-trash"
+          severity="danger"
+          :loading="deleteOtpConfirmando"
+          @click="confirmarEliminar"
+        />
       </template>
     </Dialog>
 
@@ -464,5 +609,6 @@ onMounted(cargarCuentas)
         <Button label="Enviar WhatsApp" icon="pi pi-whatsapp" severity="success" @click="confirmarTelefonoEnviar" />
       </template>
     </Dialog>
+    <Menu ref="actionMenu" :model="actionMenuItems" popup />
   </div>
 </template>

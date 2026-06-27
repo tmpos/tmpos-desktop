@@ -66,6 +66,10 @@ const rncTipo = ref<'RNC' | 'CEDULA'>('RNC')
 const buscandoClienteApi = ref(false)
 const dialogProductoPersonalizado = ref(false)
 const dialogCambiarPrecio = ref(false)
+const dialogBanco = ref(false)
+const bancos = ref<any[]>([])
+const bancoSeleccionado = ref<any>(null)
+const bancoOmitido = ref(false)
 const cartItemPrecio = ref<any>(null)
 const nuevoPrecioItem = ref(0)
 const clienteExpress = ref('')
@@ -263,66 +267,92 @@ function compBadge(tipo: string): string {
 const productosFiltrados = computed(() => {
   const texto = busquedaProd.value.toLowerCase().trim()
 
+  if (texto) {
+    const resultados: any[] = []
+
+    let telData = telefonos.value
+    if (ocultarSinStock.value) {
+      const conStock = new Set(imeisDisponibles.value.map(i => i.id_equi))
+      telData = telData.filter(t => conStock.has(t.uid))
+    }
+    const imeiMatch = imeisDisponibles.value.filter(i => i.nombre?.toLowerCase().includes(texto))
+    const telIds = new Set(imeiMatch.map(i => i.id_equi))
+    for (const t of telData) {
+      if (t.nombre?.toLowerCase().includes(texto) || telIds.has(t.uid)) {
+        resultados.push({ ...t, _tipo: 'celulares' })
+      }
+    }
+
+    let elecData = electrodomesticos.value
+    if (ocultarSinStock.value) {
+      const conStock = new Set(serialesDisponibles.value.map(i => i.id_equi))
+      elecData = elecData.filter(t => conStock.has(t.id))
+    }
+    const serialMatch = serialesDisponibles.value.filter(i => i.nombre?.toLowerCase().includes(texto))
+    const elecIds = new Set(serialMatch.map(i => i.id_equi))
+    for (const e of elecData) {
+      if (e.nombre?.toLowerCase().includes(texto) || elecIds.has(e.id)) {
+        resultados.push({ ...e, _tipo: 'electrodomesticos' })
+      }
+    }
+
+    let accData = accesorios.value
+    if (ocultarSinStock.value) {
+      accData = accData.filter(a => (a.cantidad || 0) > 0)
+    }
+    for (const a of accData) {
+      if (a.nombre?.toLowerCase().includes(texto) || a.marca_nombre?.toLowerCase().includes(texto)) {
+        resultados.push({ ...a, _tipo: 'accesorios' })
+      }
+    }
+
+    return resultados
+  }
+
   if (activeTab.value === 'celulares') {
     let data = telefonos.value
     if (ocultarSinStock.value) {
       const conStock = new Set(imeisDisponibles.value.map(i => i.id_equi))
-      data = data.filter(t => conStock.has(t.id))
+      data = data.filter(t => conStock.has(t.uid))
     }
-    if (!texto) return data
-    const imeiMatch = imeisDisponibles.value.filter(i => i.nombre?.toLowerCase().includes(texto))
-    const telIds = new Set(imeiMatch.map(i => i.id_equi))
-    return data.filter(t =>
-      t.nombre?.toLowerCase().includes(texto) || telIds.has(t.id)
-    )
+    return data
   } else if (activeTab.value === 'electrodomesticos') {
     let data = electrodomesticos.value
     if (ocultarSinStock.value) {
       const conStock = new Set(serialesDisponibles.value.map(i => i.id_equi))
       data = data.filter(t => conStock.has(t.id))
     }
-    if (!texto) return data
-    const serialMatch = serialesDisponibles.value.filter(i => i.nombre?.toLowerCase().includes(texto))
-    const elecIds = new Set(serialMatch.map(i => i.id_equi))
-    return data.filter(t =>
-      t.nombre?.toLowerCase().includes(texto) || elecIds.has(t.id)
-    )
+    return data
   } else {
     let data = accesorios.value
     if (ocultarSinStock.value) {
       data = data.filter(a => (a.cantidad || 0) > 0)
     }
-    if (!texto) return data
-    return data.filter(a =>
-      a.nombre?.toLowerCase().includes(texto) ||
-      a.marca_nombre?.toLowerCase().includes(texto)
-    )
+    return data
   }
 })
 
 function buscarImei() {
   const texto = busquedaProd.value.trim()
   if (!texto || texto.length < 3) return
-  if (activeTab.value === 'celulares') {
-    const imeiExacto = imeisDisponibles.value.find(i => i.nombre?.trim() === texto)
-    if (imeiExacto) {
-      selectedTelefono.value = telefonos.value.find(t => t.id === imeiExacto.id_equi) || null
-      imeiParaPrecio.value = imeiExacto
-      precioSeleccionado.value = 'venta'
-      precioManual.value = imeiExacto.precio_venta || 0
-      busquedaProd.value = ''
-      dialogPrecio.value = true
-    }
-  } else if (activeTab.value === 'electrodomesticos') {
-    const serialExacto = serialesDisponibles.value.find(i => i.nombre?.trim() === texto)
-    if (serialExacto) {
-      selectedElectrodomestico.value = electrodomesticos.value.find(t => t.id === serialExacto.id_equi) || null
-      imeiParaPrecio.value = serialExacto
-      precioSeleccionado.value = 'venta'
-      precioManual.value = serialExacto.precio_venta || 0
-      busquedaProd.value = ''
-      dialogPrecio.value = true
-    }
+  const imeiExacto = imeisDisponibles.value.find(i => i.nombre?.trim() === texto)
+  if (imeiExacto) {
+    selectedTelefono.value = telefonos.value.find(t => t.id === imeiExacto.id_equi) || null
+    imeiParaPrecio.value = imeiExacto
+    precioSeleccionado.value = 'venta'
+    precioManual.value = imeiExacto.precio_venta || 0
+    busquedaProd.value = ''
+    dialogPrecio.value = true
+    return
+  }
+  const serialExacto = serialesDisponibles.value.find(i => i.nombre?.trim() === texto)
+  if (serialExacto) {
+    selectedElectrodomestico.value = electrodomesticos.value.find(t => t.id === serialExacto.id_equi) || null
+    imeiParaPrecio.value = serialExacto
+    precioSeleccionado.value = 'venta'
+    precioManual.value = serialExacto.precio_venta || 0
+    busquedaProd.value = ''
+    dialogPrecio.value = true
   }
 }
 
@@ -446,7 +476,7 @@ async function cargarImeisDisponibles() {
 function abrirVariantes(telefono: any) {
   selectedTelefono.value = telefono
   selectedElectrodomestico.value = null
-  variantesImei.value = imeisDisponibles.value.filter((i: any) => i.id_equi === telefono.id)
+  variantesImei.value = imeisDisponibles.value.filter((i: any) => i.id_equi === telefono.uid)
   variantesSerial.value = []
   busquedaImei.value = ''
   dialogVariantes.value = true
@@ -464,9 +494,9 @@ function abrirVariantesSerial(electrodomestico: any) {
 const imeiSearch = ref('')
 const elecSearch = ref('')
 
-function imeisDelTel(telefonoId: number) {
+function imeisDelTel(telefonoUid: string) {
   const texto = imeiSearch.value.toLowerCase().trim()
-  let list = imeisDisponibles.value.filter((i: any) => i.id_equi === telefonoId)
+  let list = imeisDisponibles.value.filter((i: any) => i.id_equi === telefonoUid)
   if (texto) {
     list = list.filter((i: any) =>
       i.nombre?.toLowerCase().includes(texto) ||
@@ -491,7 +521,7 @@ function serialesDelElec(electrodomesticoId: number) {
 }
 
 function seleccionarImeiDirecto(imei: any) {
-  const telefono = telefonos.value.find(t => t.id === imei.id_equi)
+  const telefono = telefonos.value.find(t => t.uid === imei.id_equi)
   if (!telefono) return
   imeiParaPrecio.value = imei
   selectedTelefono.value = telefono
@@ -1300,6 +1330,13 @@ watch(metodoPago, (val) => {
     mixtoError.value = ''
     pasoMixto.value = 'elegir'
     dialogMixto.value = true
+  } else if (String(val).toLowerCase() === 'transferencia') {
+    if (!bancoSeleccionado.value && !bancoOmitido.value) {
+      dialogBanco.value = true
+    }
+  } else {
+    bancoSeleccionado.value = null
+    bancoOmitido.value = false
   }
 })
 
@@ -1434,6 +1471,9 @@ async function completarVenta() {
       tipo_comprobante: compTipo,
       comprobante_id: compId,
     }
+    if (bancoSeleccionado.value) {
+      facturaData.otro = JSON.stringify({ banco_id: bancoSeleccionado.value.id, banco_nombre: bancoSeleccionado.value.nombre })
+    }
     console.log('[NC] Factura nota final:', facturaData.nota, '| notaCreditoUsada:', notaCreditoUsada.value)
 
     const resFactura = await window.db.insert('facturas', facturaData)
@@ -1518,6 +1558,33 @@ async function completarVenta() {
             acc.cantidad = nuevoStock
           }
         }
+      }
+    }
+
+    if (!esCotizacion.value && bancoSeleccionado.value) {
+      const montoTransferencia = metodoPago.value === 'TRANSFERENCIA'
+        ? total.value
+        : String(metodoPago.value).toLowerCase() === 'mixto'
+          ? Number(mixtoTransferencia.value) || 0
+          : 0
+      if (montoTransferencia > 0) {
+        const saldoAnterior = Number(bancoSeleccionado.value.saldo || 0)
+        const nuevoSaldo = saldoAnterior + montoTransferencia
+        await window.db.update('bancos', bancoSeleccionado.value.id, { saldo: nuevoSaldo })
+        bancoSeleccionado.value.saldo = nuevoSaldo
+        try { await window.electron.invoke('consultaservidor', 'executeSQL', `CREATE TABLE IF NOT EXISTS transacciones_bancarias (id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT DEFAULT '', banco_id INTEGER NOT NULL, banco_nombre TEXT DEFAULT '', tipo TEXT DEFAULT '', monto REAL DEFAULT 0, saldo_anterior REAL DEFAULT 0, saldo_actual REAL DEFAULT 0, descripcion TEXT DEFAULT '', referencia TEXT DEFAULT '', metodo_pago TEXT DEFAULT '', fecha TEXT DEFAULT '', created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')`) } catch {}
+        await window.db.insert('transacciones_bancarias', {
+          banco_id: bancoSeleccionado.value.id,
+          banco_nombre: bancoSeleccionado.value.nombre,
+          tipo: 'INGRESO',
+          monto: montoTransferencia,
+          saldo_anterior: saldoAnterior,
+          saldo_actual: nuevoSaldo,
+          descripcion: `Venta #${invoiceNo}`,
+          referencia: invoiceNo,
+          metodo_pago: metodoPago.value,
+          fecha: fechaStr,
+        })
       }
     }
 
@@ -1806,6 +1873,11 @@ onMounted(async () => {
     if (resMP.success && resMP.data) metodosPagoDB.value = resMP.data
   } catch (_) {}
 
+  try {
+    const resBancos = await window.db.getAll('bancos')
+    if (resBancos.success) bancos.value = resBancos.data || []
+  } catch (_) {}
+
   loading.value = false
 
   if (!noFactura.value) noFactura.value = generarNoFactura()
@@ -1923,12 +1995,201 @@ function quitarDescuento() {
               <span>Cargando...</span>
             </div>
 
+            <div v-else-if="busquedaProd.trim()">
+              <div v-if="productosFiltrados.length === 0" class="flex flex-col items-center justify-center py-20 text-surface-300 gap-2">
+                <i class="pi pi-search text-4xl"></i>
+                <span class="text-sm">No se encontraron resultados</span>
+              </div>
+              <div v-else class="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-4 gap-2.5">
+                <div
+                  v-for="item in productosFiltrados"
+                  :key="`${item._tipo}-${item.id}`"
+                  class="flip-card perspective-[1000px]"
+                >
+                  <template v-if="item._tipo === 'celulares'">
+                    <div
+                      class="flip-inner relative transition-transform duration-500 cursor-pointer"
+                      :class="flippedTelId === item.id ? '[transform:rotateY(180deg)]' : ''"
+                      style="transform-style: preserve-3d; min-height: 170px;"
+                    >
+                      <div
+                        class="absolute inset-0 rounded-xl border border-surface-200/60 dark:border-surface-700/60 bg-surface-0 dark:bg-surface-800 p-3.5 flex flex-col gap-2 transition-all duration-200 backface-hidden"
+                        @click="abrirVariantes(item)"
+                        @contextmenu.prevent="() => { flippedTelId = flippedTelId === item.id ? null : item.id; imeiSearch = '' }"
+                      >
+                        <div class="flex items-start justify-between">
+                          <div class="w-10 h-10 rounded-xl bg-violet-500 flex items-center justify-center shadow-sm">
+                            <i class="pi pi-mobile text-white text-lg"></i>
+                          </div>
+                          <span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-800">
+                            {{ imeisDisponibles.filter(i => i.id_equi === item.uid).length }} disp.
+                          </span>
+                        </div>
+                        <h4 class="font-semibold text-sm leading-snug truncate">{{ item.nombre }}</h4>
+                        <div class="flex items-center justify-between mt-auto pt-1">
+                          <span class="text-xs text-surface-400">#{{ item.id }}</span>
+                          <Button icon="pi pi-plus" size="small" severity="info" text rounded class="!w-7 !h-7 opacity-0 group-hover:opacity-100 transition-opacity" @click.stop="abrirVariantes(item)" />
+                        </div>
+                      </div>
+                      <div
+                        class="absolute inset-0 rounded-xl border border-violet-300 dark:border-violet-600 bg-surface-0 dark:bg-surface-800 p-3 flex flex-col gap-2 backface-hidden overflow-y-auto [transform:rotateY(180deg)]"
+                        @contextmenu.prevent="flippedTelId = null"
+                      >
+                        <div class="flex items-center justify-between shrink-0">
+                          <h4 class="font-semibold text-xs truncate">{{ item.nombre }}</h4>
+                          <Button icon="pi pi-times" severity="secondary" text rounded size="small" class="!w-6 !h-6 !text-[10px]" @click="flippedTelId = null" />
+                        </div>
+                        <div class="relative shrink-0">
+                          <i class="pi pi-search absolute left-2 top-1/2 -translate-y-1/2 text-surface-400 text-xs"></i>
+                          <input v-model="imeiSearch" placeholder="Buscar IMEI..." class="w-full h-7 pl-7 pr-2 text-xs rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-700/50 outline-none focus:border-primary" @click.stop />
+                        </div>
+                        <div v-if="imeisDelTel(item.id).length === 0" class="text-[11px] text-surface-400 text-center py-4">No hay IMEIs disponibles</div>
+                        <div
+                          v-for="imei in imeisDelTel(item.id)"
+                          :key="imei.id"
+                          class="flex items-center justify-between py-1.5 px-2 rounded-lg bg-surface-50 dark:bg-surface-700/50 hover:bg-primary-50 dark:hover:bg-primary-900/20 cursor-pointer transition-colors text-xs"
+                          @click="flippedTelId = null; seleccionarImeiDirecto(imei)"
+                        >
+                          <span class="font-mono font-medium truncate">{{ imei.nombre }}</span>
+                          <span v-if="imei.precio_venta" class="text-primary font-semibold shrink-0 ml-2">${{ formatCurrency(imei.precio_venta) }}</span>
+                        </div>
+                        <p class="text-[9px] text-surface-400 text-center mt-auto shrink-0">Click derecho para volver</p>
+                      </div>
+                    </div>
+                  </template>
+                  <template v-else-if="item._tipo === 'electrodomesticos'">
+                    <div
+                      class="flip-inner relative transition-transform duration-500 cursor-pointer"
+                      :class="flippedElecId === item.id ? '[transform:rotateY(180deg)]' : ''"
+                      style="transform-style: preserve-3d; min-height: 170px;"
+                    >
+                      <div
+                        class="absolute inset-0 rounded-xl border border-surface-200/60 dark:border-surface-700/60 bg-surface-0 dark:bg-surface-800 p-3.5 flex flex-col gap-2 transition-all duration-200 backface-hidden"
+                        @click="abrirVariantesSerial(item)"
+                        @contextmenu.prevent="() => { flippedElecId = flippedElecId === item.id ? null : item.id; elecSearch = '' }"
+                      >
+                        <div class="flex items-start justify-between">
+                          <div class="w-10 h-10 rounded-xl bg-cyan-500 flex items-center justify-center shadow-sm">
+                            <i class="pi pi-sitemap text-white text-lg"></i>
+                          </div>
+                          <span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-800">
+                            {{ serialesDisponibles.filter(i => i.id_equi === item.id).length }} disp.
+                          </span>
+                        </div>
+                        <h4 class="font-semibold text-sm leading-snug truncate">{{ item.nombre }}</h4>
+                        <div class="flex items-center justify-between mt-auto pt-1">
+                          <span class="text-xs text-surface-400">#{{ item.id }}</span>
+                          <Button icon="pi pi-plus" size="small" severity="info" text rounded class="!w-7 !h-7 opacity-0 group-hover:opacity-100 transition-opacity" @click.stop="abrirVariantesSerial(item)" />
+                        </div>
+                      </div>
+                      <div
+                        class="absolute inset-0 rounded-xl border border-cyan-300 dark:border-cyan-600 bg-surface-0 dark:bg-surface-800 p-3 flex flex-col gap-2 backface-hidden overflow-y-auto [transform:rotateY(180deg)]"
+                        @contextmenu.prevent="flippedElecId = null"
+                      >
+                        <div class="flex items-center justify-between shrink-0">
+                          <h4 class="font-semibold text-xs truncate">{{ item.nombre }}</h4>
+                          <Button icon="pi pi-times" severity="secondary" text rounded size="small" class="!w-6 !h-6 !text-[10px]" @click="flippedElecId = null" />
+                        </div>
+                        <div class="relative shrink-0">
+                          <i class="pi pi-search absolute left-2 top-1/2 -translate-y-1/2 text-surface-400 text-xs"></i>
+                          <input v-model="elecSearch" placeholder="Buscar serial..." class="w-full h-7 pl-7 pr-2 text-xs rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-700/50 outline-none focus:border-primary" @click.stop />
+                        </div>
+                        <div v-if="serialesDelElec(item.id).length === 0" class="text-[11px] text-surface-400 text-center py-4">No hay seriales disponibles</div>
+                        <div
+                          v-for="serial in serialesDelElec(item.id)"
+                          :key="serial.id"
+                          class="flex items-center justify-between py-1.5 px-2 rounded-lg bg-surface-50 dark:bg-surface-700/50 hover:bg-primary-50 dark:hover:bg-primary-900/20 cursor-pointer transition-colors text-xs"
+                          @click="flippedElecId = null; seleccionarSerialDirecto(serial)"
+                        >
+                          <span class="font-mono font-medium truncate">{{ serial.nombre }}</span>
+                          <span v-if="serial.precio_venta" class="text-primary font-semibold shrink-0 ml-2">${{ formatCurrency(serial.precio_venta) }}</span>
+                        </div>
+                        <p class="text-[9px] text-surface-400 text-center mt-auto shrink-0">Click derecho para volver</p>
+                      </div>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <div
+                      class="flip-inner relative transition-transform duration-500 cursor-pointer"
+                      :class="flippedAccId === item.id ? '[transform:rotateY(180deg)]' : ''"
+                      style="transform-style: preserve-3d; min-height: 170px;"
+                    >
+                      <div
+                        class="absolute inset-0 rounded-xl border border-surface-200/60 dark:border-surface-700/60 bg-surface-0 dark:bg-surface-800 p-3.5 flex flex-col gap-2 transition-all duration-200 backface-hidden"
+                        @click="(item.cantidad || 0) > 0 && agregarAccesorio(item)"
+                        @contextmenu.prevent="() => { flippedAccId = flippedAccId === item.id ? null : item.id }"
+                      >
+                        <div class="flex items-start justify-between">
+                          <div v-if="item.imagen" class="w-10 h-10 rounded-xl overflow-hidden shadow-sm flex-shrink-0">
+                            <img :src="item.imagen" class="w-full h-full object-cover" alt="" />
+                          </div>
+                          <div v-else class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-sm flex-shrink-0">
+                            <i class="pi pi-box text-white text-lg"></i>
+                          </div>
+                          <span class="text-[10px] font-medium px-2 py-0.5 rounded-full border"
+                            :class="(item.cantidad || 0) > 0
+                              ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800'
+                              : 'bg-red-50 text-red-500 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800'"
+                          >
+                            Stock: {{ item.cantidad || 0 }}
+                          </span>
+                        </div>
+                        <h4 class="font-semibold text-sm leading-snug truncate">{{ item.nombre }}</h4>
+                        <p v-if="item.marca_nombre" class="text-[11px] text-surface-400 truncate -mt-1">{{ item.marca_nombre }}</p>
+                        <div class="flex items-center justify-between mt-auto pt-1">
+                          <span class="font-bold text-sm text-emerald-600 dark:text-emerald-400">${{ formatCurrency(item.precio_venta || 0) }}</span>
+                          <Button
+                            icon="pi pi-plus"
+                            size="small"
+                            severity="info"
+                            text
+                            rounded
+                            class="!w-7 !h-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                            :disabled="(item.cantidad || 0) <= 0"
+                            @click.stop="agregarAccesorio(item)"
+                          />
+                        </div>
+                      </div>
+                      <div
+                        class="absolute inset-0 rounded-xl border border-emerald-300 dark:border-emerald-600 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-3 backface-hidden overflow-y-auto [transform:rotateY(180deg)]"
+                        @contextmenu.prevent="flippedAccId = null"
+                      >
+                        <div class="flex items-center justify-between">
+                          <h4 class="font-semibold text-sm truncate">{{ item.nombre }}</h4>
+                          <Button icon="pi pi-times" severity="secondary" text rounded size="small" class="!w-6 !h-6 !text-[10px]" @click="flippedAccId = null" />
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 text-xs flex-1">
+                          <div class="flex flex-col gap-0.5 p-2 rounded-lg bg-surface-50 dark:bg-surface-700/50">
+                            <span class="text-[9px] font-semibold text-surface-500 uppercase">Venta</span>
+                            <span class="font-bold text-emerald-600">${{ formatCurrency(item.precio_venta || 0) }}</span>
+                          </div>
+                          <div class="flex flex-col gap-0.5 p-2 rounded-lg bg-surface-50 dark:bg-surface-700/50">
+                            <span class="text-[9px] font-semibold text-surface-500 uppercase">Stock</span>
+                            <span class="font-bold" :class="(item.cantidad || 0) > 0 ? 'text-blue-600' : 'text-red-500'">{{ item.cantidad || 0 }}</span>
+                          </div>
+                          <div v-if="item.precio_min" class="flex flex-col gap-0.5 p-2 rounded-lg bg-surface-50 dark:bg-surface-700/50">
+                            <span class="text-[9px] font-semibold text-surface-500 uppercase">Minimo</span>
+                            <span class="font-bold text-orange-500">${{ formatCurrency(item.precio_min) }}</span>
+                          </div>
+                          <div v-if="item.precio_xmayor" class="flex flex-col gap-0.5 p-2 rounded-lg bg-surface-50 dark:bg-surface-700/50">
+                            <span class="text-[9px] font-semibold text-surface-500 uppercase">x Mayor</span>
+                            <span class="font-bold text-green-500">${{ formatCurrency(item.precio_xmayor) }}</span>
+                          </div>
+                        </div>
+                        <p class="text-[9px] text-surface-400 text-center mt-auto">Click derecho para volver</p>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+
             <div v-else-if="activeTab === 'celulares'">
               <div v-if="productosFiltrados.length === 0" class="flex flex-col items-center justify-center py-20 text-surface-300 gap-2">
                 <i class="pi pi-mobile text-4xl"></i>
                 <span class="text-sm">No se encontraron telefonos</span>
               </div>
-              <div v-else class="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+              <div v-else class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2">
                 <div
                   v-for="tel in productosFiltrados"
                   :key="tel.id"
@@ -1950,7 +2211,7 @@ function quitarDescuento() {
                           <i class="pi pi-mobile text-white text-lg"></i>
                         </div>
                         <span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-800">
-                          {{ imeisDisponibles.filter(i => i.id_equi === tel.id).length }} disp.
+                          {{ imeisDisponibles.filter(i => i.id_equi === tel.uid).length }} disp.
                         </span>
                       </div>
                       <h4 class="font-semibold text-sm leading-snug truncate">{{ tel.nombre }}</h4>
@@ -1995,7 +2256,7 @@ function quitarDescuento() {
                 <i class="pi pi-sitemap text-4xl"></i>
                 <span class="text-sm">No se encontraron electrodomesticos</span>
               </div>
-              <div v-else class="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+              <div v-else class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2">
                 <div
                   v-for="elec in productosFiltrados"
                   :key="elec.id"
@@ -2062,7 +2323,7 @@ function quitarDescuento() {
                 <i class="pi pi-box text-4xl"></i>
                 <span class="text-sm">No se encontraron accesorios</span>
               </div>
-              <div v-else class="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+              <div v-else class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2">
                 <div
                   v-for="acc in productosFiltrados"
                   :key="acc.id"
@@ -2081,7 +2342,10 @@ function quitarDescuento() {
                       @contextmenu.prevent="() => { flippedAccId = flippedAccId === acc.id ? null : acc.id }"
                     >
                       <div class="flex items-start justify-between">
-                        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-sm">
+                        <div v-if="acc.imagen" class="w-10 h-10 rounded-xl overflow-hidden shadow-sm flex-shrink-0">
+                          <img :src="acc.imagen" class="w-full h-full object-cover" alt="" />
+                        </div>
+                        <div v-else class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-sm flex-shrink-0">
                           <i class="pi pi-box text-white text-lg"></i>
                         </div>
                         <span class="text-[10px] font-medium px-2 py-0.5 rounded-full border"
@@ -2954,6 +3218,37 @@ function quitarDescuento() {
         <Button label="Quitar" severity="danger" text @click="quitarDescuento" />
         <Button label="Cancelar" severity="secondary" text @click="dialogDescuento = false" />
         <Button label="Aplicar" icon="pi pi-check" @click="aplicarDescuento" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogBanco" header="Seleccionar Banco" modal :style="{ width: 'min(26rem, 95vw)' }">
+      <div v-if="bancos.length === 0" class="flex flex-col items-center gap-3 py-6 text-surface-400">
+        <i class="pi pi-building text-3xl"></i>
+        <p class="text-sm">No hay bancos creados</p>
+        <p class="text-xs">Crea un banco en Contabilidad &gt; Bancos</p>
+      </div>
+      <div v-else class="flex flex-col gap-2">
+        <div
+          v-for="banco in bancos"
+          :key="banco.id"
+          class="flex items-center justify-between p-3 rounded-lg border border-surface-200/50 dark:border-surface-700/30 cursor-pointer hover:border-primary-300 hover:bg-surface-50 dark:hover:bg-surface-700/30 transition-colors"
+          @click="bancoSeleccionado = banco; dialogBanco = false"
+        >
+          <div>
+            <p class="font-medium text-sm">{{ banco.nombre }}</p>
+            <p v-if="banco.numero_cuenta" class="text-xs text-surface-400 font-mono">{{ banco.numero_cuenta }}</p>
+          </div>
+          <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+            :class="banco.moneda === 'DOLARES' ? 'bg-green-50 text-green-600' : banco.moneda === 'EUROS' ? 'bg-blue-50 text-blue-600' : 'bg-surface-100 text-surface-600'"
+          >{{ banco.moneda || 'PESOS' }}</span>
+        </div>
+      </div>
+      <template #footer>
+        <div v-if="bancos.length === 0" class="flex gap-2 w-full">
+          <Button label="Cancelar" severity="secondary" text class="flex-1" @click="dialogBanco = false; metodoPago = 'EFECTIVO'" />
+          <Button label="Continuar sin banco" severity="info" text class="flex-1" @click="bancoSeleccionado = null; bancoOmitido = true; dialogBanco = false" />
+        </div>
+        <Button v-else label="Cancelar" severity="secondary" text @click="bancoSeleccionado = null; dialogBanco = false; metodoPago = 'EFECTIVO'" />
       </template>
     </Dialog>
 

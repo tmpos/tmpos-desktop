@@ -31,6 +31,7 @@ const detalleDialogVisible = ref(false)
 const imeiDialogVisible = ref(false)
 const isEditing = ref(false)
 const selectedTelefono = ref<any>(null)
+const selectedTelefonos = ref<any[]>([])
 const busqueda = ref('')
 const busquedaImeiTelefono = ref('')
 const imeisDelTelefono = ref<any[]>([])
@@ -47,6 +48,65 @@ const patronTelefono = ref('')
 const linkImpresora = ref('')
 const patroncedula = ref('')
 const tokenCorto = ref('')
+const generarDialogVisible = ref(false)
+const yearDesde = ref(2007)
+const yearHasta = ref(2025)
+const years = Array.from({ length: 20 }, (_, i) => 2007 + i)
+
+const iphoneModelsByYear: Record<number, string[]> = {
+  2007: ['IPHONE 2G', 'IPHONE 3G'],
+  2008: ['IPHONE 3G'],
+  2009: ['IPHONE 3GS'],
+  2010: ['IPHONE 4'],
+  2011: ['IPHONE 4S'],
+  2012: ['IPHONE 5'],
+  2013: ['IPHONE 5S', 'IPHONE 5C'],
+  2014: ['IPHONE 6', 'IPHONE 6 PLUS'],
+  2015: ['IPHONE 6S', 'IPHONE 6S PLUS'],
+  2016: ['IPHONE SE', 'IPHONE 7', 'IPHONE 7 PLUS'],
+  2017: ['IPHONE 8', 'IPHONE 8 PLUS', 'IPHONE X'],
+  2018: ['IPHONE XR', 'IPHONE XS', 'IPHONE XS MAX'],
+  2019: ['IPHONE 11', 'IPHONE 11 PRO', 'IPHONE 11 PRO MAX'],
+  2020: ['IPHONE 12', 'IPHONE 12 MINI', 'IPHONE 12 PRO', 'IPHONE 12 PRO MAX', 'IPHONE SE 2DA GEN'],
+  2021: ['IPHONE 13', 'IPHONE 13 MINI', 'IPHONE 13 PRO', 'IPHONE 13 PRO MAX'],
+  2022: ['IPHONE 14', 'IPHONE 14 PLUS', 'IPHONE 14 PRO', 'IPHONE 14 PRO MAX', 'IPHONE SE 3RA GEN'],
+  2023: ['IPHONE 15', 'IPHONE 15 PLUS', 'IPHONE 15 PRO', 'IPHONE 15 PRO MAX'],
+  2024: ['IPHONE 16', 'IPHONE 16 PLUS', 'IPHONE 16 PRO', 'IPHONE 16 PRO MAX'],
+  2025: ['IPHONE 16E', 'IPHONE 17', 'IPHONE 17 PLUS', 'IPHONE 17 PRO', 'IPHONE 17 PRO MAX'],
+}
+
+async function generarModelosIphone() {
+  const modelos: string[] = []
+  for (let y = yearDesde.value; y <= yearHasta.value; y++) {
+    const m = iphoneModelsByYear[y]
+    if (m) modelos.push(...m)
+  }
+  if (modelos.length === 0) {
+    toast.add({ severity: 'warn', summary: 'Sin modelos', detail: 'No hay modelos de iPhone en ese rango', life: 3000 })
+    return
+  }
+  const nombresUnicos = [...new Set(modelos)]
+  const existentes = new Set(telefonos.value.map((t: any) => t.nombre?.toUpperCase().trim()))
+  const nuevos = nombresUnicos.filter(n => !existentes.has(n.toUpperCase().trim()))
+  if (nuevos.length === 0) {
+    toast.add({ severity: 'info', summary: 'Sin novedades', detail: 'Todos los modelos ya estan registrados', life: 3000 })
+    generarDialogVisible.value = false
+    return
+  }
+  try {
+    let insertados = 0
+    for (const nombre of nuevos) {
+      const res = await window.db.insert('telefonos', addAlmacenId({ nombre }))
+      if (res.success) insertados++
+    }
+    toast.add({ severity: 'success', summary: 'Modelos creados', detail: `${insertados} de ${nuevos.length} modelos insertados`, life: 4000 })
+    generarDialogVisible.value = false
+    await cargarTelefonos()
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al generar modelos', life: 4000 })
+  }
+}
+
 const form = ref({ nombre: '', imagen: '' })
 const fileInput = ref<HTMLInputElement | null>(null)
 const subiendoImagen = ref(false)
@@ -106,13 +166,13 @@ const imeiCamposArray = [
   'nota',
 ]
 
-function imeiCount(telefonoId: number) {
-  return imeisDisponibles.value.filter((i: any) => Number(i.id_equi) === telefonoId && i.estado === 'DISPONIBLE').length
+function imeiCount(telefonoUid: string) {
+  return imeisDisponibles.value.filter((i: any) => i.id_equi === telefonoUid && i.estado === 'DISPONIBLE').length
 }
 
-function imeisDelTel(telefonoId: number) {
+function imeisDelTel(telefonoUid: string) {
   const texto = imeiSearch.value.toLowerCase().trim()
-  let list = imeisDisponibles.value.filter((i: any) => Number(i.id_equi) === telefonoId && i.estado === 'DISPONIBLE')
+  let list = imeisDisponibles.value.filter((i: any) => i.id_equi === telefonoUid && i.estado === 'DISPONIBLE')
   if (texto) list = list.filter((i: any) => i.nombre?.toLowerCase().includes(texto))
   return list
 }
@@ -136,7 +196,7 @@ function abrirDetalle(tel: any) {
   selectedTelefono.value = tel
   detalleDialogVisible.value = true
   imeiSearch.value = ''
-  cargarImeisDelTelefono(tel.id)
+  cargarImeisDelTelefono(tel.uid)
 }
 
 async function abrirCrear() {
@@ -159,20 +219,25 @@ function abrirEditar(tel?: any) {
 }
 
 function confirmarBorrar(tel?: any) {
-  if (tel) selectedTelefono.value = tel
+  if (tel) {
+    selectedTelefono.value = tel
+    selectedTelefonos.value = [tel]
+  }
   deleteDialogVisible.value = true
 }
 
 async function borrarTelefono() {
   try {
-    const res = await window.db.delete('telefonos', selectedTelefono.value.id)
-    if (!res.success) {
-      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'Error al eliminar', life: 4000 })
-      return
+    const lista = selectedTelefonos.value.length > 0 ? selectedTelefonos.value : [selectedTelefono.value].filter(Boolean)
+    let eliminados = 0
+    for (const tel of lista) {
+      const res = await window.db.delete('telefonos', tel.id)
+      if (res.success) eliminados++
     }
     deleteDialogVisible.value = false
+    selectedTelefonos.value = []
     await cargarTelefonos()
-    toast.add({ severity: 'success', summary: 'Eliminado', detail: 'Telefono eliminado', life: 2000 })
+    toast.add({ severity: 'success', summary: 'Eliminado', detail: `${eliminados} telefono(s) eliminado(s)`, life: 2000 })
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al eliminar', life: 4000 })
   }
@@ -207,9 +272,9 @@ async function guardarTelefono() {
   }
 }
 
-async function cargarImeisDelTelefono(telefonoId: number) {
+async function cargarImeisDelTelefono(telefonoUid: string) {
   const res = await window.db.getAll('imei')
-    if (res.success) imeisDelTelefono.value = filterByAlmacen(res.data || []).filter((i: any) => i.id_equi === telefonoId && i.estado === 'DISPONIBLE')
+    if (res.success) imeisDelTelefono.value = filterByAlmacen(res.data || []).filter((i: any) => i.id_equi === telefonoUid && i.estado === 'DISPONIBLE')
 }
 
 function abrirAgregarImei() {
@@ -258,7 +323,7 @@ async function guardarImei() {
   try {
     const existe = await window.db.getAll('imei')
     if (existe.success && (existe.data || []).find((i: any) => i.nombre === imeiForm.value.nombre.trim())) { toast.add({ severity: 'warn', summary: 'Duplicado', detail: 'El IMEI ya existe', life: 3000 }); return }
-    await window.db.insert('imei', addAlmacenId({ nombre: imeiForm.value.nombre.trim(), id_equi: selectedTelefono.value.id, costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
+    await window.db.insert('imei', addAlmacenId({ nombre: imeiForm.value.nombre.trim(), id_equi: selectedTelefono.value.uid || '', costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
     toast.add({ severity: 'success', summary: 'Creado', detail: 'IMEI creado', life: 3000 })
     imeiDialogVisible.value = false
     await cargarImeisDelTelefono(selectedTelefono.value.id)
@@ -277,7 +342,7 @@ async function agregarImeiEnLote() {
     for (const imei of imeis) {
       if (existentes.has(imei)) { duplicados++; continue }
       try {
-        await window.db.insert('imei', addAlmacenId({ nombre: imei, id_equi: selectedTelefono.value.id, costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
+        await window.db.insert('imei', addAlmacenId({ nombre: imei, id_equi: selectedTelefono.value.uid || '', costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
         insertados++
         sincronizarImeiServidor({ nombre: imei, costo: imeiForm.value.costo, precio_venta: imeiForm.value.precio_venta, proveedor: imeiForm.value.proveedor })
       } catch { errores++ }
@@ -307,7 +372,7 @@ async function sincronizarImeiServidor(datos: any) {
     const enviar: Record<string, any> = {
       almacen, imei: String(datos.nombre || ''), estado: 'DISPONIBLE',
       fecha: new Date().toLocaleDateString('es-DO'), equipo: '', proveedor: String(datos.proveedor || ''),
-      id_equi: String(selectedTelefono.value?.id || ''), costo: String(datos.costo || '0'),
+      id_equi: String(selectedTelefono.value?.uid || ''), costo: String(datos.costo || '0'),
       precio_venta: String(datos.precio_venta || '0'), factura: '', no_compra: '',
       fecha_venta: '', hora_venta: '', comprador: '', detalles: '', usuario: '',
       marca: '', modelo: '', preciocompra: String(datos.costo || '0'), precioventa: String(datos.precio_venta || '0'),
@@ -418,12 +483,19 @@ onMounted(async () => {
             </button>
           </div>
           <Button label="Nuevo Telefono" icon="pi pi-plus" @click="abrirCrear" />
+          <Button label="Generar iPhones" icon="pi pi-apple" severity="info" outlined @click="generarDialogVisible = true" />
         </div>
       </div>
 
       <div v-if="viewMode === 'table'" class="telefonos-table-wrap">
+        <div v-if="selectedTelefonos.length > 0" class="flex items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
+          <span class="text-sm font-medium">{{ selectedTelefonos.length }} seleccionado(s)</span>
+          <Button label="Eliminar" icon="pi pi-trash" severity="danger" size="small" @click="confirmarBorrar()" />
+          <Button icon="pi pi-times" severity="secondary" text rounded size="small" @click="selectedTelefonos = []" v-tooltip="'Limpiar seleccion'" />
+        </div>
         <DataTable
           :value="telefonosFiltrados"
+          v-model:selection="selectedTelefonos"
           :loading="loading"
           stripedRows
           paginator
@@ -434,6 +506,7 @@ onMounted(async () => {
           class="telefonos-table"
           @row-click="(e) => abrirDetalle(e.data)"
         >
+          <Column selectionMode="multiple" headerStyle="width: 3rem" />
           <Column field="id" header="ID" style="width: 4rem" headerClass="hide-on-mobile" bodyClass="hide-on-mobile" />
           <Column field="nombre" header="Nombre" sortable style="min-width: 12rem" />
           <Column header="Acciones" style="width: 7rem">
@@ -468,7 +541,7 @@ onMounted(async () => {
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
         <div v-else-if="telefonosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay telefonos registrados.</div>
-        <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
           <div
             v-for="tel in telefonosFiltrados"
             :key="tel.id"
@@ -488,7 +561,7 @@ onMounted(async () => {
                 <div class="flex items-center justify-between">
                   <span class="text-xs font-mono text-surface-400">#{{ tel.id }}</span>
                   <span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-800">
-                    {{ imeiCount(tel.id) }} IMEI{{ imeiCount(tel.id) === 1 ? '' : 's' }}
+                    {{ imeiCount(tel.uid) }} IMEI{{ imeiCount(tel.uid) === 1 ? '' : 's' }}
                   </span>
                 </div>
                 <div class="flex items-center gap-3">
@@ -518,9 +591,9 @@ onMounted(async () => {
                   <InputIcon class="pi pi-search text-xs" />
                   <InputText v-model="imeiSearch" placeholder="Buscar IMEI..." fluid class="!h-7 !text-xs" @click.stop />
                 </IconField>
-                <div v-if="imeisDelTel(tel.id).length === 0" class="text-[11px] text-surface-400 text-center py-4">No hay IMEIs disponibles</div>
+                <div v-if="imeisDelTel(tel.uid).length === 0" class="text-[11px] text-surface-400 text-center py-4">No hay IMEIs disponibles</div>
                 <div
-                  v-for="imei in imeisDelTel(tel.id)"
+                  v-for="imei in imeisDelTel(tel.uid)"
                   :key="imei.id"
                   class="flex items-center justify-between py-1.5 px-2 rounded-lg bg-surface-50 dark:bg-surface-700/50 text-xs"
                   @contextmenu.prevent="flippedTelId = null"
@@ -777,6 +850,32 @@ onMounted(async () => {
       </template>
     </Dialog>
 
+    <!-- Dialog Generar iPhones -->
+    <Dialog
+      v-model:visible="generarDialogVisible"
+      header="Generar Modelos de iPhone"
+      modal
+      :style="{ width: '26rem' }"
+    >
+      <div class="flex flex-col gap-4 pt-2">
+        <p class="text-sm text-surface-500">Selecciona un rango de años para generar automaticamente todos los modelos de iPhone de ese periodo.</p>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="flex flex-col gap-1">
+            <label class="font-semibold text-sm">Desde</label>
+            <Select v-model="yearDesde" :options="years" :allowEmpty="false" fluid />
+          </div>
+          <div class="flex flex-col gap-1">
+            <label class="font-semibold text-sm">Hasta</label>
+            <Select v-model="yearHasta" :options="years.filter(y => y >= yearDesde)" :allowEmpty="false" fluid />
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="generarDialogVisible = false" />
+        <Button label="Generar" icon="pi pi-apple" @click="generarModelosIphone" />
+      </template>
+    </Dialog>
+
     <!-- Dialog Confirmar Borrar -->
     <Dialog
       v-model:visible="deleteDialogVisible"
@@ -786,7 +885,8 @@ onMounted(async () => {
     >
       <div class="flex items-center gap-3">
         <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span>Seguro que deseas eliminar <strong>{{ selectedTelefono?.nombre }}</strong>?</span>
+        <span v-if="selectedTelefonos.length > 1">Seguro que deseas eliminar los <strong>{{ selectedTelefonos.length }}</strong> telefonos seleccionados?</span>
+        <span v-else>Seguro que deseas eliminar <strong>{{ selectedTelefono?.nombre }}</strong>?</span>
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />

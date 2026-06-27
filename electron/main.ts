@@ -87,6 +87,23 @@ function initDatabase(): void {
     }
   }
 
+  // Migrar tabla imei: quitar FK constraint viejo y cambiar id_equi a TEXT
+  {
+    const imeiSql = db!.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='imei'`).get() as any
+    if (imeiSql?.sql && (imeiSql.sql.includes('REFERENCES telefonos(id)') || imeiSql.sql.includes('id_equi INTEGER'))) {
+      try {
+        const cols = db!.prepare(`PRAGMA table_info("imei")`).all() as any[]
+        const colNames = cols.map((c: any) => `"${c.name}"`).join(', ')
+        db!.exec(`ALTER TABLE imei RENAME TO imei_old`)
+        db!.exec(`CREATE TABLE IF NOT EXISTS imei (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,id_equi TEXT DEFAULT '',costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,color TEXT DEFAULT '',capacidad TEXT DEFAULT '',bateria TEXT DEFAULT '',estado TEXT DEFAULT 'DISPONIBLE',fecha_venta TEXT,comprador TEXT DEFAULT '',proveedor TEXT DEFAULT '',no_compra TEXT DEFAULT '',precio_vendido REAL DEFAULT 0,hora_venta TEXT DEFAULT '',no_factura TEXT DEFAULT '',nota TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+        db!.exec(`INSERT INTO imei (${colNames}) SELECT ${colNames} FROM imei_old`)
+        db!.exec(`DROP TABLE imei_old`)
+      } catch (e) {
+        console.error('[migracion imei] error:', e)
+      }
+    }
+  }
+
   function tableExists(tabla: string): boolean {
     const result = db!.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(tabla)
     return !!result
@@ -359,7 +376,7 @@ function initDatabase(): void {
   if (badKey?.api_key && /^\d+-[0-9A-F]{12}$/i.test(badKey.api_key)) {
     db!.prepare(`UPDATE licencia SET api_key = NULL, updated_at = datetime('now','localtime') WHERE id = 1`).run()
   }
-  db.exec(`CREATE TABLE IF NOT EXISTS imei (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,id_equi INTEGER,costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,color TEXT DEFAULT '',capacidad TEXT DEFAULT '',bateria TEXT DEFAULT '',estado TEXT DEFAULT 'DISPONIBLE',fecha_venta TEXT,comprador TEXT DEFAULT '',proveedor TEXT DEFAULT '',no_compra TEXT DEFAULT '',precio_vendido REAL DEFAULT 0,hora_venta TEXT DEFAULT '',no_factura TEXT DEFAULT '',nota TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (id_equi) REFERENCES telefonos(id))`)
+  db.exec(`CREATE TABLE IF NOT EXISTS imei (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,id_equi TEXT DEFAULT '',costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,color TEXT DEFAULT '',capacidad TEXT DEFAULT '',bateria TEXT DEFAULT '',estado TEXT DEFAULT 'DISPONIBLE',fecha_venta TEXT,comprador TEXT DEFAULT '',proveedor TEXT DEFAULT '',no_compra TEXT DEFAULT '',precio_vendido REAL DEFAULT 0,hora_venta TEXT DEFAULT '',no_factura TEXT DEFAULT '',nota TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (id_equi) REFERENCES telefonos(uid))`)
   db.exec(`CREATE TABLE IF NOT EXISTS electrodomesticos (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   try { db!.exec(`ALTER TABLE electrodomesticos ADD COLUMN imagen TEXT DEFAULT ''`) } catch {}
   db.exec(`CREATE TABLE IF NOT EXISTS serial (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,id_equi INTEGER,costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,color TEXT DEFAULT '',capacidad TEXT DEFAULT '',bateria TEXT DEFAULT '',estado TEXT DEFAULT 'DISPONIBLE',fecha_venta TEXT,comprador TEXT DEFAULT '',proveedor TEXT DEFAULT '',no_compra TEXT DEFAULT '',precio_vendido REAL DEFAULT 0,hora_venta TEXT DEFAULT '',no_factura TEXT DEFAULT '',nota TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (id_equi) REFERENCES electrodomesticos(id))`)
@@ -1214,6 +1231,74 @@ function setupIpcHandlers(): void {
     return { success: false, error: lastError?.message || 'No se pudo enviar el correo' }
   }
 
+  async function enviarEmailOtpEliminarCuentaCobrar(email: string, codigo: string, cuenta: any) {
+    const config = getOtpEmailConfig()
+    if (!config.email || !config.password) return { success: false, error: 'Configuracion de correo incompleta' }
+
+    const cantidad = Number(cuenta?.cantidad || 1)
+    const entidad = String(cuenta?.entidad || 'cuenta por cobrar')
+    const entidadPlural = String(cuenta?.entidadPlural || `${entidad}s`)
+    const noCuenta = String(cuenta?.no_factura || cuenta?.id || '').trim() || 'Sin numero'
+    const cliente = String(cuenta?.nombre_cliente || 'Sin cliente').trim()
+    const total = Number(cuenta?.total || 0).toFixed(2)
+    const html = `
+      <div style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#f3f4f6;padding:28px 0">
+          <tr>
+            <td align="center" style="padding:28px 12px">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;border-collapse:collapse;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;box-shadow:0 16px 40px rgba(17,24,39,.10)">
+                <tr>
+                  <td style="background:#7f1d1d;padding:24px 28px">
+                    <div style="font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#fecaca">TM POS System</div>
+                    <h1 style="margin:8px 0 0;font-size:22px;line-height:1.25;color:#ffffff">Autorizacion para eliminar ${entidad}</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:28px">
+                    <p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:#374151">
+                      Se solicito eliminar ${cantidad > 1 ? entidadPlural : `una ${entidad}`} del sistema. Introduce este codigo para confirmar la accion.
+                    </p>
+                    <div style="margin:20px 0;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden">
+                      <div style="padding:12px 16px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#6b7280">${entidad.charAt(0).toUpperCase() + entidad.slice(1)} <strong style="color:#111827">${noCuenta}</strong></div>
+                      <div style="padding:12px 16px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#6b7280">Cliente <strong style="color:#111827">${cliente}</strong></div>
+                      <div style="padding:12px 16px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#6b7280">Total <strong style="color:#111827">RD$ ${total}</strong></div>
+                      <div style="padding:12px 16px;font-size:13px;color:#6b7280">Cantidad <strong style="color:#111827">${cantidad}</strong></div>
+                    </div>
+                    <div style="margin:24px 0;padding:22px;border-radius:12px;background:#fef2f2;border:1px solid #fecaca;text-align:center">
+                      <div style="font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#b91c1c;margin-bottom:10px">Codigo de verificacion</div>
+                      <div style="font-size:36px;line-height:1;font-weight:800;letter-spacing:12px;color:#111827">${codigo}</div>
+                    </div>
+                    <div style="margin-top:22px;padding:14px 16px;border-radius:10px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:13px;line-height:1.5">
+                      Este codigo vence en 10 minutos. Si no solicitaste eliminar esta ${entidad}, revisa el acceso al sistema.
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:18px 28px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;line-height:1.5;color:#6b7280;text-align:center">
+                    Este mensaje fue enviado automaticamente por TM POS System.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </div>`
+
+    let lastError: any = null
+    for (const attempt of [
+      { host: config.host, port: Number(config.puerto), secure: false },
+      { host: 'smtp.gmail.com', port: 465, secure: true },
+    ]) {
+      try {
+        await sendEmail(email, `Codigo para eliminar ${entidad}`, html, attempt.host, attempt.port, attempt.secure, config)
+        return { success: true }
+      } catch (error: any) {
+        lastError = error
+      }
+    }
+    return { success: false, error: lastError?.message || 'No se pudo enviar el correo' }
+  }
+
   async function verificarLicenciaOnline(timeoutMs = 5000): Promise<any> {
     const mac = obtenerMacAddress()
     if (!mac) return { success: false, error: 'Sin conexion: no se pudo identificar el equipo', data: null }
@@ -1771,6 +1856,64 @@ function setupIpcHandlers(): void {
       if (registro.codigo !== codigo) return { success: false, error: 'Codigo incorrecto' }
 
       facturaEliminacionOtp.delete(key)
+      return { success: true }
+    } catch (e: any) { return { success: false, error: e.message || 'Error validando codigo' } }
+  })
+
+  const cuentaCobrarEliminacionOtp = new Map<string, { codigo: string; cuentaIds: number[]; email: string; expiresAt: number }>()
+
+  ipcMain.handle('cuentas_cobrar:solicitarOtpEliminar', async (_event, cuenta: any = {}) => {
+    try {
+      const cuentaIds = (Array.isArray(cuenta?.cuentaIds) ? cuenta.cuentaIds : [cuenta?.id])
+        .map((id: any) => Number(id || 0))
+        .filter((id: number) => id > 0)
+        .sort((a: number, b: number) => a - b)
+      if (cuentaIds.length === 0) return { success: false, error: 'Cuenta invalida' }
+
+      const email = getEmailEmpresa()
+      if (!email || !email.includes('@')) return { success: false, error: 'Configura un correo valido en los datos de la empresa' }
+
+      const mac = normalizarMac(obtenerMacAddress()) || 'LOCAL'
+      const key = `cc:${mac}:${cuentaIds.join(',')}`
+      const codigo = Math.floor(1000 + Math.random() * 9000).toString()
+      cuentaCobrarEliminacionOtp.set(key, {
+        codigo,
+        cuentaIds,
+        email,
+        expiresAt: Date.now() + 10 * 60 * 1000,
+      })
+
+      const emailResult = await enviarEmailOtpEliminarCuentaCobrar(email, codigo, cuenta)
+      if (!emailResult.success) {
+        cuentaCobrarEliminacionOtp.delete(key)
+        return { success: false, error: emailResult.error || 'No se pudo enviar el codigo' }
+      }
+
+      return { success: true, data: { email: ocultarEmail(email), expiresMinutes: 10 } }
+    } catch (e: any) { return { success: false, error: e.message || 'Error solicitando codigo' } }
+  })
+
+  ipcMain.handle('cuentas_cobrar:confirmarOtpEliminar', async (_event, payload: { cuentaId?: number; cuentaIds?: number[]; codigo?: string } = {}) => {
+    try {
+      const cuentaIds = (Array.isArray(payload?.cuentaIds) ? payload.cuentaIds : [payload?.cuentaId])
+        .map((id: any) => Number(id || 0))
+        .filter((id: number) => id > 0)
+        .sort((a: number, b: number) => a - b)
+      const codigo = String(payload?.codigo || '').replace(/\D/g, '')
+      if (cuentaIds.length === 0) return { success: false, error: 'Cuenta invalida' }
+      if (!/^\d{4}$/.test(codigo)) return { success: false, error: 'Introduce el codigo de 4 digitos' }
+
+      const mac = normalizarMac(obtenerMacAddress()) || 'LOCAL'
+      const key = `cc:${mac}:${cuentaIds.join(',')}`
+      const registro = cuentaCobrarEliminacionOtp.get(key)
+      if (!registro) return { success: false, error: 'Solicita un codigo nuevo' }
+      if (Date.now() > registro.expiresAt) {
+        cuentaCobrarEliminacionOtp.delete(key)
+        return { success: false, error: 'El codigo vencio. Solicita uno nuevo' }
+      }
+      if (registro.codigo !== codigo) return { success: false, error: 'Codigo incorrecto' }
+
+      cuentaCobrarEliminacionOtp.delete(key)
       return { success: true }
     } catch (e: any) { return { success: false, error: e.message || 'Error validando codigo' } }
   })
