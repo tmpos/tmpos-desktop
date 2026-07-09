@@ -32,11 +32,23 @@ function formatCurrency(n: number): string {
 }
 
 async function ensureTable() {
-  try {
-    await window.electron.invoke('consultaservidor', 'executeSQL', `CREATE TABLE IF NOT EXISTS bancos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, numero_cuenta TEXT DEFAULT '', moneda TEXT DEFAULT 'PESOS', saldo REAL DEFAULT 0, fecha_transaccion TEXT DEFAULT '', created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')`)
-  } catch {
-    await window.electron.invoke('consultaservidor', 'rawQuery', `CREATE TABLE IF NOT EXISTS bancos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, numero_cuenta TEXT DEFAULT '', moneda TEXT DEFAULT 'PESOS', saldo REAL DEFAULT 0, fecha_transaccion TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)`)
+  const execSql = async (sql: string) => {
+    try {
+      const res = await window.electron.invoke('consultaservidor', 'executeSQL', sql)
+      if (res?.success === false) throw new Error(res.error || 'executeSQL fallo')
+    } catch {
+      try { await window.electron.invoke('consultaservidor', 'rawQuery', sql) } catch {}
+    }
   }
+
+  try {
+    await execSql(`CREATE TABLE IF NOT EXISTS bancos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, numero_cuenta TEXT DEFAULT '', moneda TEXT DEFAULT 'PESOS', saldo REAL DEFAULT 0, fecha_transaccion TEXT DEFAULT '', uid TEXT DEFAULT '', created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')`)
+    await execSql(`ALTER TABLE bancos ADD COLUMN uid TEXT DEFAULT ''`)
+    await execSql(`ALTER TABLE bancos ADD COLUMN created_at TEXT DEFAULT ''`)
+    await execSql(`ALTER TABLE bancos ADD COLUMN updated_at TEXT DEFAULT ''`)
+    await execSql(`ALTER TABLE bancos ADD COLUMN fecha_transaccion TEXT DEFAULT ''`)
+    await execSql(`UPDATE bancos SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL OR uid = ''`)
+  } catch (_) {}
 }
 
 async function cargarCuentas() {

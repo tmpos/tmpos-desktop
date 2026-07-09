@@ -41,12 +41,14 @@ const busqueda = ref('')
 const rangoActivo = ref<string>('todo')
 const rangoPersonalizado = ref<Date[]>([])
 const comprobanteFiltro = ref('')
+const reenviandoAlanube = ref(false)
 
 const actionMenu = ref()
 const facturaAccion = ref<any>(null)
 const actionMenuItems = ref([
   { label: 'Imprimir', icon: 'pi pi-print', command: () => imprimirFactura(facturaAccion.value) },
   { label: 'Ver PDF', icon: 'pi pi-file-pdf', command: () => verFacturaPdf(facturaAccion.value) },
+  { label: 'Reintentar Alanube', icon: 'pi pi-refresh', disabled: () => reenviandoAlanube.value, command: () => reintentarAlanube(facturaAccion.value) },
   { label: 'Editar', icon: 'pi pi-pencil', command: () => abrirEditar(facturaAccion.value) },
   { label: 'WhatsApp', icon: 'pi pi-whatsapp', command: () => compartirWhatsAppFactura(facturaAccion.value) },
   { separator: true },
@@ -56,6 +58,25 @@ const actionMenuItems = ref([
 function toggleActionMenu(event: Event, factura: any) {
   facturaAccion.value = factura
   actionMenu.value.toggle(event)
+}
+
+function usuarioAuditoria(): string {
+  try { return localStorage.getItem('mr_user_usuario') || 'POS' } catch { return 'POS' }
+}
+
+async function registrarAuditoria(accion: string, factura: any, detalle: any = {}, resultado = 'OK') {
+  try {
+    await window.electron.invoke('auditoria:registrar', {
+      modulo: 'ventas',
+      accion,
+      entidad: 'facturas',
+      entidad_id: Number(factura?.id || 0),
+      referencia: factura?.no_factura || factura?.ncf || '',
+      usuario: usuarioAuditoria(),
+      detalle,
+      resultado,
+    })
+  } catch (_) {}
 }
 
 async function compartirWhatsAppFactura(factura: any) {
@@ -68,6 +89,7 @@ async function compartirWhatsAppFactura(factura: any) {
     `Factura ${factura.no_factura}\nTotal: RD$${Number(factura.total).toFixed(2)}\nCliente: ${factura.nombre_cliente}\nFecha: ${factura.fecha_emision}`
   )
   window.open(`https://wa.me/${telefono.replace(/[^0-9]/g, '')}?text=${mensaje}`, '_blank')
+  await registrarAuditoria('compartir_whatsapp', factura, { telefono })
 }
 
 function getRango(key: string): { inicio: string; fin: string } | null {
@@ -246,12 +268,58 @@ function getEstadoSeverity(estado: string): string {
   }
 }
 
+function getEcfStatus(factura: any): string {
+  const tipo = obtenerTipoEcf(factura)
+  if (!tipo) return ''
+  const otro = getAlanubeOtroFactura(factura)
+  const response = otro?.alanube_response || {}
+  return String(
+    factura?._ecf?.status ||
+    factura?._ecf?.legal_status ||
+    factura?.alanube_status ||
+    response?.legalStatus ||
+    response?.status ||
+    (otro?.alanube_error ? 'ERROR_ENVIO' : 'PENDIENTE')
+  ).toUpperCase()
+}
+
+function getEcfStatusLabel(factura: any): string {
+  const status = getEcfStatus(factura)
+  if (!status) return ''
+  if (status === 'ACCEPTED' || status === 'ACEPTADA') return 'Aceptada DGII'
+  if (status === 'REJECTED' || status === 'RECHAZADA') return 'Rechazada'
+  if (status === 'ERROR_ENVIO') return 'Error envio'
+  if (status === 'REGISTERED' || status === 'ENVIADA') return 'Enviada'
+  return 'Pendiente'
+}
+
+function getEcfStatusClass(factura: any): string {
+  const status = getEcfStatus(factura)
+  if (status === 'ACCEPTED' || status === 'ACEPTADA') return 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+  if (status === 'REJECTED' || status === 'RECHAZADA' || status === 'ERROR_ENVIO') return 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+  if (status === 'REGISTERED' || status === 'ENVIADA') return 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+  return 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
+}
+
 async function cargarFacturas() {
   loading.value = true
   try {
     const res = await window.db.getAll('facturas')
     if (res.success) {
-      facturas.value = res.data || []
+      let ecfPorFactura: Record<string, any> = {}
+      try {
+        const ecfRes = await window.db.getAll('facturas_ecf')
+        if (ecfRes.success && Array.isArray(ecfRes.data)) {
+          ecfPorFactura = ecfRes.data.reduce((acc: Record<string, any>, row: any) => {
+            acc[String(row.factura_id)] = row
+            return acc
+          }, {})
+        }
+      } catch (_) {}
+      facturas.value = (res.data || []).map((factura: any) => ({
+        ...factura,
+        _ecf: ecfPorFactura[String(factura.id)] || null,
+      }))
     } else {
       toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudieron cargar las facturas', life: 3000 })
     }
@@ -269,11 +337,318 @@ function abrirCrear() {
   dialogVisible.value = true
 }
 
-function abrirEditar(factura: any) {
+function getAlanubeOtroFactura(factura: any): any {
+  try {
+    const otro = typeof factura?.otro === 'string' ? JSON.parse(factura.otro || '{}') : factura?.otro || {}
+    return otro || {}
+  } catch {
+    return {}
+  }
+}
+
+function esFacturaElectronicaAceptadaLocal(factura: any): boolean {
+  const tipo = String(factura?.tipo_comprobante || factura?.comprobante || '').toUpperCase()
+  const otro = getAlanubeOtroFactura(factura)
+  const response = otro?.alanube_response || {}
+  const legalStatus = String(
+    factura?.legal_status ||
+    factura?.alanube_legal_status ||
+    factura?.ecf_legal_status ||
+    factura?._ecf?.legal_status ||
+    otro?.legal_status ||
+    response?.legalStatus ||
+    response?.legal_status ||
+    ''
+  ).toUpperCase()
+  return tipo.startsWith('E') && legalStatus === 'ACCEPTED'
+}
+
+async function esFacturaElectronicaAceptada(factura: any): Promise<boolean> {
+  if (!factura?.id) return false
+  if (esFacturaElectronicaAceptadaLocal(factura)) return true
+  try {
+    const res = await window.db.getWhere('facturas_ecf', 'factura_id = ?', [factura.id])
+    const ecf = res?.success && Array.isArray(res.data) ? res.data[0] : null
+    return String(ecf?.legal_status || '').toUpperCase() === 'ACCEPTED'
+  } catch {
+    return false
+  }
+}
+
+async function bloquearSiFacturaElectronicaAceptada(factura: any, accion = 'modificar'): Promise<boolean> {
+  if (!(await esFacturaElectronicaAceptada(factura))) return false
+  await registrarAuditoria('bloqueo_fiscal', factura, { accion, motivo: 'DGII_ACCEPTED' }, 'BLOQUEADO')
+  toast.add({
+    severity: 'warn',
+    summary: 'Factura fiscal bloqueada',
+    detail: `Esta factura electronica fue aceptada por DGII. No se puede ${accion}; usa reimpresion o nota de credito.`,
+    life: 4500,
+  })
+  return true
+}
+
+function parseJson(value: any, fallback: any) {
+  if (value == null) return fallback
+  if (typeof value === 'string') {
+    try { return JSON.parse(value) } catch { return fallback }
+  }
+  return value
+}
+
+function limpiarNumeroFiscal(value: any): string {
+  return String(value || '').replace(/\D/g, '')
+}
+
+function redondearMonto(value: any): number {
+  return Number(Number(value || 0).toFixed(2))
+}
+
+function alanubeAuthHeader(tokenValue: string): string {
+  const tokenClean = tokenValue.trim()
+  return tokenClean.toLowerCase().startsWith('bearer ') ? tokenClean : `Bearer ${tokenClean}`
+}
+
+function obtenerTipoEcf(factura: any): string {
+  const directo = String(factura?.tipo_comprobante || factura?.comprobante || '').toUpperCase()
+  if (/^E\d{2}$/.test(directo)) return directo
+  const ncf = String(factura?.ncf || '').toUpperCase()
+  const match = ncf.match(/^E\d{2}/)
+  return match ? match[0] : ''
+}
+
+function obtenerNcfFactura(factura: any): string {
+  return String(factura?.ncf || '').trim().toUpperCase()
+}
+
+function productosFactura(factura: any): any[] {
+  const productos = parseJson(factura?.productos, [])
+  return Array.isArray(productos) ? productos : []
+}
+
+function buildAlanubeSender(company: any, empresa: any) {
+  return {
+    rnc: limpiarNumeroFiscal(company?.rnc || company?.identification || company?.identificationNumber || company?.taxId || empresa?.rnc || empresa?.legal || ''),
+    companyName: company?.companyName || company?.businessName || company?.name || company?.legalName || empresa?.nombre || 'EMPRESA',
+    tradename: company?.tradename || company?.tradeName || company?.commercialName || empresa?.nombre || 'EMPRESA',
+    address: company?.address || company?.direccion || empresa?.direccion || '',
+    phone: company?.phone || company?.telefono || empresa?.telefono || '',
+    email: company?.email || empresa?.email || '',
+    stampDate: new Date().toISOString().split('T')[0],
+  }
+}
+
+function buildAlanubeBuyer(factura: any) {
+  const nombre = String(factura?.nombre_cliente || 'CONSUMIDOR FINAL').toUpperCase()
+  return {
+    rnc: limpiarNumeroFiscal(factura?.rnc_cliente || factura?.cedula_cliente || factura?.cod_cliente || ''),
+    companyName: nombre,
+    businessName: nombre,
+    contact: nombre,
+    phone: factura?.telefono_cliente || '',
+    address: factura?.direccion_cliente || '',
+    email: factura?.email_cliente || '',
+  }
+}
+
+function buildAlanubeItemDetails(factura: any) {
+  const tasa = Number(factura?.impuesto || 0) > 0 && Number(factura?.subtotal || 0) > 0
+    ? redondearMonto((Number(factura.impuesto) / Number(factura.subtotal)) * 100)
+    : 18
+  return productosFactura(factura).map((item: any, index: number) => {
+    const cantidad = Number(item.cantidad || item.quantity || 1)
+    const precio = redondearMonto(item.precio || item.precio_venta || item.precio_unitario || item.price || 0)
+    return {
+      lineNumber: index + 1,
+      billingIndicator: tasa > 0 ? 1 : 4,
+      itemName: String(item.nombre || item.descripcion || item.producto || 'PRODUCTO').slice(0, 80),
+      goodServiceIndicator: 1,
+      itemDescription: String(item.nombre || item.descripcion || item.producto || 'PRODUCTO').slice(0, 1000),
+      quantityItem: cantidad,
+      unitPriceItem: precio,
+      itemAmount: redondearMonto(precio * cantidad),
+    }
+  })
+}
+
+function buildAlanubeTotals(factura: any) {
+  const total = redondearMonto(factura?.total || 0)
+  const impuesto = redondearMonto(factura?.impuesto || 0)
+  const gravado = redondearMonto(Math.max(0, total - impuesto))
+  return {
+    taxedAmount: gravado,
+    taxedAmount18: gravado,
+    exemptAmount: impuesto > 0 ? 0 : total,
+    itbis18: impuesto,
+    totalItbis: impuesto,
+    totalAmount: total,
+  }
+}
+
+async function cargarEmpresaAlanube() {
+  const [companyRes, empresaRes] = await Promise.all([
+    window.config.get('alanube_company_data'),
+    window.db.getAll('empresa'),
+  ])
+  const rawCompany = String(companyRes?.data || '')
+  const company = rawCompany ? parseJson(rawCompany, {}) : {}
+  const empresa = empresaRes?.success && empresaRes.data?.length ? empresaRes.data[0] : {}
+  return { company, empresa }
+}
+
+async function guardarResultadoEcf(factura: any, params: {
+  endpoint: string
+  httpStatus: number
+  payload: any
+  response: any
+  ok: boolean
+  error?: string
+  alanubeIdCompania: string
+}) {
+  const response = params.response && typeof params.response === 'object' ? params.response : {}
+  const legalStatus = String(response?.legalStatus || response?.legal_status || '').toUpperCase()
+  const now = new Date().toISOString()
+  const status = !params.ok
+    ? 'ERROR_ENVIO'
+    : legalStatus === 'ACCEPTED'
+      ? 'ACEPTADA'
+      : legalStatus === 'REJECTED'
+        ? 'RECHAZADA'
+        : String(response?.status || 'ENVIADA').toUpperCase()
+  const record = {
+    factura_id: factura.id,
+    no_factura: factura.no_factura || '',
+    ncf: obtenerNcfFactura(factura),
+    tipo_comprobante: obtenerTipoEcf(factura),
+    alanube_id: response?.id || '',
+    alanube_id_compania: params.alanubeIdCompania,
+    document_number: response?.documentNumber || response?.document_number || obtenerNcfFactura(factura),
+    document_stamp_url: response?.documentStampUrl || response?.document_stamp_url || '',
+    security_code: response?.securityCode || response?.security_code || '',
+    status,
+    legal_status: legalStatus,
+    sequence_consumed: response?.sequenceConsumed ? 1 : 0,
+    pdf_url: response?.pdf || '',
+    xml_url: response?.xml || '',
+    resume_xml_url: response?.resumeXml || '',
+    endpoint: params.endpoint,
+    http_status: params.httpStatus,
+    payload: JSON.stringify(params.payload || {}),
+    response: JSON.stringify(params.response || {}),
+    error: params.error || '',
+    enviado_at: now,
+    aceptado_at: legalStatus === 'ACCEPTED' ? (response?.signatureDate || now) : '',
+  }
+
+  const existente = await window.db.getWhere('facturas_ecf', 'factura_id = ?', [factura.id])
+  const existenteId = existente?.success && Array.isArray(existente.data) && existente.data.length > 0 ? existente.data[0].id : 0
+  const saveRes = existenteId
+    ? await window.db.update('facturas_ecf', existenteId, record)
+    : await window.db.insert('facturas_ecf', record)
+  if (!saveRes?.success) throw new Error(saveRes?.error || 'No se pudo guardar estado e-CF')
+
+  const otroActual = getAlanubeOtroFactura(factura)
+  await window.db.update('facturas', factura.id, {
+    otro: JSON.stringify({
+      ...otroActual,
+      facturacion_electronica: 1,
+      alanube_endpoint: params.endpoint,
+      alanube_payload: params.payload,
+      alanube_response: params.response,
+      alanube_status: params.httpStatus,
+      alanube_enviado_at: now,
+      alanube_id_compania: params.alanubeIdCompania,
+      alanube_error: params.error || '',
+    }),
+  })
+}
+
+async function reintentarAlanube(factura: any) {
+  if (!factura?.id) return
+  if (await esFacturaElectronicaAceptada(factura)) {
+    toast.add({ severity: 'info', summary: 'Alanube', detail: 'Esta factura ya fue aceptada por DGII', life: 3000 })
+    return
+  }
+
+  const compTipo = obtenerTipoEcf(factura)
+  const ncf = obtenerNcfFactura(factura)
+  if (!['E31', 'E32'].includes(compTipo) || !ncf) {
+    toast.add({ severity: 'warn', summary: 'Alanube', detail: 'Solo se puede reenviar facturas electronicas E31 o E32 con NCF', life: 3500 })
+    return
+  }
+
+  reenviandoAlanube.value = true
+  try {
+    const [activoRes, baseRes, tokenRes, companiaRes] = await Promise.all([
+      window.config.get('facturacion_electronica_activa'),
+      window.config.get('alanube_base_url'),
+      window.config.get('alanube_token'),
+      window.config.get('alanube_id_compania'),
+    ])
+    if (String(activoRes?.data || '') !== '1') throw new Error('La facturacion electronica esta apagada')
+    const baseUrl = String(baseRes?.data || 'https://api.alanube.co/dom/v1').replace(/\/+$/, '')
+    const tokenAlanube = String(tokenRes?.data || '').trim()
+    const alanubeIdCompania = String(companiaRes?.data || '').trim()
+    if (!tokenAlanube || !alanubeIdCompania) throw new Error('Configura token e id compania de Alanube')
+
+    const { company, empresa } = await cargarEmpresaAlanube()
+    const endpoint = compTipo === 'E31' ? 'fiscal-invoices' : 'invoices'
+    const payload: any = {
+      company: { id: alanubeIdCompania },
+      idDoc: {
+        encf: ncf,
+        documentType: Number(compTipo.replace(/\D/g, '')),
+        incomeType: 1,
+        paymentType: String(factura.metodo_pago || '').toUpperCase() === 'CREDITO' ? 2 : 1,
+        issueDate: factura.fecha_emision || new Date().toISOString().split('T')[0],
+        internalDocumentNumber: factura.no_factura || String(factura.id),
+      },
+      sender: buildAlanubeSender(company, empresa),
+      totals: buildAlanubeTotals(factura),
+      itemDetails: buildAlanubeItemDetails(factura),
+      config: { sendToDgii: true },
+    }
+    if (compTipo === 'E31' || Number(factura.total || 0) >= 250000) payload.buyer = buildAlanubeBuyer(factura)
+
+    const res = await fetch(`${baseUrl}/${endpoint}`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: alanubeAuthHeader(tokenAlanube),
+      },
+      body: JSON.stringify(payload),
+    })
+    const contentType = res.headers.get('content-type') || ''
+    const data = contentType.includes('application/json') ? await res.json() : await res.text()
+    const error = res.ok ? '' : (typeof data === 'string' ? data : data?.message || data?.error || `Alanube respondio ${res.status}`)
+    await guardarResultadoEcf(factura, {
+      endpoint,
+      httpStatus: res.status,
+      payload,
+      response: data,
+      ok: res.ok,
+      error,
+      alanubeIdCompania,
+    })
+    if (!res.ok) throw new Error(error)
+    await registrarAuditoria('reintentar_alanube', factura, { endpoint, http_status: res.status }, 'OK')
+    toast.add({ severity: 'success', summary: 'Alanube', detail: 'Factura reenviada correctamente', life: 3000 })
+    await cargarFacturas()
+  } catch (error: any) {
+    await registrarAuditoria('reintentar_alanube', factura, { error: error?.message || 'No se pudo reenviar' }, 'ERROR')
+    toast.add({ severity: 'error', summary: 'Alanube', detail: error?.message || 'No se pudo reenviar la factura', life: 4500 })
+  } finally {
+    reenviandoAlanube.value = false
+  }
+}
+
+async function abrirEditar(factura: any) {
+  if (await bloquearSiFacturaElectronicaAceptada(factura, 'editar')) return
   router.push(`/ventas/editar/${factura.id}`)
 }
 
-function confirmarBorrar(factura: any) {
+async function confirmarBorrar(factura: any) {
+  if (await bloquearSiFacturaElectronicaAceptada(factura, 'eliminar')) return
   selectedFactura.value = factura
   deleteOtpEnviado.value = false
   deleteOtp.value = ''
@@ -282,10 +657,13 @@ function confirmarBorrar(factura: any) {
   deleteDialogVisible.value = true
 }
 
-function confirmarBorrarSeleccionadas() {
+async function confirmarBorrarSeleccionadas() {
   if (!selectedFacturas.value.length) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona al menos una factura', life: 2500 })
     return
+  }
+  for (const factura of selectedFacturas.value) {
+    if (await bloquearSiFacturaElectronicaAceptada(factura, 'eliminar')) return
   }
   selectedFactura.value = null
   deleteOtpEnviado.value = false
@@ -311,6 +689,7 @@ async function solicitarOtpEliminarFactura() {
       total: totalSeleccionadoEliminar.value,
     }) as any
     if (res.success) {
+      for (const factura of facturas) await registrarAuditoria('solicitar_otp_eliminar', factura, { cantidad: facturas.length }, 'OK')
       deleteOtpEmail.value = res.data?.email || ''
       deleteOtpEnviado.value = true
       toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
@@ -424,8 +803,12 @@ async function borrar() {
     let eliminadas = 0
     for (const factura of facturas) {
       const res = await window.db.delete('facturas', factura.id)
-      if (res.success) eliminadas++
+      if (res.success) {
+        eliminadas++
+        await registrarAuditoria('eliminar_factura', factura, {}, 'OK')
+      }
       else {
+        await registrarAuditoria('eliminar_factura', factura, { error: res.error || '' }, 'ERROR')
         toast.add({ severity: 'error', summary: 'Error', detail: res.error || `No se pudo eliminar ${factura.no_factura || factura.id}`, life: 3000 })
         return
       }
@@ -443,10 +826,12 @@ async function borrar() {
 }
 
 async function imprimirFactura(factura: any) {
+  await registrarAuditoria('imprimir_ticket', factura)
   ticketPrintRef.value?.printTicket(factura)
 }
 
 async function verFacturaPdf(factura: any) {
+  await registrarAuditoria('generar_pdf', factura)
   facturaPdfRef.value?.printFactura(factura)
 }
 
@@ -580,6 +965,14 @@ onMounted(async () => {
         <Column field="id" header="ID" style="width: 5rem" />
         <Column field="no_factura" header="No. Factura" sortable style="width: 10rem" />
         <Column field="comprobante" header="Comprobante" sortable style="width: 8rem" />
+        <Column header="e-CF" style="width: 9rem">
+          <template #body="{ data }">
+            <span v-if="getEcfStatus(data)" class="text-xs font-semibold px-2 py-0.5 rounded-full" :class="getEcfStatusClass(data)">
+              {{ getEcfStatusLabel(data) }}
+            </span>
+            <span v-else class="text-xs text-surface-400">--</span>
+          </template>
+        </Column>
         <Column field="nombre_cliente" header="Cliente" sortable />
         <Column field="fecha_emision" header="Fecha Emision" sortable style="width: 9rem">
           <template #body="{ data }">{{ formatFecha(data.fecha_emision) }}</template>
@@ -613,9 +1006,14 @@ onMounted(async () => {
           >
             <div class="flex items-center justify-between">
               <span class="text-xs font-mono text-surface-400">#{{ factura.id }}</span>
-              <span class="text-xs font-semibold px-2 py-0.5 rounded-full" :class="getEstadoSeverity(factura.estado_factura)">
-                {{ factura.estado_factura || 'PENDIENTE' }}
-              </span>
+              <div class="flex items-center gap-1">
+                <span v-if="getEcfStatus(factura)" class="text-xs font-semibold px-2 py-0.5 rounded-full" :class="getEcfStatusClass(factura)">
+                  {{ getEcfStatusLabel(factura) }}
+                </span>
+                <span class="text-xs font-semibold px-2 py-0.5 rounded-full" :class="getEstadoSeverity(factura.estado_factura)">
+                  {{ factura.estado_factura || 'PENDIENTE' }}
+                </span>
+              </div>
             </div>
 
             <div class="min-w-0">

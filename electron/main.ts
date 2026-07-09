@@ -350,7 +350,51 @@ function initDatabase(): void {
   try { db!.exec(`ALTER TABLE cuentas_cobrar ADD COLUMN almacen_id INTEGER DEFAULT 0`) } catch {}
   db.exec(`CREATE TABLE IF NOT EXISTS cuentas_pagar (id INTEGER PRIMARY KEY AUTOINCREMENT,no_factura TEXT DEFAULT '',cod_proveedor TEXT DEFAULT '',nombre_proveedor TEXT DEFAULT '',telefono_proveedor TEXT DEFAULT '',total REAL DEFAULT 0,abonado REAL DEFAULT 0,saldo REAL DEFAULT 0,fecha_compra TEXT DEFAULT '',fecha_vencimiento TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVA',notas TEXT DEFAULT '',pagos TEXT DEFAULT '[]',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS bitacora (id INTEGER PRIMARY KEY AUTOINCREMENT,tabla TEXT DEFAULT '',registro_id INTEGER DEFAULT 0,accion TEXT DEFAULT '',usuario TEXT DEFAULT '',datos_nuevos TEXT DEFAULT '',datos_anteriores TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.exec(`CREATE TABLE IF NOT EXISTS auditoria_acciones (id INTEGER PRIMARY KEY AUTOINCREMENT,modulo TEXT DEFAULT '',accion TEXT DEFAULT '',entidad TEXT DEFAULT '',entidad_id INTEGER DEFAULT 0,referencia TEXT DEFAULT '',usuario TEXT DEFAULT '',detalle TEXT DEFAULT '',resultado TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS configuracion (id INTEGER PRIMARY KEY AUTOINCREMENT,clave TEXT UNIQUE NOT NULL,valor TEXT DEFAULT '',tipo TEXT DEFAULT 'string',categoria TEXT DEFAULT 'general',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.exec(`CREATE TABLE IF NOT EXISTS facturas_ecf (id INTEGER PRIMARY KEY AUTOINCREMENT,factura_id INTEGER NOT NULL,no_factura TEXT DEFAULT '',ncf TEXT DEFAULT '',tipo_comprobante TEXT DEFAULT '',alanube_id TEXT DEFAULT '',alanube_id_compania TEXT DEFAULT '',document_number TEXT DEFAULT '',document_stamp_url TEXT DEFAULT '',security_code TEXT DEFAULT '',status TEXT DEFAULT 'PENDIENTE',legal_status TEXT DEFAULT '',sequence_consumed INTEGER DEFAULT 0,pdf_url TEXT DEFAULT '',xml_url TEXT DEFAULT '',resume_xml_url TEXT DEFAULT '',endpoint TEXT DEFAULT '',http_status INTEGER DEFAULT 0,payload TEXT DEFAULT '',response TEXT DEFAULT '',error TEXT DEFAULT '',enviado_at TEXT DEFAULT '',aceptado_at TEXT DEFAULT '',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (factura_id) REFERENCES facturas(id))`)
+  try { db!.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_facturas_ecf_factura_id ON facturas_ecf(factura_id)`) } catch {}
+  try {
+    const rows = db!.prepare(`SELECT id, no_factura, ncf, tipo_comprobante, comprobante, otro FROM facturas WHERE (tipo_comprobante LIKE 'E%' OR comprobante LIKE 'E%' OR otro LIKE '%alanube_response%')`).all() as any[]
+    const exists = db!.prepare(`SELECT id FROM facturas_ecf WHERE factura_id = ? LIMIT 1`)
+    const insertEcf = db!.prepare(`INSERT INTO facturas_ecf (factura_id,no_factura,ncf,tipo_comprobante,alanube_id,alanube_id_compania,document_number,document_stamp_url,security_code,status,legal_status,sequence_consumed,pdf_url,xml_url,resume_xml_url,endpoint,http_status,payload,response,error,enviado_at,aceptado_at,uid,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    const now = new Date().toISOString()
+    for (const row of rows) {
+      if (exists.get(row.id)) continue
+      let otro: any = {}
+      try { otro = row.otro ? JSON.parse(row.otro) : {} } catch {}
+      const response = otro?.alanube_response || {}
+      const legalStatus = String(response?.legalStatus || response?.legal_status || '').toUpperCase()
+      const status = legalStatus === 'ACCEPTED' ? 'ACEPTADA' : legalStatus === 'REJECTED' ? 'RECHAZADA' : String(response?.status || (otro?.alanube_error ? 'ERROR_ENVIO' : 'PENDIENTE')).toUpperCase()
+      insertEcf.run(
+        row.id,
+        row.no_factura || '',
+        row.ncf || '',
+        row.tipo_comprobante || row.comprobante || '',
+        response?.id || '',
+        otro?.alanube_id_compania || '',
+        response?.documentNumber || row.ncf || '',
+        response?.documentStampUrl || response?.document_stamp_url || '',
+        response?.securityCode || response?.security_code || '',
+        status,
+        legalStatus,
+        response?.sequenceConsumed ? 1 : 0,
+        response?.pdf || '',
+        response?.xml || '',
+        response?.resumeXml || '',
+        otro?.alanube_endpoint || '',
+        Number(otro?.alanube_status || 0),
+        JSON.stringify(otro?.alanube_payload || {}),
+        JSON.stringify(response || {}),
+        otro?.alanube_error || '',
+        otro?.alanube_enviado_at || '',
+        legalStatus === 'ACCEPTED' ? (response?.signatureDate || now) : '',
+        generarUid(),
+        now,
+        now
+      )
+    }
+  } catch {}
   db.exec(`CREATE TABLE IF NOT EXISTS plantillas_etiquetas (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,ancho REAL DEFAULT 50,alto REAL DEFAULT 30,elementos TEXT DEFAULT '[]',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS licencia (id INTEGER PRIMARY KEY AUTOINCREMENT,licencia_equipo TEXT,licencia_cifrada TEXT,estado TEXT DEFAULT 'sin_verificar',nombre_empresa TEXT,fecha_inicio_prueba TEXT,fecha_vencimiento TEXT,ultima_verificacion TEXT,api_key TEXT,datos_servidor TEXT,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`INSERT OR IGNORE INTO licencia (id, estado) VALUES (1, 'sin_verificar')`)
@@ -392,17 +436,18 @@ function initDatabase(): void {
   if (count.c === 0) {
     const insert = db!.prepare(`INSERT INTO comprobantes_fiscales (tipo, nombre, descripcion, prefijo, secuencia_actual, secuencia_desde, secuencia_hasta, activo, es_default) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     insert.run('SIN', 'Sin Comprobante', 'Venta sin comprobante fiscal', '', 1, 1, 99999999, 1, 0)
-    insert.run('E31', 'Factura de Credito Fiscal', 'Ventas a contribuyentes con RNC', 'E31', 1, 1, 99999999, 1, 0)
-    insert.run('E32', 'Factura de Consumo', 'Ventas a consumidores finales', 'E32', 1, 1, 99999999, 1, 1)
-    insert.run('E33', 'Nota de Debito', 'Cargos adicionales', 'E33', 1, 1, 99999999, 1, 0)
-    insert.run('E34', 'Nota de Credito', 'Devoluciones y descuentos', 'E34', 1, 1, 99999999, 1, 0)
-    insert.run('E41', 'Compras', 'Comprobante de compras', 'E41', 1, 1, 99999999, 1, 0)
-    insert.run('E43', 'Gastos Menores', 'Gastos menores sin comprobante', 'E43', 1, 1, 99999999, 1, 0)
-    insert.run('E44', 'Regimenes Especiales', 'Ventas a zonas francas', 'E44', 1, 1, 99999999, 1, 0)
-    insert.run('E45', 'Gubernamental', 'Ventas al gobierno', 'E45', 1, 1, 99999999, 1, 0)
-    insert.run('E46', 'Exportacion', 'Ventas al exterior', 'E46', 1, 1, 99999999, 1, 0)
-    insert.run('E47', 'Pagos al Exterior', 'Pagos a proveedores extranjeros', 'E47', 1, 1, 99999999, 1, 0)
+    insert.run('E31', 'Factura de Credito Fiscal', 'Ventas a contribuyentes con RNC', 'E31', 1, 1, 9999999999, 1, 0)
+    insert.run('E32', 'Factura de Consumo', 'Ventas a consumidores finales', 'E32', 1, 1, 9999999999, 1, 1)
+    insert.run('E33', 'Nota de Debito', 'Cargos adicionales', 'E33', 1, 1, 9999999999, 1, 0)
+    insert.run('E34', 'Nota de Credito', 'Devoluciones y descuentos', 'E34', 1, 1, 9999999999, 1, 0)
+    insert.run('E41', 'Compras', 'Comprobante de compras', 'E41', 1, 1, 9999999999, 1, 0)
+    insert.run('E43', 'Gastos Menores', 'Gastos menores sin comprobante', 'E43', 1, 1, 9999999999, 1, 0)
+    insert.run('E44', 'Regimenes Especiales', 'Ventas a zonas francas', 'E44', 1, 1, 9999999999, 1, 0)
+    insert.run('E45', 'Gubernamental', 'Ventas al gobierno', 'E45', 1, 1, 9999999999, 1, 0)
+    insert.run('E46', 'Exportacion', 'Ventas al exterior', 'E46', 1, 1, 9999999999, 1, 0)
+    insert.run('E47', 'Pagos al Exterior', 'Pagos a proveedores extranjeros', 'E47', 1, 1, 9999999999, 1, 0)
   }
+  try { db!.exec(`UPDATE comprobantes_fiscales SET secuencia_hasta = 9999999999 WHERE tipo LIKE 'E%' AND secuencia_hasta = 99999999`) } catch {}
   db.exec(`CREATE TABLE IF NOT EXISTS gastos_fijos (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,monto REAL DEFAULT 0,dia_pago INTEGER DEFAULT 1,categoria TEXT DEFAULT '',periodicidad TEXT DEFAULT 'MENSUAL',estado TEXT DEFAULT 'ACTIVO',descripcion TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS sync_deletes (id INTEGER PRIMARY KEY AUTOINCREMENT,tabla TEXT NOT NULL,uid TEXT NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS tmcloud_config (id INTEGER PRIMARY KEY AUTOINCREMENT,url TEXT NOT NULL DEFAULT '',public_key TEXT NOT NULL DEFAULT '',secret_key TEXT NOT NULL DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
@@ -439,6 +484,26 @@ function registrarBitacora(tabla: string, registroId: number, accion: string, us
 }
 
 function setupIpcHandlers(): void {
+  ipcMain.handle('auditoria:registrar', (_event, payload: any = {}) => {
+    try {
+      const now = new Date().toISOString()
+      db!.prepare(`INSERT INTO auditoria_acciones (modulo,accion,entidad,entidad_id,referencia,usuario,detalle,resultado,created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        String(payload.modulo || ''),
+        String(payload.accion || ''),
+        String(payload.entidad || ''),
+        Number(payload.entidad_id || 0),
+        String(payload.referencia || ''),
+        String(payload.usuario || ''),
+        typeof payload.detalle === 'string' ? payload.detalle : JSON.stringify(payload.detalle || {}),
+        String(payload.resultado || ''),
+        now
+      )
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
   ipcMain.handle('db:getAll', (_event, tabla: string) => {
     try {
       const rows = db!.prepare(`SELECT * FROM "${tabla}" ORDER BY id DESC`).all()
@@ -514,15 +579,41 @@ function setupIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('db:delete', (_event, tabla: string, id: number, usuario?: string) => {
+  async function pushCloudDelete(tabla: string, uid: string): Promise<boolean> {
+    try {
+      const cfg = db!.prepare(`SELECT url, secret_key, public_key FROM tmcloud_config WHERE id = 1`).get() as any
+      const base = String(cfg?.url || '').replace(/\/+$/, '')
+      const key = String(cfg?.secret_key || cfg?.public_key || '').trim()
+      if (!base || !key || !uid || !/^https?:\/\//i.test(base)) return false
+      const res = await fetch(`${base}/${encodeURIComponent(tabla)}/${encodeURIComponent(uid)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${key}` },
+      })
+      return res.ok || res.status === 404
+    } catch {
+      return false
+    }
+  }
+
+  ipcMain.handle('db:delete', async (_event, tabla: string, id: number, usuario?: string) => {
     try {
       const oldData = db!.prepare(`SELECT * FROM "${tabla}" WHERE id = ?`).get(id) as Record<string, any> || {}
       const uid = oldData?.uid || ''
       db!.prepare(`DELETE FROM "${tabla}" WHERE id = ?`).run(id)
       if (tabla !== 'bitacora' && tabla !== 'sync_deletes') {
         registrarBitacora(tabla, id, 'DELETE', usuario || '', null, oldData)
+        let queuedId: number | null = null
         if (uid) {
-          try { db!.prepare(`INSERT INTO sync_deletes (tabla, uid) VALUES (?, ?)`).run(tabla, uid) } catch {}
+          try {
+            const queued = db!.prepare(`INSERT INTO sync_deletes (tabla, uid) VALUES (?, ?)`).run(tabla, uid)
+            queuedId = Number(queued.lastInsertRowid)
+          } catch {}
+          if (await pushCloudDelete(tabla, String(uid))) {
+            try {
+              if (queuedId) db!.prepare(`DELETE FROM sync_deletes WHERE id = ?`).run(queuedId)
+              else db!.prepare(`DELETE FROM sync_deletes WHERE tabla = ? AND uid = ?`).run(tabla, uid)
+            } catch {}
+          }
         }
       }
       return { success: true }
@@ -666,7 +757,7 @@ function setupIpcHandlers(): void {
     if (url || publicKey || secretKey) {
       const row = db!.prepare(`SELECT id FROM tmcloud_config WHERE id = 1`).get() as any
       if (row) {
-        db!.prepare(`UPDATE tmcloud_config SET url = COALESCE(NULLIF(?, ''), url), public_key = COALESCE(NULLIF(?, ''), public_key), secret_key = COALESCE(NULLIF(?, ''), secret_key), updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(url, publicKey, secretKey)
+        db!.prepare(`UPDATE tmcloud_config SET url = COALESCE(NULLIF(url, ''), NULLIF(?, ''), ''), public_key = COALESCE(NULLIF(public_key, ''), NULLIF(?, ''), ''), secret_key = COALESCE(NULLIF(secret_key, ''), NULLIF(?, ''), ''), updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(url, publicKey, secretKey)
       } else {
         db!.prepare(`INSERT INTO tmcloud_config (id, url, public_key, secret_key) VALUES (1, ?, ?, ?)`).run(url, publicKey, secretKey)
       }
@@ -683,7 +774,7 @@ function setupIpcHandlers(): void {
     if (url || publicKey || roleKey) {
       const row = db!.prepare(`SELECT id FROM tmcloud_config WHERE id = 1`).get() as any
       if (row) {
-        db!.prepare(`UPDATE tmcloud_config SET url = COALESCE(NULLIF(?, ''), url), public_key = COALESCE(NULLIF(?, ''), public_key), secret_key = COALESCE(NULLIF(?, ''), secret_key), updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(url, publicKey, roleKey)
+        db!.prepare(`UPDATE tmcloud_config SET url = COALESCE(NULLIF(url, ''), NULLIF(?, ''), ''), public_key = COALESCE(NULLIF(public_key, ''), NULLIF(?, ''), ''), secret_key = COALESCE(NULLIF(secret_key, ''), NULLIF(?, ''), ''), updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(url, publicKey, roleKey)
       } else {
         db!.prepare(`INSERT INTO tmcloud_config (id, url, public_key, secret_key) VALUES (1, ?, ?, ?)`).run(url, publicKey, roleKey)
       }
@@ -1495,6 +1586,7 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('tmcloud:getConfig', async () => {
     try {
+      db!.prepare(`INSERT OR IGNORE INTO tmcloud_config (id, url, public_key, secret_key) VALUES (1, '', '', '')`).run()
       const row = db!.prepare(`SELECT url, public_key, secret_key FROM tmcloud_config WHERE id = 1`).get() as any
       return { success: true, data: row || { url: '', public_key: '', secret_key: '' } }
     } catch (e: any) { return { success: false, error: e.message } }
@@ -1502,11 +1594,16 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('tmcloud:saveConfig', async (_event, payload: { url: string; public_key: string; secret_key: string }) => {
     try {
-      db!.prepare(`UPDATE tmcloud_config SET url = ?, public_key = ?, secret_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(
-        payload.url || '', payload.public_key || '', payload.secret_key || ''
+      const url = String(payload.url || '').trim().replace(/\/+$/, '')
+      const publicKey = String(payload.public_key || '').trim()
+      const secretKey = String(payload.secret_key || '').trim()
+      db!.prepare(`INSERT INTO tmcloud_config (id, url, public_key, secret_key, created_at, updated_at)
+        VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET url = excluded.url, public_key = excluded.public_key, secret_key = excluded.secret_key, updated_at = CURRENT_TIMESTAMP`).run(
+        url, publicKey, secretKey
       )
       db!.prepare(`DELETE FROM configuracion WHERE clave IN ('supabase_url', 'supabase_anon_key', 'supabase_service_role', 'tmcloud_url', 'tmcloud_key', 'tmcloud_service_key')`).run()
-      return { success: true }
+      return { success: true, data: { url, public_key: publicKey, secret_key: secretKey } }
     } catch (e: any) { return { success: false, error: e.message } }
   })
 

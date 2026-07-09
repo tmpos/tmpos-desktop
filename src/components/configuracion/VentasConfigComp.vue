@@ -38,6 +38,30 @@ function setImpuestoIncluido(valor: 0 | 1 | 2) {
   form.value.impuesto_incluido = valor
 }
 
+function formatSecuencia(comp: any): string {
+  const tipo = String(comp?.tipo || '').toUpperCase()
+  return String(comp?.secuencia_actual || 1).padStart(tipo.startsWith('E') ? 10 : 8, '0')
+}
+
+function usuarioAuditoria(): string {
+  try { return localStorage.getItem('mr_user_usuario') || 'CONFIG' } catch { return 'CONFIG' }
+}
+
+async function registrarAuditoria(accion: string, detalle: any = {}, resultado = 'OK') {
+  try {
+    await window.electron.invoke('auditoria:registrar', {
+      modulo: 'configuracion',
+      accion,
+      entidad: 'empresa',
+      entidad_id: Number(detalle?.id || 0),
+      referencia: 'ventas',
+      usuario: usuarioAuditoria(),
+      detalle,
+      resultado,
+    })
+  } catch (_) {}
+}
+
 async function cargar() {
   try {
     const [resEmp, resComp] = await Promise.all([
@@ -68,9 +92,17 @@ async function guardar() {
         moneda: form.value.moneda,
         tipo_documento_defecto: form.value.tipo_documento_defecto,
       })
+      await registrarAuditoria('guardar_config_ventas', {
+        id: e.id,
+        impuesto: form.value.impuesto,
+        impuesto_incluido: form.value.impuesto_incluido,
+        moneda: form.value.moneda,
+        tipo_documento_defecto: form.value.tipo_documento_defecto,
+      })
       toast.add({ severity: 'success', summary: 'Guardado', detail: 'Configuracion de ventas actualizada', life: 2000 })
     }
   } catch (error: any) {
+    await registrarAuditoria('guardar_config_ventas', { error: error?.message || 'Error' }, 'ERROR')
     toast.add({ severity: 'error', summary: 'Error', detail: error.message, life: 3000 })
   } finally {
     guardando.value = false
@@ -163,7 +195,7 @@ onMounted(cargar)
                 <i class="pi pi-check-circle text-green-500 text-xs"></i>
                 <span class="font-medium">{{ c.tipo }}</span>
                 <span class="text-surface-400">- {{ c.nombre }}</span>
-                <span class="text-xs text-surface-400 font-mono ml-auto">{{ c.prefijo || c.tipo }}{{ String(c.secuencia_actual || 1).padStart(8, '0') }}</span>
+                <span class="text-xs text-surface-400 font-mono ml-auto">{{ c.prefijo || c.tipo }}{{ formatSecuencia(c) }}</span>
               </div>
               <p v-if="!comprobantes.find(c => c.es_default)" class="text-surface-400 text-xs">No hay comprobante fiscal por defecto. Configurelo en <strong>Comprobantes Fiscales</strong>.</p>
             </div>

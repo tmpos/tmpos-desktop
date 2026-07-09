@@ -19,6 +19,7 @@ const route = useRoute()
 const toast = useToast()
 const facturaId = computed(() => Number(route.params.id) || null)
 const guardando = ref(false)
+const facturaBloqueadaFiscal = ref(false)
 const todosIds = ref<number[]>([])
 const indiceActual = computed(() => {
   const idx = todosIds.value.indexOf(Number(facturaId.value))
@@ -31,6 +32,25 @@ function navegar(id: number | null) {
 
 const ticketPrintRef = ref<any>(null)
 const facturaPdfRef = ref<any>(null)
+
+function usuarioAuditoria(): string {
+  try { return localStorage.getItem('mr_user_usuario') || 'POS' } catch { return 'POS' }
+}
+
+async function registrarAuditoria(accion: string, detalle: any = {}, resultado = 'OK') {
+  try {
+    await window.electron.invoke('auditoria:registrar', {
+      modulo: 'ventas',
+      accion,
+      entidad: 'facturas',
+      entidad_id: Number(facturaId.value || 0),
+      referencia: form.value.no_factura || '',
+      usuario: usuarioAuditoria(),
+      detalle,
+      resultado,
+    })
+  } catch (_) {}
+}
 
 async function sincronizarFactura(datos: any) {
   try {
@@ -80,10 +100,12 @@ async function sincronizarFactura(datos: any) {
 }
 
 function imprimirTicket() {
+  registrarAuditoria('imprimir_ticket_edicion')
   ticketPrintRef.value?.printTicket(form.value)
 }
 
 function imprimirPdf() {
+  registrarAuditoria('generar_pdf_edicion')
   facturaPdfRef.value?.printFactura(form.value)
 }
 
@@ -129,6 +151,43 @@ const form = ref({
   mes: '', year: '', total_institucion: 0, total_cliente: 0, identificadordb: '',
 })
 
+function getAlanubeOtroFactura(factura: any): any {
+  try {
+    const otro = typeof factura?.otro === 'string' ? JSON.parse(factura.otro || '{}') : factura?.otro || {}
+    return otro || {}
+  } catch {
+    return {}
+  }
+}
+
+function esFacturaElectronicaAceptadaLocal(factura: any): boolean {
+  const tipo = String(factura?.tipo_comprobante || factura?.comprobante || '').toUpperCase()
+  const otro = getAlanubeOtroFactura(factura)
+  const response = otro?.alanube_response || {}
+  const legalStatus = String(
+    factura?.legal_status ||
+    factura?.alanube_legal_status ||
+    factura?.ecf_legal_status ||
+    otro?.legal_status ||
+    response?.legalStatus ||
+    response?.legal_status ||
+    ''
+  ).toUpperCase()
+  return tipo.startsWith('E') && legalStatus === 'ACCEPTED'
+}
+
+async function esFacturaElectronicaAceptada(factura: any): Promise<boolean> {
+  if (!factura?.id) return false
+  if (esFacturaElectronicaAceptadaLocal(factura)) return true
+  try {
+    const res = await window.db.getWhere('facturas_ecf', 'factura_id = ?', [factura.id])
+    const ecf = res?.success && Array.isArray(res.data) ? res.data[0] : null
+    return String(ecf?.legal_status || '').toUpperCase() === 'ACCEPTED'
+  } catch {
+    return false
+  }
+}
+
 function parseDate(val: any): Date {
   if (!val) return new Date()
   const d = new Date(val)
@@ -143,6 +202,7 @@ function dateToStr(d: any): string {
 }
 
 async function cargarDatos() {
+  facturaBloqueadaFiscal.value = false
   const res = await window.db.getAll('facturas')
   if (res.success && res.data) {
     todosIds.value = res.data.map((r: any) => r.id).sort((a: number, b: number) => a - b)
@@ -166,12 +226,32 @@ async function cargarDatos() {
           identificadordb: f.identificadordb || '', total_institucion: f.total_institucion || 0,
           total_cliente: f.total_cliente || 0,
         }
+        facturaBloqueadaFiscal.value = await esFacturaElectronicaAceptada(f)
+        if (facturaBloqueadaFiscal.value) {
+          await registrarAuditoria('abrir_edicion_bloqueada', { motivo: 'DGII_ACCEPTED' }, 'BLOQUEADO')
+          toast.add({
+            severity: 'info',
+            summary: 'Solo lectura',
+            detail: 'Esta factura electronica fue aceptada por DGII y no puede modificarse.',
+            life: 4500,
+          })
+        }
       }
     }
   }
 }
 
 async function guardar() {
+  if (facturaBloqueadaFiscal.value) {
+    await registrarAuditoria('guardar_edicion_bloqueada', { motivo: 'DGII_ACCEPTED' }, 'BLOQUEADO')
+    toast.add({
+      severity: 'warn',
+      summary: 'Factura fiscal bloqueada',
+      detail: 'Esta factura electronica fue aceptada por DGII. Usa reimpresion o nota de credito.',
+      life: 4500,
+    })
+    return
+  }
   if (!form.value.no_factura.trim() && !form.value.nombre_cliente.trim()) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'No. factura o nombre del cliente requerido', life: 3000 })
     return
@@ -199,9 +279,11 @@ async function guardar() {
     }
     const res = await window.db.update('facturas', facturaId.value!, data)
     if (res.success) {
+      await registrarAuditoria('editar_factura', { campos: Object.keys(data) }, 'OK')
       toast.add({ severity: 'success', summary: 'Actualizada', detail: 'Factura actualizada', life: 3000 })
       await sincronizarFactura(data)
     } else {
+      await registrarAuditoria('editar_factura', { error: res.error || '' }, 'ERROR')
       toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo actualizar', life: 3000 })
     }
   } catch (e: any) {
@@ -230,81 +312,84 @@ onMounted(cargarDatos)
         <Button icon="pi pi-angle-double-right" severity="secondary" text rounded size="small" :disabled="indiceActual >= todosIds.length - 1" @click="navegar(todosIds[todosIds.length - 1])" v-tooltip="'Ultima'" />
         <Button icon="pi pi-print" severity="info" text rounded size="small" @click="imprimirTicket" v-tooltip="'Imprimir ticket'" />
         <Button icon="pi pi-file-pdf" severity="danger" text rounded size="small" @click="imprimirPdf" v-tooltip="'Ver PDF'" />
-        <Button label="Actualizar" icon="pi pi-check" :loading="guardando" @click="guardar" class="ml-2" />
+        <Button label="Actualizar" icon="pi pi-check" :loading="guardando" :disabled="facturaBloqueadaFiscal" @click="guardar" class="ml-2" />
       </div>
+    </div>
+    <div v-if="facturaBloqueadaFiscal" class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+      Esta factura electronica fue aceptada por DGII. Solo puede reimprimirse o corregirse con nota de credito.
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">No. Factura</label>
-        <InputText v-model="form.no_factura" placeholder="No. factura" fluid />
+        <InputText v-model="form.no_factura" placeholder="No. factura" :disabled="facturaBloqueadaFiscal" fluid />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Tipo Factura</label>
-        <Select v-model="form.tipo_factura" :options="tiposFactura" optionLabel="label" optionValue="value" fluid />
+        <Select v-model="form.tipo_factura" :options="tiposFactura" optionLabel="label" optionValue="value" :disabled="facturaBloqueadaFiscal" fluid />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Comprobante</label>
-        <InputText v-model="form.comprobante" placeholder="NCF" fluid />
+        <InputText v-model="form.comprobante" placeholder="NCF" :disabled="facturaBloqueadaFiscal" fluid />
       </div>
       <div class="flex flex-col gap-1 md:col-span-3">
         <label class="font-semibold text-sm">Cliente</label>
-        <InputText v-model="form.nombre_cliente" placeholder="Nombre del cliente" fluid class="uppercase" style="text-transform: uppercase;" />
+        <InputText v-model="form.nombre_cliente" placeholder="Nombre del cliente" :disabled="facturaBloqueadaFiscal" fluid class="uppercase" style="text-transform: uppercase;" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Codigo Cliente</label>
-        <InputText v-model="form.cod_cliente" placeholder="RNC / Cedula" fluid />
+        <InputText v-model="form.cod_cliente" placeholder="RNC / Cedula" :disabled="facturaBloqueadaFiscal" fluid />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Telefono</label>
-        <InputText v-model="form.telefono_cliente" placeholder="Telefono" fluid />
+        <InputText v-model="form.telefono_cliente" placeholder="Telefono" :disabled="facturaBloqueadaFiscal" fluid />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Vendedor</label>
-        <InputText v-model="form.vendedor" placeholder="Vendedor" fluid class="uppercase" style="text-transform: uppercase;" />
+        <InputText v-model="form.vendedor" placeholder="Vendedor" :disabled="facturaBloqueadaFiscal" fluid class="uppercase" style="text-transform: uppercase;" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Metodo Pago</label>
-        <Select v-model="form.metodo_pago" :options="metodosPago" optionLabel="label" optionValue="value" fluid />
+        <Select v-model="form.metodo_pago" :options="metodosPago" optionLabel="label" optionValue="value" :disabled="facturaBloqueadaFiscal" fluid />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Estado</label>
-        <Select v-model="form.estado_factura" :options="estadosFactura" optionLabel="label" optionValue="value" fluid />
+        <Select v-model="form.estado_factura" :options="estadosFactura" optionLabel="label" optionValue="value" :disabled="facturaBloqueadaFiscal" fluid />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Efectivo</label>
-        <InputNumber v-model="form.efectivo" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.efectivo" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Tarjeta</label>
-        <InputNumber v-model="form.tarjeta" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.tarjeta" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Transferencia</label>
-        <InputNumber v-model="form.transferencia" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.transferencia" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Cheque</label>
-        <InputNumber v-model="form.cheque" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.cheque" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Subtotal</label>
-        <InputNumber v-model="form.subtotal" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.subtotal" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Total</label>
-        <InputNumber v-model="form.total" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.total" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Impuesto</label>
-        <InputNumber v-model="form.impuesto" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.impuesto" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Descuento</label>
-        <InputNumber v-model="form.descuento" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.descuento" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Ganancia</label>
-        <InputNumber v-model="form.ganancia" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.ganancia" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
       </div>
     </div>
 
@@ -326,7 +411,7 @@ onMounted(cargarDatos)
 
       <div class="flex flex-col gap-1 md:col-span-2">
         <label class="font-semibold text-sm">Nota</label>
-        <textarea v-model="form.nota" class="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm outline-none focus:ring-2 focus:ring-primary-500 resize-none" rows="2" />
+        <textarea v-model="form.nota" :disabled="facturaBloqueadaFiscal" class="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm outline-none focus:ring-2 focus:ring-primary-500 resize-none disabled:opacity-60" rows="2" />
       </div>
 
     <div class="flex justify-end gap-2 pt-4">

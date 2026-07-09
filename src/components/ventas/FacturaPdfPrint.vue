@@ -46,6 +46,28 @@ function toNumber(value: any, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+function normalizarAlanubeData(factura: any, ecf: any = {}) {
+  const otro = parseJson(factura?.otro, {})
+  const response = otro?.alanube_response || factura?.alanube_response || {}
+  return {
+    documentStampUrl: ecf?.document_stamp_url || factura?.document_stamp_url || factura?.documentStampUrl || otro?.documentStampUrl || otro?.document_stamp_url || response?.documentStampUrl || response?.document_stamp_url || '',
+    securityCode: ecf?.security_code || factura?.codigo_seguridad || factura?.securityCode || otro?.securityCode || otro?.security_code || response?.securityCode || response?.security_code || '',
+    legalStatus: ecf?.legal_status || factura?.alanube_legal_status || response?.legalStatus || otro?.legalStatus || '',
+    status: ecf?.status || factura?.alanube_status || response?.status || otro?.status || '',
+  }
+}
+
+async function obtenerAlanubeData(factura: any) {
+  if (factura?.id) {
+    try {
+      const res = await window.db.getWhere('facturas_ecf', 'factura_id = ?', [factura.id])
+      const ecf = res?.success && Array.isArray(res.data) ? res.data[0] : null
+      if (ecf) return normalizarAlanubeData(factura, ecf)
+    } catch (_) {}
+  }
+  return normalizarAlanubeData(factura)
+}
+
 function formatoMoneda(value: any): string {
   return `RD$ ${toNumber(value).toLocaleString('es-DO', {
     minimumFractionDigits: 2,
@@ -126,12 +148,14 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
   const link = datosJSON?.VITE_LINKURL || ''
   const empresa = datosEmpresa?.empresa || datosEmpresa?.datosEmpresa?.empresa || await cargarEmpresa()
   const clienteData = cliente || await cargarCliente(factura)
-  const productos = parseJson(factura.productos, [])
+  const productos = parseJson(factura.productos, Array.isArray(factura.items) ? factura.items : [])
   const logoEmpresa = normalizarRutaImagen(empresa?.logoprinter || empresa?.logo, link)
 
-  let qrCodeData = ''
+  const alanubeData = await obtenerAlanubeData(factura)
+  const qrValue = alanubeData.documentStampUrl || `${link || 'https://tmposrd.com'}/receipt/factura?factura=${factura.no_factura || ''}`
+  let qrCodeData = factura.qr || ''
   try {
-    qrCodeData = await QRCode.toDataURL(`${link || 'https://tmposrd.com'}/receipt/factura?factura=${factura.no_factura || ''}`)
+    if (!qrCodeData) qrCodeData = await QRCode.toDataURL(qrValue)
   } catch (_) {}
 
   const productosProcesados = Array.isArray(productos) ? productos.map((producto: any) => {
@@ -239,7 +263,7 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
         <table>
           <tr><td><strong>Fecha</strong></td><td class="text-right">${factura.fecha_emision || ''}</td></tr>
           <tr><td><strong>${esCotizacion(factura) ? 'Cotizacion #' : 'Factura #'}</strong></td><td class="text-right">${factura.no_factura || ''}</td></tr>
-          ${esCotizacion(factura) ? '' : `<tr><td><strong>NCF</strong></td><td class="text-right">${factura.comprobante || factura.ncf || ''}</td></tr>`}
+          ${esCotizacion(factura) ? '' : `<tr><td><strong>NCF</strong></td><td class="text-right">${factura.ncf || factura.comprobante || ''}</td></tr>`}
         </table>
         <div class="invoice-title">${(() => {
           if (esCotizacion(factura)) return `COTIZACION #${factura.no_factura || ''}`
@@ -259,7 +283,10 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
         <p><strong>DIRECCION:</strong> ${clienteData?.direccion || factura.direccion_cliente || 'N/A'}</p>
         <p><strong>METODO DE PAGO:</strong> ${formatearMetodoPago(factura)}</p>
       </div>
-      <div class="qr">${qrCodeData ? `<img src="${qrCodeData}" alt="QR">` : ''}</div>
+      <div class="qr">
+        ${qrCodeData ? `<img src="${qrCodeData}" alt="QR">` : ''}
+        ${alanubeData.securityCode ? `<div style="font-size:9px;font-weight:700;text-align:center;margin-top:4px">Codigo Seguridad: ${alanubeData.securityCode}</div>` : ''}
+      </div>
     </div>
 
     <table class="products">

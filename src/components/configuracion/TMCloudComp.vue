@@ -20,6 +20,9 @@
         <span v-else class="flex items-center gap-1.5 text-xs font-medium text-red-500 bg-red-50 dark:bg-red-900/30 px-2.5 py-1 rounded-full">
           <span class="w-1.5 h-1.5 bg-red-500 rounded-full"></span> Desconectado
         </span>
+        <span v-if="realtimeConnected" class="flex items-center gap-1.5 text-xs font-medium text-cyan-600 bg-cyan-50 dark:bg-cyan-900/30 px-2.5 py-1 rounded-full">
+          <span class="w-1.5 h-1.5 bg-cyan-500 rounded-full animate-pulse"></span> Realtime
+        </span>
       </div>
     </div>
 
@@ -112,7 +115,7 @@
       <div class="flex items-center justify-between pt-2 border-t border-surface-100 dark:border-surface-700">
         <div>
           <div class="text-sm font-medium text-surface-700 dark:text-surface-200">Auto Sync</div>
-          <div class="text-xs text-surface-400 mt-0.5">Cada {{ form.interval }}s</div>
+          <div class="text-xs text-surface-400 mt-0.5">Realtime activo; respaldo cada {{ form.interval }}s</div>
         </div>
         <ToggleSwitch v-model="form.autoSync" />
       </div>
@@ -212,9 +215,11 @@ const syncChangesLoading = ref(false)
 const downloadAllLoading = ref(false)
 const estado = ref<{ connected: boolean; error?: string; stats?: any } | null>(null)
 const syncStatus = ref<any>(null)
+const realtimeConnected = ref(false)
 
 tmSync.setStatusCallback((s) => {
   syncStatus.value = s
+  if (typeof s.realtime === 'boolean') realtimeConnected.value = s.realtime
 })
 
 onMounted(async () => {
@@ -226,6 +231,7 @@ onMounted(async () => {
     try {
       tmc.init(config)
       const stats = await tmc.testConnection(config.url, config.key)
+      realtimeConnected.value = await tmSync.startRealtime()
       estado.value = { connected: true, stats }
     } catch (e: any) {
       estado.value = { connected: false, error: e.message }
@@ -239,6 +245,10 @@ onMounted(async () => {
       form.mode = getVal('tm_sync_mode') || 'ambos'
       form.autoSync = getVal('tm_auto_sync') === '1'
       form.interval = parseInt(getVal('tm_sync_interval') || '30', 10)
+      if (form.mode === 'offline') {
+        tmSync.stopRealtime()
+        realtimeConnected.value = false
+      }
     }
   } catch {}
 })
@@ -249,7 +259,10 @@ async function guardar() {
     if (!form.serviceKey.trim()) throw new Error('La Secret Key es requerida para sincronizar y crear tablas')
     const stats = await tmc.testConnection(form.url, form.key)
     tmc.init({ url: form.url.trim(), key: form.key.trim(), serviceKey: form.serviceKey.trim() })
-    await tmc.saveConfig(form.url, form.key, form.serviceKey)
+    const saved = await tmc.saveConfig(form.url, form.key, form.serviceKey)
+    form.url = saved.url
+    form.key = saved.key
+    form.serviceKey = saved.serviceKey
     const upsert = async (clave: string, valor: string) => {
       const res = await (window as any).db.getAll('configuracion')
       if (res.success && res.data) {
@@ -263,11 +276,16 @@ async function guardar() {
     await upsert('tm_sync_interval', String(form.interval))
 
     tmSync.setSyncMode(form.mode as any)
+    if (form.mode === 'offline') {
+      tmSync.stopRealtime()
+      realtimeConnected.value = false
+    }
 
-    if (form.autoSync) {
+    if (form.autoSync && form.mode !== 'offline') {
       await tmSync.startAutoSync(form.interval * 1000)
     } else {
       tmSync.stopAutoSync()
+      if (form.mode !== 'offline') realtimeConnected.value = await tmSync.startRealtime()
     }
     estado.value = { connected: true, stats }
   } catch (e: any) {
@@ -282,6 +300,7 @@ async function probarConexion() {
   try {
     const stats = await tmc.testConnection(form.url, form.key)
     tmc.init({ url: form.url.trim(), key: form.key.trim(), serviceKey: form.serviceKey.trim() })
+    realtimeConnected.value = await tmSync.startRealtime()
     estado.value = { connected: true, stats }
   } catch (e: any) {
     estado.value = { connected: false, error: e.message }

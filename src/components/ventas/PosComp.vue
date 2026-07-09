@@ -6,6 +6,7 @@ import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
+import ToggleSwitch from 'primevue/toggleswitch'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import IconField from 'primevue/iconfield'
@@ -18,6 +19,7 @@ import JsBarcode from 'jsbarcode'
 import html2canvas from 'html2canvas'
 
 import { envioElectron, peticionesFetch, encryptarPassword } from '@/funciones/funciones.js'
+import { getImageUrl } from '@/services/tmCloudClient'
 import NotasComp from '@/components/ventas/NotasComp.vue'
 import FacturaPdfPrint from '@/components/ventas/FacturaPdfPrint.vue'
 import TicketCuentaCobrarPrint from '@/components/contabilidad/TicketCuentaCobrarPrint.vue'
@@ -90,6 +92,10 @@ const dialogProductoPersonalizado = ref(false)
 const dialogCambiarPrecio = ref(false)
 const cartItemPrecio = ref<any>(null)
 const nuevoPrecioItem = ref(0)
+const dialogCambiarImei = ref(false)
+const itemCambiarImei = ref<any>(null)
+const imeisDisponiblesParaCambio = ref<any[]>([])
+const busquedaCambiarImei = ref('')
 const clienteExpress = ref('')
 const esCotizacion = ref(false)
 const prodPersonalizado = ref({ nombre: '', precio: 0, costo: 0 })
@@ -194,6 +200,12 @@ const ticketConfig = ref({
 })
 const comprobantes = ref<any[]>([])
 const comprobanteSeleccionado = ref<any>(null)
+const facturacionElectronicaActiva = ref(false)
+const comprobanteElectronicoDefault = ref('E32')
+const alanubeBaseUrl = ref('https://api.alanube.co/dom/v1')
+const alanubeToken = ref('')
+const alanubeIdCompania = ref('')
+const alanubeCompanyData = ref<any | null>(null)
 const clienteSeleccionado = ref<any>(null)
 const noFactura = ref('')
 const metodoPago = ref('EFECTIVO')
@@ -239,6 +251,63 @@ const empresaDireccion = ref('')
 const empresaEmail = ref('')
 const empresaLogo = ref('')
 
+function esComprobanteElectronico(comp: any): boolean {
+  const tipo = String(comp?.tipo || '').toUpperCase()
+  return tipo.startsWith('E') && tipo !== 'SIN'
+}
+
+function formatSecuenciaComprobante(comp: any): string {
+  return String(comp?.secuencia_actual || 1).padStart(esComprobanteElectronico(comp) ? 10 : 8, '0')
+}
+
+const comprobantesDisponibles = computed(() => {
+  if (!facturacionElectronicaActiva.value) return comprobantes.value
+  return comprobantes.value.filter((comp: any) => ['E31', 'E32'].includes(String(comp?.tipo || '').toUpperCase()))
+})
+
+function seleccionarComprobanteDisponible() {
+  const disponibles = comprobantesDisponibles.value
+  if (disponibles.some((comp: any) => comp.id === comprobanteSeleccionado.value?.id)) return
+
+  const preferido = facturacionElectronicaActiva.value
+    ? disponibles.find((comp: any) => String(comp.tipo || '').toUpperCase() === String(comprobanteElectronicoDefault.value || '').toUpperCase())
+    : disponibles.find((comp: any) => String(comp.tipo || '').toUpperCase() === 'SIN')
+  comprobanteSeleccionado.value = preferido || disponibles.find((comp: any) => comp.es_default) || disponibles[0] || null
+}
+
+async function cargarConfigFacturacionElectronica() {
+  try {
+    const [activoRes, defaultRes, baseUrlRes, tokenRes, idCompaniaRes, companyDataRes] = await Promise.all([
+      (window as any).config.get('facturacion_electronica_activa'),
+      (window as any).config.get('facturacion_electronica_comprobante_default'),
+      (window as any).config.get('alanube_base_url'),
+      (window as any).config.get('alanube_token'),
+      (window as any).config.get('alanube_id_compania'),
+      (window as any).config.get('alanube_company_data'),
+    ])
+    facturacionElectronicaActiva.value = String(activoRes?.data || '') === '1'
+    comprobanteElectronicoDefault.value = String(defaultRes?.data || '') || 'E32'
+    alanubeBaseUrl.value = String(baseUrlRes?.data || '') || 'https://api.alanube.co/dom/v1'
+    alanubeToken.value = String(tokenRes?.data || '')
+    alanubeIdCompania.value = String(idCompaniaRes?.data || '')
+    const rawCompany = String(companyDataRes?.data || '')
+    alanubeCompanyData.value = rawCompany ? JSON.parse(rawCompany) : null
+  } catch (_) {
+    alanubeCompanyData.value = null
+  }
+}
+
+async function toggleFacturacionElectronica(value: boolean) {
+  facturacionElectronicaActiva.value = value
+  if (!value) {
+    comprobanteSeleccionado.value = null
+  }
+  seleccionarComprobanteDisponible()
+  try {
+    await (window as any).config.set('facturacion_electronica_activa', value ? '1' : '0')
+  } catch (_) {}
+}
+
 const POS_STORAGE_KEY = 'pos_cart_data'
 const auth = useAuthStore()
 const sonidos = reactive(useSonidos())
@@ -251,7 +320,8 @@ const spotlight = reactive(useSpotlight())
 const stockAlertas = reactive(useStockAlertas())
 const miniDashboard = reactive(useMiniDashboard())
 const lockScreen = reactive(useLockScreen())
-const devoluciones = reactive(useDevoluciones())
+const devoluciones = useDevoluciones()
+const dev = devoluciones.state
 const barcodeEntry = reactive(useBarcodeEntry())
 const causaDescuento = reactive(useCausaDescuento())
 const customerDisplay = reactive(useCustomerDisplay())
@@ -261,6 +331,55 @@ const themeStore = useThemeStore()
 const dialogAyudaAtajos = ref(false)
 const dialogBarcodeToggle = ref(false)
 const barcodeCleanup = ref<(() => void) | null>(null)
+const busquedaProdCombo = ref('')
+const dialogBuscadorCombo = ref(false)
+
+const productosFiltradosCombo = computed(() => {
+  const texto = busquedaProdCombo.value.toLowerCase().trim()
+  const tipo = (combos.comboEditando as any)?.items?.[(combos.comboEditando as any)?._buscandoIdx]?.tipo
+  let lista: any[] = []
+  if (tipo === 'telefono') {
+    lista = telefonos.value.map(t => {
+      const imeis = imeisDisponibles.value.filter((i: any) => Number(i.id_equi) === Number(t.id))
+      return { ...t, precio_venta: imeis[0]?.precio_venta || 0, costo: imeis[0]?.costo || 0, stock: imeis.length }
+    })
+  } else if (tipo === 'accesorio') {
+    lista = accesorios.value
+  } else if (tipo === 'electrodomestico') {
+    lista = electrodomesticos.value.map(e => {
+      const seriales = serialesDisponibles.value.filter((i: any) => Number(i.id_equi) === Number(e.id))
+      return { ...e, precio_venta: seriales[0]?.precio_venta || 0, costo: seriales[0]?.costo || 0, stock: seriales.length }
+    })
+  } else {
+    lista = [
+      ...telefonos.value.map(t => {
+        const imeis = imeisDisponibles.value.filter((i: any) => Number(i.id_equi) === Number(t.id))
+        return { ...t, precio_venta: imeis[0]?.precio_venta || 0, costo: imeis[0]?.costo || 0, _tipo: 'telefono' }
+      }),
+      ...accesorios.value.map(a => ({ ...a, _tipo: 'accesorio' })),
+      ...electrodomesticos.value.map(e => {
+        const seriales = serialesDisponibles.value.filter((i: any) => Number(i.id_equi) === Number(e.id))
+        return { ...e, precio_venta: seriales[0]?.precio_venta || 0, costo: seriales[0]?.costo || 0, _tipo: 'electrodomestico' }
+      }),
+    ]
+  }
+  if (!texto) return lista.slice(0, 20)
+  return lista.filter(p => p.nombre?.toLowerCase().includes(texto)).slice(0, 20)
+})
+
+function seleccionarProductoCombo(prod: any) {
+  const editando = combos.comboEditando as any
+  const idx = editando._buscandoIdx
+  if (idx === undefined) return
+  const item = editando.items[idx]
+  if (!item) return
+  item.nombre = prod.nombre
+  item.precio = prod.precio_venta || 0
+  item.costo = prod.costo || 0
+  item.refId = prod.id
+  if (prod._tipo) item.tipo = prod._tipo
+  dialogBuscadorCombo.value = false
+}
 const busquedaFacturaInputDevolucion = ref('')
 
 function selectSpotlightResult(r: any) {
@@ -303,7 +422,7 @@ function recallHold(hold: any) {
 function agregarComboAlCarrito(combo: any) {
   const items = combos.comboToCart(combo)
   for (const item of items) {
-    cart.value.push({ ...item, precio: 0, comboId: combo.id, comboNombre: combo.nombre })
+    cart.value.push({ ...item, comboId: combo.id, comboNombre: combo.nombre })
   }
   combos.dialogSeleccionarCombo = false
   sonidos.playSuccess()
@@ -717,11 +836,80 @@ function esCreditoFactCoti(factura: any = registroFatCotiSeleccionado.value): bo
     String(factura?.estado_factura || '').toUpperCase() === 'CREDITO'
 }
 
-function confirmarEliminarFactCoti() {
+function getAlanubeOtroFactura(factura: any): any {
+  try {
+    const otro = typeof factura?.otro === 'string' ? JSON.parse(factura.otro || '{}') : factura?.otro || {}
+    return otro || {}
+  } catch {
+    return {}
+  }
+}
+
+function esFacturaElectronicaAceptadaLocal(factura: any): boolean {
+  const tipo = String(factura?.tipo_comprobante || factura?.comprobante || '').toUpperCase()
+  const otro = getAlanubeOtroFactura(factura)
+  const response = otro?.alanube_response || {}
+  const localLegalStatus = String(
+    factura?.legal_status ||
+    factura?.alanube_legal_status ||
+    factura?.ecf_legal_status ||
+    otro?.legal_status ||
+    response?.legalStatus ||
+    response?.legal_status ||
+    ''
+  ).toUpperCase()
+  return tipo.startsWith('E') && localLegalStatus === 'ACCEPTED'
+}
+
+async function esFacturaElectronicaAceptada(factura: any): Promise<boolean> {
+  if (!factura?.id) return false
+  if (esFacturaElectronicaAceptadaLocal(factura)) return true
+  try {
+    const res = await window.db.getWhere('facturas_ecf', 'factura_id = ?', [factura.id])
+    const ecf = res?.success && Array.isArray(res.data) ? res.data[0] : null
+    return String(ecf?.legal_status || '').toUpperCase() === 'ACCEPTED'
+  } catch {
+    return false
+  }
+}
+
+function usuarioAuditoria(): string {
+  try { return localStorage.getItem('mr_user_usuario') || 'POS' } catch { return 'POS' }
+}
+
+async function registrarAuditoriaFactura(accion: string, factura: any, detalle: any = {}, resultado = 'OK') {
+  try {
+    await window.electron.invoke('auditoria:registrar', {
+      modulo: 'pos',
+      accion,
+      entidad: 'facturas',
+      entidad_id: Number(factura?.id || 0),
+      referencia: factura?.no_factura || factura?.ncf || '',
+      usuario: usuarioAuditoria(),
+      detalle,
+      resultado,
+    })
+  } catch (_) {}
+}
+
+async function bloquearSiFacturaElectronicaAceptada(factura: any, accion = 'modificar'): Promise<boolean> {
+  if (!(await esFacturaElectronicaAceptada(factura))) return false
+  await registrarAuditoriaFactura('bloqueo_fiscal', factura, { accion, motivo: 'DGII_ACCEPTED' }, 'BLOQUEADO')
+  toast.add({
+    severity: 'warn',
+    summary: 'Factura fiscal bloqueada',
+    detail: `Esta factura electronica fue aceptada por DGII. No se puede ${accion}; usa reimpresion o nota de credito.`,
+    life: 4500,
+  })
+  return true
+}
+
+async function confirmarEliminarFactCoti() {
   if (!registroFatCotiSeleccionado.value) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona un registro primero', life: 2500 })
     return
   }
+  if (await bloquearSiFacturaElectronicaAceptada(registroFatCotiSeleccionado.value, 'eliminar')) return
   factCotiOtpEnviado.value = false
   factCotiOtp.value = ''
   factCotiOtpEmail.value = ''
@@ -1315,7 +1503,10 @@ async function imprimirFacturaFactCoti() {
   }
 
   const fecha = `${factura.fecha_emision || factura.created_at || ''}${factura.hora ? ' ' + factura.hora : ''}`.trim()
-  const qrUrl = `https://tmposrd.com/factura/${factura.no_factura || factura.id}`
+  const alanubeResponse = getAlanubeResponseFromFactura(factura)
+  const alanubeDocumentStampUrl = getAlanubeDocumentStampUrl(alanubeResponse)
+  const alanubeSecurityCode = getAlanubeSecurityCode(alanubeResponse)
+  const qrUrl = alanubeDocumentStampUrl || `https://tmposrd.com/factura/${factura.no_factura || factura.id}`
   let qrDataUrl = ''
   try {
     qrDataUrl = await QRCode.toDataURL(qrUrl, { width: 120, margin: 1, color: { dark: '#000000', light: '#ffffff' } })
@@ -1337,6 +1528,14 @@ async function imprimirFacturaFactCoti() {
     total: Number(factura.total || 0),
     nota: factura.nota || '',
     metodo_pago: factura.metodo_pago || '',
+    document_stamp_url: alanubeDocumentStampUrl,
+    codigo_seguridad: alanubeSecurityCode,
+    alanube_id: alanubeResponse?.id || '',
+    alanube_status: alanubeResponse?.status || '',
+    alanube_legal_status: alanubeResponse?.legalStatus || '',
+    alanube_pdf: alanubeResponse?.pdf || '',
+    alanube_xml: alanubeResponse?.xml || '',
+    otro: factura.otro || '',
     empresa: {
       nombre: empresaNombre.value,
       rnc: empresaRnc.value,
@@ -1349,6 +1548,7 @@ async function imprimirFacturaFactCoti() {
   }
 
   ticketDesdeFactCoti.value = true
+  await asegurarQrFiscalTicket()
   dialogPrintChoice.value = true
 }
 
@@ -1374,6 +1574,7 @@ function recalcularTotalesProductosFactCoti(productos: any[]) {
 async function guardarProductosFactCoti(productos: any[]) {
   const factura = registroFatCotiSeleccionado.value
   if (!factura?.id) return false
+  if (await bloquearSiFacturaElectronicaAceptada(factura, 'cambiar productos o totales')) return false
 
   guardandoProductosFactCoti.value = true
   try {
@@ -1509,6 +1710,7 @@ async function editarFacturaFactCoti() {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona un registro primero', life: 2500 })
     return
   }
+  if (await bloquearSiFacturaElectronicaAceptada(factura, 'editar')) return
 
   const productos = parseProductosFacturaFactCoti(factura).map(normalizarProductoFacturaParaCart)
   if (productos.length === 0) {
@@ -1547,6 +1749,7 @@ async function guardarClienteFactCoti() {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona un cliente', life: 2500 })
     return
   }
+  if (await bloquearSiFacturaElectronicaAceptada(factura, 'cambiar el cliente')) return
 
   guardandoClienteFactCoti.value = true
   try {
@@ -1676,6 +1879,7 @@ async function asegurarTablaBancosFactCoti() {
 async function guardarMetodoPagoFactCoti() {
   const factura = registroFatCotiSeleccionado.value
   if (!factura || !metodoPagoFactCoti.value) return
+  if (await bloquearSiFacturaElectronicaAceptada(factura, 'cambiar el metodo de pago')) return
 
   if (metodoPagoFactCoti.value === 'TRANSFERENCIA') {
     bancoFactCotiSeleccionado.value = null
@@ -1730,6 +1934,7 @@ async function guardarTransferenciaFactCoti() {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona un banco', life: 2500 })
     return
   }
+  if (await bloquearSiFacturaElectronicaAceptada(factura, 'cambiar el metodo de pago')) return
 
   guardandoBancoFactCoti.value = true
   try {
@@ -2065,6 +2270,7 @@ function agregarImeiAlCarrito() {
       imei_id: imei.id,
       imei: imei.nombre,
       nombre: selectedTelefono.value?.nombre || '',
+      telefono_id: selectedTelefono.value?.id,
       color: imei.color || '',
       capacidad: imei.capacidad || '',
       precio: precioFinal,
@@ -2114,6 +2320,27 @@ function agregarAccesorio(accesorio: any) {
     cantidad: 1,
   })
   toast.add({ severity: 'success', summary: 'Agregado', detail: `${accesorio.nombre} agregado`, life: 2000 })
+}
+
+function abrirCambiarImei(item: any, index: number) {
+  const imeis = imeisDisponibles.value.filter((i: any) => String(i.id_equi) === String(item.telefono_id || 0) || i.nombre !== item.imei)
+  imeisDisponiblesParaCambio.value = imeis
+  itemCambiarImei.value = { ...item, _index: index }
+  busquedaCambiarImei.value = ''
+  dialogCambiarImei.value = true
+}
+
+function seleccionarImeiCambio(nuevoImei: any) {
+  const idx = itemCambiarImei.value?._index
+  if (idx === undefined || idx === null) return
+  cart.value[idx].imei_id = nuevoImei.id
+  cart.value[idx].imei = nuevoImei.nombre
+  cart.value[idx].color = nuevoImei.color || ''
+  cart.value[idx].capacidad = nuevoImei.capacidad || ''
+  cart.value[idx].precio = nuevoImei.precio_venta || cart.value[idx].precio
+  dialogCambiarImei.value = false
+  itemCambiarImei.value = null
+  toast.add({ severity: 'success', summary: 'IMEI cambiado', detail: nuevoImei.nombre, life: 2000 })
 }
 
 function quitarDelCarrito(index: number) {
@@ -2316,9 +2543,10 @@ async function ventaExpress() {
   localStorage.removeItem(POS_STORAGE_KEY)
 }
 
-function imprimirPdf() {
+async function imprimirPdf() {
   dialogPrintChoice.value = false
   if (ticketData.value) {
+    await asegurarQrFiscalTicket()
     facturaPdfRef.value?.printFactura(ticketData.value)
     setTimeout(() => {
       dialogTicket.value = true
@@ -2367,6 +2595,7 @@ async function compartirImagen() {
   let container: HTMLDivElement | null = null
 
   try {
+    await asegurarQrFiscalTicket()
     const html = generarTicketHTML()
 
     container = document.createElement('div')
@@ -2441,6 +2670,21 @@ function cerrarTicket() {
   ticketDesdeFactCoti.value = false
 }
 
+function debeForzarQrTicket(d: any): boolean {
+  return Boolean(d && (d.document_stamp_url || /^E\d{2}/i.test(String(d.ncf || d.tipo_comprobante || ''))))
+}
+
+async function asegurarQrFiscalTicket() {
+  const d = ticketData.value
+  if (!d || d.qr || !debeForzarQrTicket(d)) return
+  const qrValue = d.document_stamp_url || `https://tmposrd.com/factura/${d.no_factura || ''}`
+  try {
+    d.qr = await QRCode.toDataURL(qrValue, { width: 180, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } })
+  } catch (error: any) {
+    console.error('No se pudo generar QR fiscal:', error)
+  }
+}
+
 function getTicketBody(d: any): string {
   if (!d) return ''
   const cfg = ticketConfig.value
@@ -2497,6 +2741,7 @@ function getTicketBody(d: any): string {
     CHEQUE: 'CHEQUE',
     MIXTO: 'MIXTO',
   }[(d.metodo_pago || 'EFECTIVO')] || d.metodo_pago
+  const debeMostrarQrFiscal = debeForzarQrTicket(d)
 
   return `
 <center id="top">
@@ -2512,6 +2757,7 @@ function getTicketBody(d: any): string {
         Fecha: ${d.fecha || ''}<br>
         DOC: <b style="font-size:16px">#${d.no_factura || ''}</b><br>
         ${d.ncf ? `NCF: ${d.ncf}<br>` : ''}
+        ${d.codigo_seguridad ? `CODIGO SEGURIDAD: ${d.codigo_seguridad}<br>` : ''}
         ${isTicketOptionOn(cfg.show_cliente) ? `CLIENTE: ${d.cliente || 'SIN REGISTRO'}<br>` : ''}
         ${isTicketOptionOn(cfg.show_cliente) && d.telefono ? `TELEFONO: ${d.telefono}<br>` : ''}
         CAJERO: POS<br>
@@ -2559,7 +2805,7 @@ ${isTicketOptionOn(cfg.show_totals) ? `<div class="linea" style="margin-top:30px
 
 ${isTicketOptionOn(cfg.show_nota) && d.nota ? `<div class="bordeado" style="min-height:30px;margin:4px 0"><p style="font-size:9px;margin:0">${d.nota.replace(/\n/g, '<br>')}</p></div>` : ''}
 ${isTicketOptionOn(cfg.show_barcode) ? `<div class="barcode" style="text-align:center;margin:6px 0"><div style="display:inline-block;border:1px solid #000;border-radius:5px;padding:3px;overflow:hidden">${generarBarcodeSVG(d.no_factura || '')}</div></div>` : ''}
-${isTicketOptionOn(cfg.show_qr) && d.qr ? `<div id="qrcode" class="qr-code"><center><div class="bordeado2"><img src="${d.qr}" alt="Codigo QR" width="150" height="150"/></div></center></div>` : ''}
+${((isTicketOptionOn(cfg.show_qr) || debeMostrarQrFiscal) && d.qr) ? `<div id="qrcode" class="qr-code"><center><div class="bordeado2"><img src="${d.qr}" alt="Codigo QR" width="150" height="150"/></div>${d.codigo_seguridad ? `<div style="font-size:9px;font-weight:bold;margin-top:3px">Codigo Seguridad: ${d.codigo_seguridad}</div>` : ''}</center></div>` : ''}
 ${isTicketOptionOn(cfg.show_footer) ? `<div class="linea" style="margin-top:8px;"></div><div style="text-align:center;">${cfg.footer_text || ''}</div>` : ''}`
 }
 
@@ -2616,6 +2862,7 @@ function getTicketPreviewHTML(): string {
 }
 
 async function imprimirTicket() {
+  await asegurarQrFiscalTicket()
   const html = generarTicketHTML()
   try {
     const res = await window.electron.invoke('print:ticket', html, printerName.value || undefined)
@@ -2776,6 +3023,24 @@ async function confirmarVenta() {
     toast.add({ severity: 'warn', summary: 'Total invalido', detail: 'El total debe ser mayor a 0', life: 3000 })
     return
   }
+  if (!esCotizacion.value && facturacionElectronicaActiva.value && !facturaEditandoPos.value?.id) {
+    if (!alanubeBaseUrl.value || !alanubeToken.value.trim()) {
+      toast.add({ severity: 'warn', summary: 'Alanube requerido', detail: 'Configura URL y token de Alanube antes de facturar electronicamente', life: 4000 })
+      return
+    }
+    if (!alanubeIdCompania.value || !alanubeCompanyData.value) {
+      toast.add({ severity: 'warn', summary: 'Alanube requerido', detail: 'Configura y prueba Alanube antes de facturar electronicamente', life: 4000 })
+      return
+    }
+    if (!esComprobanteElectronico(comprobanteSeleccionado.value)) {
+      toast.add({ severity: 'warn', summary: 'e-CF requerido', detail: 'Selecciona un comprobante electronico activo', life: 3500 })
+      return
+    }
+    if (!['E31', 'E32'].includes(String(comprobanteSeleccionado.value?.tipo || '').toUpperCase())) {
+      toast.add({ severity: 'warn', summary: 'e-CF no soportado', detail: 'Alanube esta conectado para E31 y E32 en este flujo', life: 3500 })
+      return
+    }
+  }
   if (!esCotizacion.value && comprobanteSeleccionado.value?.tipo === 'E31' && !clienteSeleccionado.value?.rnc) {
     toast.add({ severity: 'warn', summary: 'Cliente requerido', detail: 'E31 requiere cliente con RNC', life: 3000 })
     return
@@ -2860,6 +3125,257 @@ function confirmarMixto() {
   confirmPago.value = true
 }
 
+function alanubeAuthHeader() {
+  const tokenValue = alanubeToken.value.trim()
+  return tokenValue.toLowerCase().startsWith('bearer ') ? tokenValue : `Bearer ${tokenValue}`
+}
+
+function redondearMonto(value: any) {
+  return Number(Number(value || 0).toFixed(2))
+}
+
+function extraerCampo(obj: any, keys: string[], fallback = '') {
+  if (!obj || typeof obj !== 'object') return fallback
+  for (const key of keys) {
+    const value = obj[key]
+    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim()
+  }
+  return fallback
+}
+
+function limpiarNumeroFiscal(value: any) {
+  return String(value || '').replace(/\D/g, '')
+}
+
+function buildAlanubeSender() {
+  const company = alanubeCompanyData.value || {}
+  return {
+    rnc: limpiarNumeroFiscal(extraerCampo(company, ['rnc', 'identification', 'identificationNumber', 'taxId'], empresaRnc.value)) || '',
+    companyName: extraerCampo(company, ['companyName', 'businessName', 'name', 'legalName', 'nombre', 'razonSocial'], empresaNombre.value),
+    tradename: extraerCampo(company, ['tradename', 'tradeName', 'commercialName', 'nombreComercial'], empresaNombre.value),
+    address: extraerCampo(company, ['address', 'direccion'], empresaDireccion.value),
+    phone: extraerCampo(company, ['phone', 'telefono'], empresaTelefono.value),
+    email: extraerCampo(company, ['email', 'correo'], empresaEmail.value),
+    stampDate: new Date().toISOString().split('T')[0],
+  }
+}
+
+function buildAlanubeBuyer() {
+  const nombre = (clienteExpress.value || clienteSeleccionado.value?.nombre || 'CONSUMIDOR FINAL').toUpperCase()
+  const rnc = limpiarNumeroFiscal(clienteSeleccionado.value?.rnc || clienteSeleccionado.value?.cedula || '')
+  return {
+    rnc: rnc || '',
+    companyName: nombre,
+    businessName: nombre,
+    contact: nombre,
+    address: clienteSeleccionado.value?.direccion || '',
+    phone: clienteSeleccionado.value?.telefono || clienteSeleccionado.value?.whatsapp || '',
+    email: clienteSeleccionado.value?.email || '',
+  }
+}
+
+function buildAlanubeItemDetails() {
+  const tasa = Number(impuestoPorcentaje.value || 0)
+  const divisor = 1 + (tasa / 100)
+  return cartConComision.value.map((item: any, index: number) => {
+    const cantidad = Number(item.cantidad || 1)
+    const precioBruto = Number(item.precio || 0)
+    const precio = impuestoIncluido.value === 1 && tasa > 0 ? redondearMonto(precioBruto / divisor) : redondearMonto(precioBruto)
+    const monto = redondearMonto(precio * cantidad)
+    return {
+      lineNumber: index + 1,
+      billingIndicator: tasa > 0 && impuestoIncluido.value !== 2 ? 1 : 4,
+      itemName: String(item.nombre || 'PRODUCTO').slice(0, 80),
+      goodServiceIndicator: 1,
+      itemDescription: String(item.nombre || 'PRODUCTO').slice(0, 1000),
+      quantityItem: cantidad,
+      unitPriceItem: precio,
+      itemAmount: monto,
+    }
+  })
+}
+
+function buildAlanubeTotals() {
+  const tasa = Number(impuestoPorcentaje.value || 0)
+  const divisor = 1 + (tasa / 100)
+  const baseConDescuento = redondearMonto(Math.max(0, subtotal.value - descuento.value))
+  const montoExento = impuestoIncluido.value === 2 ? baseConDescuento : 0
+  const montoGravado = impuestoIncluido.value === 2
+    ? 0
+    : impuestoIncluido.value === 1 && tasa > 0
+      ? redondearMonto(baseConDescuento / divisor)
+      : baseConDescuento
+  const itbis = impuestoIncluido.value === 2
+    ? 0
+    : impuestoIncluido.value === 1 && tasa > 0
+      ? redondearMonto(baseConDescuento - montoGravado)
+      : redondearMonto(montoGravado * (tasa / 100))
+  return {
+    taxedAmount: montoGravado,
+    taxedAmount18: montoGravado,
+    exemptAmount: montoExento,
+    itbis18: itbis,
+    totalItbis: itbis,
+    totalAmount: redondearMonto(total.value),
+  }
+}
+
+function buildAlanubePayload(ncf: string, compTipo: string, fechaStr: string, invoiceNo: string) {
+  const documentType = Number(String(compTipo || '').replace(/\D/g, '') || 0)
+  const payload: any = {
+    company: alanubeIdCompania.value ? { id: alanubeIdCompania.value } : undefined,
+    idDoc: {
+      encf: ncf,
+      documentType,
+      incomeType: 1,
+      paymentType: metodoPago.value === 'CREDITO' ? 2 : 1,
+      issueDate: fechaStr,
+      internalDocumentNumber: invoiceNo,
+    },
+    sender: buildAlanubeSender(),
+    totals: buildAlanubeTotals(),
+    itemDetails: buildAlanubeItemDetails(),
+    config: {
+      sendToDgii: true,
+    },
+  }
+
+  if (compTipo === 'E31') payload.buyer = buildAlanubeBuyer()
+  else if (total.value >= 250000 || clienteSeleccionado.value) payload.buyer = buildAlanubeBuyer()
+
+  return payload
+}
+
+function alanubeStatusFromResponse(response: any, ok: boolean): string {
+  if (!ok) return 'ERROR_ENVIO'
+  const legalStatus = String(response?.legalStatus || response?.legal_status || '').toUpperCase()
+  if (legalStatus === 'ACCEPTED') return 'ACEPTADA'
+  if (legalStatus === 'REJECTED') return 'RECHAZADA'
+  return String(response?.status || 'ENVIADA').toUpperCase()
+}
+
+async function guardarFacturaEcf(params: {
+  facturaId: number
+  invoiceNo: string
+  ncf: string
+  compTipo: string
+  endpoint: string
+  httpStatus: number
+  payload: any
+  response: any
+  ok: boolean
+  error?: string
+}) {
+  const response = params.response && typeof params.response === 'object' ? params.response : {}
+  const now = new Date().toISOString()
+  const legalStatus = String(response?.legalStatus || response?.legal_status || '').toUpperCase()
+  const record = {
+    factura_id: params.facturaId,
+    no_factura: params.invoiceNo,
+    ncf: params.ncf,
+    tipo_comprobante: params.compTipo,
+    alanube_id: response?.id || '',
+    alanube_id_compania: alanubeIdCompania.value,
+    document_number: response?.documentNumber || response?.document_number || params.ncf,
+    document_stamp_url: getAlanubeDocumentStampUrl(response),
+    security_code: getAlanubeSecurityCode(response),
+    status: alanubeStatusFromResponse(response, params.ok),
+    legal_status: legalStatus,
+    sequence_consumed: response?.sequenceConsumed ? 1 : 0,
+    pdf_url: response?.pdf || response?.pdf_url || '',
+    xml_url: response?.xml || response?.xml_url || '',
+    resume_xml_url: response?.resumeXml || response?.resume_xml || '',
+    endpoint: params.endpoint,
+    http_status: params.httpStatus,
+    payload: JSON.stringify(params.payload || {}),
+    response: JSON.stringify(params.response || {}),
+    error: params.error || '',
+    enviado_at: now,
+    aceptado_at: legalStatus === 'ACCEPTED' ? (response?.signatureDate || now) : '',
+  }
+
+  try {
+    const existente = await window.db.getWhere('facturas_ecf', 'factura_id = ?', [params.facturaId])
+    const existenteId = existente?.success && Array.isArray(existente.data) && existente.data.length > 0
+      ? existente.data[0].id
+      : 0
+    const res = existenteId
+      ? await window.db.update('facturas_ecf', existenteId, record)
+      : await window.db.insert('facturas_ecf', record)
+    if (!res?.success) throw new Error(res?.error || 'No se pudo guardar facturas_ecf')
+  } catch (error) {
+    console.warn('[Alanube] No se pudo guardar el registro facturas_ecf:', error)
+  }
+}
+
+async function enviarFacturaAlanube(facturaId: number, ncf: string, compTipo: string, fechaStr: string, invoiceNo: string) {
+  if (!facturacionElectronicaActiva.value || esCotizacion.value) return null
+  if (!alanubeToken.value.trim()) throw new Error('Configura el token de Alanube antes de facturar electronicamente')
+  if (!['E31', 'E32'].includes(String(compTipo).toUpperCase())) return null
+
+  const endpoint = compTipo === 'E31' ? 'fiscal-invoices' : 'invoices'
+  const url = `${alanubeBaseUrl.value.replace(/\/+$/, '')}/${endpoint}`
+  const payload = buildAlanubePayload(ncf, compTipo, fechaStr, invoiceNo)
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: alanubeAuthHeader(),
+    },
+    body: JSON.stringify(payload),
+  })
+  const contentType = res.headers.get('content-type') || ''
+  const data = contentType.includes('application/json') ? await res.json() : await res.text()
+  const alanubeResult = {
+    facturacion_electronica: 1,
+    alanube_endpoint: endpoint,
+    alanube_payload: payload,
+    alanube_response: data,
+    alanube_status: res.status,
+    alanube_enviado_at: new Date().toISOString(),
+    alanube_id_compania: alanubeIdCompania.value,
+  }
+  await window.db.update('facturas', facturaId, { otro: JSON.stringify(alanubeResult) })
+  await guardarFacturaEcf({
+    facturaId,
+    invoiceNo,
+    ncf,
+    compTipo,
+    endpoint,
+    httpStatus: res.status,
+    payload,
+    response: data,
+    ok: res.ok,
+    error: res.ok ? '' : (typeof data === 'string' ? data : data?.message || data?.error || ''),
+  })
+  if (!res.ok) {
+    const message = typeof data === 'object'
+      ? data?.message || data?.error || data?.response?.[0]?.message || `Alanube respondio ${res.status}`
+      : data || `Alanube respondio ${res.status}`
+    throw new Error(message)
+  }
+  return data
+}
+
+function getAlanubeDocumentStampUrl(response: any): string {
+  return String(response?.documentStampUrl || response?.document_stamp_url || '').trim()
+}
+
+function getAlanubeSecurityCode(response: any): string {
+  return String(response?.securityCode || response?.security_code || '').trim()
+}
+
+function getAlanubeResponseFromFactura(factura: any): any {
+  try {
+    const otro = typeof factura?.otro === 'string' ? JSON.parse(factura.otro || '{}') : factura?.otro || {}
+    return otro?.alanube_response || otro || null
+  } catch {
+    return null
+  }
+}
+
 async function completarVenta() {
   guardando.value = true
   await recargarConfigVentas()
@@ -2892,7 +3408,7 @@ async function completarVenta() {
     let compTipo = ''
 
     if (comp && comp.tipo !== 'SIN') {
-      const sec = String(comp.secuencia_actual || 1).padStart(8, '0')
+      const sec = formatSecuenciaComprobante(comp)
       ncf = `${comp.prefijo || comp.tipo}${sec}`
       compId = comp.id
       compTipo = comp.tipo
@@ -2905,6 +3421,7 @@ async function completarVenta() {
     } catch {}
     const almacenStore = useAlmacenStore()
     const editandoFactura = facturaEditandoPos.value
+    if (editandoFactura?.id && await bloquearSiFacturaElectronicaAceptada(editandoFactura, 'actualizar')) return
 
     const facturaData = {
       turno_id: turnoId,
@@ -2935,6 +3452,11 @@ async function completarVenta() {
       year: String(now.getFullYear()),
       nota: (nota.value.trim() + (notaCreditoUsada.value ? ' | ' + notaCreditoUsada.value : '')).toUpperCase(),
       usuario: 'POS',
+      otro: JSON.stringify({
+        facturacion_electronica: facturacionElectronicaActiva.value && !esCotizacion.value ? 1 : 0,
+        alanube_id_compania: facturacionElectronicaActiva.value ? alanubeIdCompania.value : '',
+        alanube_company_data: facturacionElectronicaActiva.value ? alanubeCompanyData.value : null,
+      }),
       ncf,
       comprobante: compTipo,
       tipo_comprobante: compTipo,
@@ -2947,6 +3469,7 @@ async function completarVenta() {
       facturaData.comprobante_id = editandoFactura.comprobante_id || facturaData.comprobante_id
       facturaData.fecha_emision = editandoFactura.fecha_emision || facturaData.fecha_emision
       facturaData.hora = editandoFactura.hora || facturaData.hora
+      facturaData.otro = editandoFactura.otro || facturaData.otro
     }
 
     console.log('[NC] Factura nota final:', facturaData.nota, '| notaCreditoUsada:', notaCreditoUsada.value)
@@ -2963,6 +3486,52 @@ async function completarVenta() {
       throw new Error(resFactura.error || (editandoFactura?.id ? 'Error al actualizar factura' : 'Error al crear factura'))
     }
     const facturaIdActual = editandoFactura?.id || resFactura.data.id
+    if (editandoFactura?.id) {
+      await registrarAuditoriaFactura('editar_factura_pos', editandoFactura, {
+        no_factura: editandoFactura.no_factura || invoiceNo,
+        total_anterior: editandoFactura.total,
+        total_nuevo: facturaData.total,
+      }, 'OK')
+    } else if (facturacionElectronicaActiva.value && !esCotizacion.value) {
+      await registrarAuditoriaFactura('crear_factura_electronica', { ...facturaData, id: facturaIdActual }, {
+        ncf: facturaData.ncf,
+        tipo_comprobante: facturaData.tipo_comprobante,
+      }, 'OK')
+    }
+    let alanubeResponse: any = editandoFactura?.id ? getAlanubeResponseFromFactura(editandoFactura) : null
+
+    if (!editandoFactura?.id && facturacionElectronicaActiva.value && !esCotizacion.value) {
+      try {
+        alanubeResponse = await enviarFacturaAlanube(facturaIdActual, facturaData.ncf, facturaData.tipo_comprobante, fechaStr, invoiceNo)
+        await registrarAuditoriaFactura('enviar_alanube', { ...facturaData, id: facturaIdActual }, {
+          ncf: facturaData.ncf,
+          tipo_comprobante: facturaData.tipo_comprobante,
+          alanube_id: alanubeResponse?.id || '',
+          legal_status: alanubeResponse?.legalStatus || '',
+        }, 'OK')
+        toast.add({ severity: 'success', summary: 'Alanube', detail: 'Factura electronica enviada correctamente', life: 3000 })
+      } catch (error: any) {
+        await registrarAuditoriaFactura('enviar_alanube', { ...facturaData, id: facturaIdActual }, {
+          ncf: facturaData.ncf,
+          tipo_comprobante: facturaData.tipo_comprobante,
+          error: error?.message || '',
+        }, 'ERROR')
+        try {
+          const facturaActual = await window.db.getById('facturas', facturaIdActual)
+          const otroActual = facturaActual?.data?.otro ? JSON.parse(facturaActual.data.otro) : {}
+          await window.db.update('facturas', facturaIdActual, {
+            otro: JSON.stringify({
+              ...otroActual,
+              facturacion_electronica: 1,
+              alanube_error: error?.message || 'Error enviando a Alanube',
+              alanube_error_at: new Date().toISOString(),
+              alanube_id_compania: alanubeIdCompania.value,
+            }),
+          })
+        } catch (_) {}
+        throw new Error(`Alanube: ${error?.message || 'No se pudo enviar la factura electronica'}`)
+      }
+    }
 
     if (esCotizacion.value) {
       facturaData.estado_factura = 'COTIZACION'
@@ -3057,7 +3626,9 @@ async function completarVenta() {
     confirmPago.value = false
     ticketInvoiceNo.value = invoiceNo
 
-    const qrUrl = `https://tmposrd.com/factura/${invoiceNo}`
+    const alanubeDocumentStampUrl = getAlanubeDocumentStampUrl(alanubeResponse)
+    const alanubeSecurityCode = getAlanubeSecurityCode(alanubeResponse)
+    const qrUrl = alanubeDocumentStampUrl || `https://tmposrd.com/factura/${invoiceNo}`
     let qrDataUrl = ''
     try {
       qrDataUrl = await QRCode.toDataURL(qrUrl, { width: 120, margin: 1, color: { dark: '#000000', light: '#ffffff' } })
@@ -3083,6 +3654,13 @@ async function completarVenta() {
       total: total.value,
       nota: nota.value,
       metodo_pago: metodoPago.value,
+      document_stamp_url: alanubeDocumentStampUrl,
+      codigo_seguridad: alanubeSecurityCode,
+      alanube_id: alanubeResponse?.id || '',
+      alanube_status: alanubeResponse?.status || '',
+      alanube_legal_status: alanubeResponse?.legalStatus || '',
+      alanube_pdf: alanubeResponse?.pdf || '',
+      alanube_xml: alanubeResponse?.xml || '',
       empresa: {
         nombre: empresaNombre.value,
         rnc: empresaRnc.value,
@@ -3102,6 +3680,7 @@ async function completarVenta() {
         life: 2000,
       })
       if (ticketData.value) {
+        await asegurarQrFiscalTicket()
         facturaPdfRef.value?.printFactura(ticketData.value)
         setTimeout(() => { dialogTicket.value = true }, 500)
       }
@@ -3130,6 +3709,7 @@ async function completarVenta() {
           })
         }
       } catch (_) {}
+      await asegurarQrFiscalTicket()
       dialogPrintChoice.value = true
     }
     nota.value = ''
@@ -3381,6 +3961,8 @@ onMounted(async () => {
     }
   } catch (_) {}
 
+  await cargarConfigFacturacionElectronica()
+
   try {
     const resComp = await window.db.getAll('comprobantes_fiscales')
     if (resComp.success) {
@@ -3401,9 +3983,13 @@ onMounted(async () => {
         ? comprobantes.value.find((c: any) => c.tipo === compTipoDefecto)
         : null
 
-      const defaultComp = compDefecto || comprobantes.value.find((c: any) => c.es_default)
-      if (defaultComp) comprobanteSeleccionado.value = defaultComp
-      else if (comprobantes.value.length > 0) comprobanteSeleccionado.value = comprobantes.value[0]
+      if (facturacionElectronicaActiva.value) {
+        seleccionarComprobanteDisponible()
+      } else {
+        const defaultComp = comprobantes.value.find((c: any) => String(c.tipo || '').toUpperCase() === 'SIN') || compDefecto || comprobantes.value.find((c: any) => c.es_default)
+        if (defaultComp) comprobanteSeleccionado.value = defaultComp
+        else if (comprobantes.value.length > 0) comprobanteSeleccionado.value = comprobantes.value[0]
+      }
     }
   } catch (_) {}
 
@@ -3565,7 +4151,10 @@ function quitarDescuento() {
                       @contextmenu.prevent="() => { flippedTelId = flippedTelId === tel.id ? null : tel.id; imeiSearch = '' }"
                     >
                       <div class="flex items-start justify-between">
-                        <div class="w-10 h-10 rounded-xl bg-violet-500 flex items-center justify-center shadow-sm">
+                        <div v-if="getImageUrl(tel.imagen)" class="w-10 h-10 rounded-xl overflow-hidden border border-surface-200 dark:border-surface-700 shrink-0">
+                          <img :src="getImageUrl(tel.imagen)" class="w-full h-full object-cover" alt="" />
+                        </div>
+                        <div v-else class="w-10 h-10 rounded-xl bg-violet-500 flex items-center justify-center shadow-sm shrink-0">
                           <i class="pi pi-mobile text-white text-lg"></i>
                         </div>
                         <span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-800">
@@ -3707,7 +4296,7 @@ function quitarDescuento() {
                     </span>
                   </button>
 
-                  <button type="button" class="group aspect-square rounded-2xl border border-red-200 dark:border-red-800/70 bg-gradient-to-br from-red-50 to-rose-50 dark:from-red-900/25 dark:to-rose-900/20 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" @click="devoluciones.dialogDevolucion = true">
+                  <button type="button" class="group aspect-square rounded-2xl border border-red-200 dark:border-red-800/70 bg-gradient-to-br from-red-50 to-rose-50 dark:from-red-900/25 dark:to-rose-900/20 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" @click="dev.dialogDevolucion = true; devoluciones.cargarFacturas()">
                     <span class="w-14 h-14 rounded-2xl bg-red-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-undo text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
                       <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Devoluciones</span>
@@ -3790,7 +4379,10 @@ function quitarDescuento() {
                       @contextmenu.prevent="() => { flippedAccId = flippedAccId === acc.id ? null : acc.id }"
                     >
                       <div class="flex items-start justify-between">
-                        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-sm">
+                        <div v-if="getImageUrl(acc.imagen)" class="w-10 h-10 rounded-xl overflow-hidden border border-surface-200 dark:border-surface-700 shrink-0">
+                          <img :src="getImageUrl(acc.imagen)" class="w-full h-full object-cover" alt="" />
+                        </div>
+                        <div v-else class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-sm shrink-0">
                           <i class="pi pi-box text-white text-lg"></i>
                         </div>
                         <span class="text-[10px] font-medium px-2 py-0.5 rounded-full border"
@@ -3887,6 +4479,15 @@ function quitarDescuento() {
           </div>
 
           <div class="px-4 py-3 border-b border-surface-200/50 dark:border-surface-700/30 bg-surface-50 dark:bg-surface-700/20">
+            <div class="flex items-center justify-between gap-3 mb-3 rounded-md border border-surface-200/60 dark:border-surface-700/50 bg-surface-0 dark:bg-surface-800 px-2.5 py-2">
+              <div class="min-w-0">
+                <div class="text-[11px] font-semibold leading-tight">Facturacion electronica</div>
+                <div class="text-[9px] text-surface-500 truncate">
+                  {{ facturacionElectronicaActiva ? `e-CF activo${alanubeIdCompania ? ' - Alanube ' + alanubeIdCompania : ''}` : 'Factura local' }}
+                </div>
+              </div>
+              <ToggleSwitch :modelValue="facturacionElectronicaActiva" @update:modelValue="toggleFacturacionElectronica" />
+            </div>
             <div class="grid grid-cols-3 gap-2">
               <div>
                 <label class="text-[10px] font-semibold uppercase tracking-wide text-surface-500 block mb-1">Cliente</label>
@@ -3929,7 +4530,7 @@ function quitarDescuento() {
                 <label class="text-[10px] font-semibold uppercase tracking-wide text-surface-500 block mb-1">Comp.</label>
                 <Select
                   v-model="comprobanteSeleccionado"
-                  :options="comprobantes"
+                  :options="comprobantesDisponibles"
                   optionLabel="nombre"
                   placeholder="..."
                   class="!h-8 [&>div]:!py-0 [&>div]:!px-1.5"
@@ -3947,7 +4548,7 @@ function quitarDescuento() {
                       <span class="text-[8px] font-bold px-1.5 py-0.5 rounded" :class="compBadge(option.tipo)">{{ option.tipo }}</span>
                       <div class="min-w-0">
                         <span class="text-[10px] truncate block">{{ option.nombre }}</span>
-                        <span v-if="option.tipo !== 'SIN'" class="text-[8px] text-surface-400 font-mono">{{ option.prefijo || option.tipo }}{{ String(option.secuencia_actual || 1).padStart(8, '0') }}</span>
+                        <span v-if="option.tipo !== 'SIN'" class="text-[8px] text-surface-400 font-mono">{{ option.prefijo || option.tipo }}{{ formatSecuenciaComprobante(option) }}</span>
                       </div>
                     </div>
                   </template>
@@ -3988,7 +4589,10 @@ function quitarDescuento() {
                   <span class="font-bold text-emerald-600 dark:text-emerald-400">${{ formatCurrency(item.precio) }}</span>
                   <span class="rounded bg-emerald-50 px-1 py-0.5 font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Con descuento</span>
                 </div>
-                <p v-if="item.imei" class="text-[10px] text-surface-400 font-mono truncate leading-tight">IMEI: {{ item.imei }}</p>
+                <p v-if="item.imei" class="text-[10px] text-surface-400 font-mono truncate leading-tight">
+    IMEI: {{ item.imei }}
+    <button class="text-primary hover:underline ml-1 font-semibold" @click.stop="abrirCambiarImei(item, index)">cambiar</button>
+</p>
                 <p v-if="item.serial" class="text-[10px] text-surface-400 font-mono truncate leading-tight">Serial: {{ item.serial }}</p>
                 <p v-if="item.color || item.capacidad" class="text-[10px] text-surface-400 leading-tight">{{ [item.color, item.capacidad].filter(Boolean).join(' - ') }}</p>
                 <div class="flex items-center justify-between mt-1">
@@ -4046,11 +4650,15 @@ function quitarDescuento() {
       modal
       :style="{ width: 'min(45rem, 95vw)' }"
     >
-      <div class="space-y-3">
-        <IconField>
-          <InputIcon class="pi pi-search" />
-          <InputText v-model="busquedaImei" :placeholder="selectedTelefono ? 'Buscar por IMEI, color o capacidad...' : 'Buscar por Serial, color o capacidad...'" fluid />
-        </IconField>
+      <div class="flex gap-4">
+        <div v-if="getImageUrl(selectedTelefono?.imagen)" class="w-24 h-24 rounded-xl overflow-hidden border border-surface-200 dark:border-surface-700 shrink-0 hidden sm:block">
+          <img :src="getImageUrl(selectedTelefono?.imagen)" class="w-full h-full object-cover" alt="" />
+        </div>
+        <div class="flex-1 space-y-3">
+          <IconField>
+            <InputIcon class="pi pi-search" />
+            <InputText v-model="busquedaImei" :placeholder="selectedTelefono ? 'Buscar por IMEI, color o capacidad...' : 'Buscar por Serial, color o capacidad...'" fluid />
+          </IconField>
 
         <DataTable
           v-if="variantesFiltradas.length > 0"
@@ -4099,7 +4707,8 @@ function quitarDescuento() {
 
         <div v-else-if="selectedTelefono ? variantesImei.length === 0 : variantesSerial.length === 0" class="text-center py-6 text-surface-400">No hay unidades disponibles de este modelo.</div>
         <div v-else class="text-center py-6 text-surface-400">No hay resultados para la busqueda.</div>
-      </div>
+          </div>
+        </div>
 
       <template #footer>
         <Button label="Cerrar" severity="secondary" text @click="dialogVariantes = false" />
@@ -4112,12 +4721,16 @@ function quitarDescuento() {
       modal
       :style="{ width: 'min(28rem, 95vw)' }"
     >
-      <div class="space-y-4">
-        <div class="text-sm bg-surface-50 dark:bg-surface-700/50 p-3 rounded-lg">
-          <p class="font-medium">{{ selectedTelefono?.nombre || selectedElectrodomestico?.nombre }}</p>
-          <p class="text-surface-400 text-xs font-mono">{{ selectedTelefono ? 'IMEI:' : 'Serial:' }} {{ imeiParaPrecio?.nombre }}</p>
-          <p class="text-surface-400 text-xs">{{ imeiParaPrecio?.color }} {{ imeiParaPrecio?.capacidad }}</p>
+      <div class="flex gap-4">
+        <div v-if="getImageUrl(selectedTelefono?.imagen)" class="w-20 h-20 rounded-xl overflow-hidden border border-surface-200 dark:border-surface-700 shrink-0 hidden sm:block">
+          <img :src="getImageUrl(selectedTelefono?.imagen)" class="w-full h-full object-cover" alt="" />
         </div>
+        <div class="flex-1 space-y-4">
+          <div class="text-sm bg-surface-50 dark:bg-surface-700/50 p-3 rounded-lg">
+            <p class="font-medium">{{ selectedTelefono?.nombre || selectedElectrodomestico?.nombre }}</p>
+            <p class="text-surface-400 text-xs font-mono">{{ selectedTelefono ? 'IMEI:' : 'Serial:' }} {{ imeiParaPrecio?.nombre }}</p>
+            <p class="text-surface-400 text-xs">{{ imeiParaPrecio?.color }} {{ imeiParaPrecio?.capacidad }}</p>
+          </div>
 
         <div class="flex flex-col gap-2">
           <div
@@ -4190,7 +4803,8 @@ function quitarDescuento() {
           <span>Precio seleccionado</span>
           <span class="text-primary">${{ formatCurrency(getPrecioActual()) }}</span>
         </div>
-      </div>
+          </div>
+        </div>
 
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogPrecio = false" />
@@ -5547,6 +6161,37 @@ function quitarDescuento() {
       </template>
     </Dialog>
 
+    <Dialog v-model:visible="dialogCambiarImei" header="Cambiar IMEI" modal :style="{ width: 'min(28rem, 95vw)' }">
+      <div class="space-y-3 pt-2">
+        <div class="text-sm bg-surface-50 dark:bg-surface-700/30 p-3 rounded-lg">
+          <p class="font-medium text-xs">Producto: {{ itemCambiarImei?.nombre }}</p>
+          <p class="text-xs text-surface-400 font-mono">IMEI actual: {{ itemCambiarImei?.imei }}</p>
+        </div>
+        <IconField>
+          <InputIcon class="pi pi-search" />
+          <InputText v-model="busquedaCambiarImei" placeholder="Buscar IMEI..." fluid />
+        </IconField>
+        <div class="flex flex-col gap-2 max-h-60 overflow-y-auto">
+          <div
+            v-for="imei in imeisDisponiblesParaCambio.filter((i: any) => !busquedaCambiarImei || i.nombre?.toLowerCase().includes(busquedaCambiarImei.toLowerCase()))"
+            :key="imei.id"
+            class="flex items-center justify-between p-2.5 rounded-lg border border-surface-200/50 dark:border-surface-700/30 hover:border-primary-300 cursor-pointer transition-colors"
+            @click="seleccionarImeiCambio(imei)"
+          >
+            <div class="min-w-0">
+              <p class="text-sm font-mono font-medium">{{ imei.nombre }}</p>
+              <p v-if="imei.color || imei.capacidad" class="text-xs text-surface-400">{{ [imei.color, imei.capacidad].filter(Boolean).join(' / ') }}</p>
+            </div>
+            <span class="font-semibold text-sm shrink-0 ml-2">${{ formatCurrency(imei.precio_venta || 0) }}</span>
+          </div>
+          <div v-if="imeisDisponiblesParaCambio.length === 0" class="text-center py-6 text-surface-400 text-sm">No hay otros IMEIs disponibles para este modelo</div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogCambiarImei = false; itemCambiarImei = null" />
+      </template>
+    </Dialog>
+
     <Dialog
       v-model:visible="dialogDescuento"
       header="Agregar Descuento"
@@ -5805,25 +6450,47 @@ function quitarDescuento() {
     </Dialog>
 
     <!-- ==================== DEVOLUCIONES ==================== -->
-    <Dialog v-model:visible="devoluciones.dialogDevolucion" header="Devolucion / Nota de credito" modal :style="{ width: 'min(36rem, 95vw)' }">
-      <div v-if="!devoluciones.facturaDevolucion" class="space-y-4 pt-2">
+    <Dialog v-model:visible="dev.dialogDevolucion" header="Devolucion / Nota de credito" modal :style="{ width: 'min(40rem, 95vw)' }">
+      <div v-if="!dev.facturaDevolucion" class="space-y-3 pt-2">
         <div class="rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-3 text-sm text-blue-700 dark:text-blue-300">
-          <i class="pi pi-info-circle mr-1"></i> Ingresa el numero de factura para procesar la devolucion.
+          <i class="pi pi-info-circle mr-1"></i> Selecciona una factura para procesar la devolucion.
         </div>
-        <div class="flex gap-2">
-          <InputText v-model="busquedaFacturaInputDevolucion" placeholder="No. Factura (ej: F-20240101-123456)" fluid @keydown.enter="devoluciones.buscarFacturaParaDevolucion(busquedaFacturaInputDevolucion)" />
-          <Button icon="pi pi-search" @click="devoluciones.buscarFacturaParaDevolucion(busquedaFacturaInputDevolucion)" :loading="devoluciones.cargandoDevolucion" />
+        <IconField>
+          <InputIcon class="pi pi-search" />
+          <InputText v-model="dev.busquedaFactura" placeholder="Buscar por No. Factura, cliente o NCF..." fluid />
+        </IconField>
+        <div v-if="dev.cargandoFacturas" class="text-center py-8 text-surface-400">Cargando facturas...</div>
+        <div v-else-if="devoluciones.facturasFiltradas().length === 0" class="text-center py-8 text-surface-400">No hay facturas de venta disponibles.</div>
+        <div v-else class="flex flex-col gap-2 max-h-80 overflow-y-auto">
+          <div
+            v-for="f in devoluciones.facturasFiltradas()"
+            :key="f.id"
+            class="flex items-center justify-between p-3 rounded-lg border border-surface-200/50 dark:border-surface-700/30 hover:border-primary-300 cursor-pointer transition-colors"
+            @click="devoluciones.seleccionarFactura(f)"
+          >
+            <div class="min-w-0">
+              <p class="font-semibold text-sm truncate">{{ f.no_factura }}</p>
+              <p class="text-xs text-surface-400 truncate">{{ f.nombre_cliente || 'CONSUMIDOR FINAL' }}</p>
+            </div>
+            <div class="text-right shrink-0 ml-2">
+              <p class="font-semibold text-sm">${{ formatCurrency(f.total || 0) }}</p>
+              <p class="text-[10px] text-surface-400">{{ f.fecha_emision || '' }}</p>
+            </div>
+          </div>
         </div>
-        <p v-if="devoluciones.resultadoDevolucion && !devoluciones.dialogDevolucion" class="text-sm text-red-500">{{ devoluciones.resultadoDevolucion }}</p>
+        <p v-if="dev.resultadoDevolucion" class="text-sm text-red-500">{{ dev.resultadoDevolucion }}</p>
       </div>
       <div v-else class="space-y-4">
-        <div class="rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3 text-sm">
-          <p class="font-semibold">Factura: #{{ devoluciones.facturaDevolucion.no_factura }}</p>
-          <p class="text-xs text-surface-500">{{ devoluciones.facturaDevolucion.nombre_cliente || 'CONSUMIDOR FINAL' }} · ${{ formatCurrency(devoluciones.facturaDevolucion.total || 0) }}</p>
+        <div class="flex items-center gap-2">
+          <Button icon="pi pi-arrow-left" severity="secondary" text rounded size="small" @click="devoluciones.volverALista()" v-tooltip="'Volver a lista de facturas'" />
+          <div class="rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3 text-sm flex-1">
+            <p class="font-semibold">Factura: #{{ dev.facturaDevolucion.no_factura }}</p>
+            <p class="text-xs text-surface-500">{{ dev.facturaDevolucion.nombre_cliente || 'CONSUMIDOR FINAL' }} · ${{ formatCurrency(dev.facturaDevolucion.total || 0) }}</p>
+          </div>
         </div>
         <p class="text-xs font-semibold text-surface-500 uppercase tracking-wide">Selecciona los productos a devolver:</p>
         <div class="flex flex-col gap-2 max-h-48 overflow-y-auto">
-          <div v-for="(p, i) in devoluciones.productosDevolucion" :key="i" class="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer transition-colors" :class="p._devolver ? 'border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20' : 'border-surface-200/50 dark:border-surface-700/30 hover:border-red-300'" @click="devoluciones.toggleDevolucionProducto(p)">
+          <div v-for="(p, i) in dev.productosDevolucion" :key="i" class="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer transition-colors" :class="p._devolver ? 'border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20' : 'border-surface-200/50 dark:border-surface-700/30 hover:border-red-300'" @click="devoluciones.toggleDevolucionProducto(p)">
             <div class="flex items-center gap-2">
               <i class="pi" :class="p._devolver ? 'pi-check-circle text-red-500' : 'pi-circle text-surface-300'"></i>
               <div>
@@ -5837,16 +6504,16 @@ function quitarDescuento() {
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm font-semibold">Motivo de la devolucion</label>
-          <InputText v-model="devoluciones.motivoDevolucion" placeholder="Ej: Producto defectuoso, cambio de opinion..." fluid class="w-full" />
+          <InputText v-model="dev.motivoDevolucion" placeholder="Ej: Producto defectuoso, cambio de opinion..." fluid class="w-full" />
         </div>
         <div class="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3 text-sm flex justify-between">
           <span>Total a devolver</span>
-          <span class="font-bold text-red-600">${{ formatCurrency(devoluciones.devolucionSeleccion.reduce((s: number, p: any) => s + (Number(p.precio || 0) * Number(p.cantidad || 1)), 0)) }}</span>
+          <span class="font-bold text-red-600">${{ formatCurrency(dev.devolucionSeleccion.reduce((s: number, p: any) => s + (Number(p.precio || 0) * Number(p.cantidad || 1)), 0)) }}</span>
         </div>
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="devoluciones.cerrarDevolucion()" />
-        <Button v-if="devoluciones.facturaDevolucion" label="Procesar NC" icon="pi pi-undo" severity="danger" :loading="devoluciones.cargandoDevolucion" :disabled="devoluciones.devolucionSeleccion.length === 0 || !devoluciones.motivoDevolucion.trim()" @click="devoluciones.procesarDevolucion(); sonidos.playSuccess()" />
+        <Button v-if="dev.facturaDevolucion" label="Procesar NC" icon="pi pi-undo" severity="danger" :loading="dev.cargandoDevolucion" :disabled="dev.devolucionSeleccion.length === 0 || !dev.motivoDevolucion.trim()" @click="devoluciones.procesarDevolucion().then(() => { cargarProductos(); cargarImeisDisponibles(); sonidos.playSuccess() })" />
       </template>
     </Dialog>
 
@@ -5870,29 +6537,67 @@ function quitarDescuento() {
       <template #footer><Button label="Cerrar" severity="secondary" text @click="combos.dialogSeleccionarCombo = false" /></template>
     </Dialog>
 
-    <Dialog v-model:visible="combos.dialogCombo" :header="combos.comboEditando?.id ? 'Editar combo' : 'Nuevo combo'" modal :style="{ width: 'min(32rem, 95vw)' }">
+    <Dialog v-model:visible="combos.dialogCombo" :header="combos.comboEditando?.id ? 'Editar combo' : 'Nuevo combo'" modal :style="{ width: 'min(36rem, 95vw)' }">
       <div class="space-y-4 pt-2">
         <div class="flex flex-col gap-1">
           <label class="text-sm font-semibold">Nombre del combo</label>
           <InputText v-model="combos.comboEditando!.nombre" placeholder="Ej: Kit de inicio" fluid />
         </div>
-        <div class="flex flex-col gap-1">
-          <label class="text-sm font-semibold">Precio del combo (RD$)</label>
-          <InputNumber v-model="combos.comboEditando!.precio" :min="0" fluid />
+        <div class="flex gap-3">
+          <div class="flex-1 flex flex-col gap-1">
+            <label class="text-sm font-semibold">Precio del combo (RD$)</label>
+            <InputNumber v-model="combos.comboEditando!.precio" :min="0" fluid />
+          </div>
+          <div class="flex-1 flex flex-col gap-1">
+            <label class="text-sm font-semibold">Costo del combo (RD$)</label>
+            <InputNumber v-model="combos.comboEditando!.costo" :min="0" fluid />
+          </div>
         </div>
         <div class="p-3 rounded-lg bg-surface-50 dark:bg-surface-700/30">
           <p class="text-xs font-semibold text-surface-500 mb-2">Productos incluidos</p>
-          <div v-for="(item, idx) in combos.comboEditando!.items" :key="idx" class="flex items-center gap-2 mb-2">
-            <InputText v-model="item.nombre" placeholder="Producto" class="flex-1" />
-            <InputNumber v-model="item.cantidad" :min="1" class="w-16" />
-            <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click="combos.comboEditando!.items.splice(idx, 1)" />
+          <div v-for="(item, idx) in combos.comboEditando!.items" :key="idx" class="flex flex-col gap-2 mb-3 p-2.5 rounded-lg border border-surface-200/50 dark:border-surface-700/30">
+            <div class="flex items-center gap-2">
+              <Select v-model="item.tipo" :options="['telefono','accesorio','electrodomestico','manual']" placeholder="Tipo" class="w-36" />
+              <Button v-if="item.tipo && item.tipo !== 'manual'" icon="pi pi-search" severity="info" text rounded size="small" @click="(combos.comboEditando as any)._buscandoIdx = idx; dialogBuscadorCombo = true" v-tooltip="'Buscar producto'" />
+            </div>
+            <div class="flex items-center gap-2">
+              <InputText v-model="item.nombre" placeholder="Nombre del producto" class="flex-1" />
+              <InputNumber v-model="item.cantidad" :min="1" class="w-16" placeholder="Cant" />
+            </div>
+            <div class="flex items-center gap-2">
+              <InputNumber v-model="item.precio" :min="0" class="w-28" placeholder="Precio" />
+              <InputNumber v-model="item.costo" :min="0" class="w-28" placeholder="Costo" />
+              <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click="combos.comboEditando!.items.splice(idx, 1)" />
+            </div>
           </div>
-          <Button label="Agregar item" icon="pi pi-plus" severity="secondary" text size="small" @click="combos.comboEditando!.items.push({ nombre: '', cantidad: 1, precio: 0, costo: 0 })" />
+          <Button label="Agregar item" icon="pi pi-plus" severity="secondary" text size="small" @click="combos.comboEditando!.items.push({ id: '', tipo: 'manual', nombre: '', cantidad: 1, precio: 0, costo: 0, refId: null })" />
         </div>
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="combos.dialogCombo = false" />
         <Button v-if="combos.comboEditando" label="Guardar combo" icon="pi pi-save" @click="if (combos.comboEditando) { combos.agregarCombo(combos.comboEditando); combos.dialogCombo = false; sonidos.playSuccess() }" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogBuscadorCombo" header="Buscar producto" modal :style="{ width: 'min(30rem, 95vw)' }" @after-show="busquedaProdCombo = ''">
+      <div class="space-y-3">
+        <IconField>
+          <InputIcon class="pi pi-search" />
+          <InputText v-model="busquedaProdCombo" placeholder="Buscar producto..." fluid />
+        </IconField>
+        <div class="flex flex-col gap-2 max-h-64 overflow-y-auto">
+          <div v-for="prod in productosFiltradosCombo" :key="prod.id" class="flex items-center justify-between p-2.5 rounded-lg border border-surface-200/50 dark:border-surface-700/30 hover:border-primary-300 cursor-pointer transition-colors" @click="seleccionarProductoCombo(prod)">
+            <div>
+              <p class="text-sm font-medium">{{ prod.nombre }}</p>
+              <p class="text-xs text-surface-400">${{ formatCurrency(prod.precio_venta || 0) }} | Stock: {{ prod.cantidad || prod.stock || 'N/A' }}</p>
+            </div>
+            <i class="pi pi-chevron-right text-surface-400"></i>
+          </div>
+          <div v-if="productosFiltradosCombo.length === 0" class="text-center py-6 text-surface-400 text-sm">No se encontraron productos</div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogBuscadorCombo = false" />
       </template>
     </Dialog>
 

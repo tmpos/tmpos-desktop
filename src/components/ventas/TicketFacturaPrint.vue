@@ -79,6 +79,30 @@ function resolveLogo(empresa: any): string {
   return String(empresa?.logoprinter || empresa?.logo || '').trim()
 }
 
+function normalizarAlanubeData(factura: any, ecf: any = {}) {
+  const otro = parseJson(factura?.otro, {})
+  const response = otro?.alanube_response || factura?.alanube_response || {}
+  return {
+    documentStampUrl: ecf?.document_stamp_url || factura?.document_stamp_url || factura?.documentStampUrl || otro?.documentStampUrl || otro?.document_stamp_url || response?.documentStampUrl || response?.document_stamp_url || '',
+    securityCode: ecf?.security_code || factura?.codigo_seguridad || factura?.securityCode || otro?.securityCode || otro?.security_code || response?.securityCode || response?.security_code || '',
+  }
+}
+
+async function obtenerAlanubeData(factura: any) {
+  if (factura?.id) {
+    try {
+      const res = await window.db.getWhere('facturas_ecf', 'factura_id = ?', [factura.id])
+      const ecf = res?.success && Array.isArray(res.data) ? res.data[0] : null
+      if (ecf) return normalizarAlanubeData(factura, ecf)
+    } catch (_) {}
+  }
+  return normalizarAlanubeData(factura)
+}
+
+function tieneComprobanteElectronico(factura: any): boolean {
+  return /^E\d{2}/i.test(String(factura?.ncf || factura?.comprobante || factura?.tipo_comprobante || ''))
+}
+
 async function generarQR(data: string): Promise<string> {
   try {
     return await QRCode.toDataURL(data, { width: 200, margin: 1 })
@@ -141,12 +165,14 @@ function buildTicketHtml({
   empresa,
   productos,
   qrCodeData,
+  alanubeData,
   ticketConfig,
 }: {
   factura: any
   empresa: any
   productos: any[]
   qrCodeData: string
+  alanubeData: any
   ticketConfig: any
 }) {
   const simbolo = 'RD$'
@@ -165,11 +191,13 @@ function buildTicketHtml({
   const mostrarDescuento = descuentoFactura > 0 || productos.some((p) => toNumber(p.descuento) > 0)
   const productosHTML = buildProductosHTML(productos, simbolo, mostrarDescuento)
   const otro = parseJson(factura.otro, [])
-  const pagocon = toNumber(otro?.[0]?.pagocon)
-  const sucambio = toNumber(otro?.[0]?.sucambio)
-  const delivery = otro?.[0]?.delivery || ''
+  const otroPago = Array.isArray(otro) ? otro[0] : {}
+  const pagocon = toNumber(otroPago?.pagocon)
+  const sucambio = toNumber(otroPago?.sucambio)
+  const delivery = otroPago?.delivery || ''
   const rncCliente = factura.rnc_cliente || factura.cedula_cliente || factura.rnc || ''
   const barcodeSvg = generarBarcodeSVG(factura.no_factura || factura.id || '')
+  const mostrarQrFiscal = Boolean(qrCodeData && (alanubeData?.documentStampUrl || tieneComprobanteElectronico(factura)))
 
   const infoParts: string[] = []
   if (isOn(ticketConfig.show_address) && empresa.direccion) infoParts.push(empresa.direccion)
@@ -230,7 +258,7 @@ function buildTicketHtml({
           <p>
             ${factura.fecha_emision ? `Fecha: ${factura.fecha_emision || ''} ${factura.hora || ''}<br>` : ''}
             DOC: <b style="font-size:16px">#${factura.no_factura || ''}</b><br>
-            ${factura.comprobante || factura.ncf ? `NCF: ${factura.comprobante || factura.ncf}<br>` : ''}
+            ${factura.ncf || factura.comprobante ? `NCF: ${factura.ncf || factura.comprobante}<br>` : ''}
             ${isOn(ticketConfig.show_cliente) ? `CLIENTE: ${factura.nombre_cliente || 'SIN REGISTRO'}<br>` : ''}
             ${isOn(ticketConfig.show_cliente) && rncCliente ? `CEDULA/RNC: ${rncCliente}<br>` : ''}
             ${isOn(ticketConfig.show_cliente) && factura.telefono_cliente ? `TELEFONO: ${factura.telefono_cliente}<br>` : ''}
@@ -329,11 +357,12 @@ function buildTicketHtml({
       </center>
     </div>` : ''}
 
-    ${isOn(ticketConfig.show_qr) ? `<div id="qrcode" class="qr-code">
+    ${(isOn(ticketConfig.show_qr) || mostrarQrFiscal) ? `<div id="qrcode" class="qr-code">
       <center>
         <div class="bordeado2">
           <img src="${qrCodeData}" alt="Codigo QR" width="150" height="150"/>
         </div>
+        ${alanubeData?.securityCode ? `<div style="font-size:9px;font-weight:bold;margin-top:3px">Codigo Seguridad: ${alanubeData.securityCode}</div>` : ''}
       </center>
     </div>` : ''}
 
@@ -364,12 +393,15 @@ async function printTicket(factura: any) {
     if (res.success && res.data?.length > 0) empresa = res.data[0]
   } catch (_) {}
 
-  const qrCodeData = await generarQR(`https://tmposrd.com/factura/${factura.no_factura}`)
+  const alanubeData = await obtenerAlanubeData(factura)
+  const qrUrl = alanubeData.documentStampUrl || `https://tmposrd.com/factura/${factura.no_factura}`
+  const qrCodeData = await generarQR(qrUrl)
   const html = buildTicketHtml({
     factura,
     empresa,
     productos: Array.isArray(productos) ? productos : [],
     qrCodeData,
+    alanubeData,
     ticketConfig,
   })
 

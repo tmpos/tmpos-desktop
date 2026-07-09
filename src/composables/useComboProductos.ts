@@ -1,11 +1,21 @@
 import { ref } from 'vue'
 
+export interface ComboItem {
+  id: string
+  tipo: 'telefono' | 'accesorio' | 'electrodomestico' | 'manual'
+  nombre: string
+  cantidad: number
+  precio: number
+  costo: number
+  refId: number | null
+}
+
 export interface ComboProducto {
   id: string
   nombre: string
   precio: number
   costo: number
-  items: { nombre: string; cantidad: number; precio: number; costo: number }[]
+  items: ComboItem[]
   activo: boolean
 }
 
@@ -64,11 +74,11 @@ export function useComboProductos() {
 
   function comboToCart(combo: ComboProducto): any[] {
     return combo.items.map(item => ({
-      tipo: 'combo',
+      tipo: item.tipo === 'telefono' ? 'imei' : item.tipo === 'electrodomestico' ? 'serial' : item.tipo === 'accesorio' ? 'accesorio' : 'manual',
       nombre: `${combo.nombre} - ${item.nombre}`,
       cantidad: item.cantidad,
-      precio: 0,
-      costo: 0,
+      precio: item.precio || 0,
+      costo: item.costo || 0,
       origenCombo: combo.id,
     }))
   }

@@ -50,10 +50,13 @@ export interface SyncStatus {
   mode?: SyncMode
   result?: SyncResult
   details?: SyncDetail[]
+  realtime?: boolean
 }
 
 let intervalId: ReturnType<typeof setInterval> | null = null
+let realtimeStop: (() => void) | null = null
 let syncingInProgress = false
+let realtimeConnected = false
 let currentMode: SyncMode = 'ambos'
 let onStatusChange: ((status: SyncStatus) => void) | null = null
 let onSyncComplete: ((details: SyncDetail[]) => void) | null = null
@@ -78,8 +81,18 @@ export function isOnline(): boolean {
   return currentMode !== 'offline' && tmc.isConnected()
 }
 
+export function isRealtimeConnected(): boolean {
+  return realtimeConnected
+}
+
 function notify(status: SyncStatus) {
   onStatusChange?.(status)
+}
+
+function notifyLocalRealtimeChange(eventType: 'INSERT' | 'UPDATE', tabla: string, uid?: string) {
+  window.dispatchEvent(new CustomEvent('tmcloud:local-change', {
+    detail: { eventType, table: tabla, uid },
+  }))
 }
 
 function nowSql(): string {
@@ -274,6 +287,78 @@ async function upsertLocal(tabla: string, cloudRow: any): Promise<'inserted' | '
   const result = await (window as any).db.update(tabla, existing.id, cleanRow)
   if (!result.success) throw new Error(result.error || `No se pudo actualizar ${tabla}`)
   return 'updated'
+}
+
+async function applyRealtimeChange(payload: any): Promise<void> {
+  const tabla = String(payload?.table || '')
+  if (!tabla || LOCAL_SYSTEM_TABLES.includes(tabla)) return
+  const eventType = String(payload?.eventType || payload?.type || '').toUpperCase()
+  const recordUid = payload?.record_uid || payload?.changes?.uid || payload?.new?.uid || payload?.old?.uid
+  if (!recordUid && eventType !== 'INSERT') return
+
+  if (eventType === 'DELETE') {
+    const local = (await getLocalRows(tabla)).find((row: any) => row.uid === recordUid)
+    if (local) await deleteLocalFromRealtime(tabla, local.id)
+    notify({ running: false, tabla, progreso: `Realtime DELETE ${tabla}`, realtime: true })
+    return
+  }
+
+  if (eventType === 'INSERT') {
+    const row = payload.new || payload.changes
+    if (row?.uid) {
+      const action = await upsertLocal(tabla, row)
+      if (action === 'inserted' || action === 'updated') notifyLocalRealtimeChange('INSERT', tabla, row.uid)
+      notify({ running: false, tabla, progreso: `Realtime INSERT ${tabla}`, realtime: true })
+    }
+    return
+  }
+
+  if (eventType === 'UPDATE') {
+    const local = (await getLocalRows(tabla)).find((row: any) => row.uid === recordUid)
+    if (!local) {
+      if (payload.new?.uid) {
+        const action = await upsertLocal(tabla, payload.new)
+        if (action === 'inserted' || action === 'updated') notifyLocalRealtimeChange('UPDATE', tabla, payload.new.uid)
+      }
+      return
+    }
+    const changes = payload.changes || payload.new || {}
+    const result = await (window as any).db.update(tabla, local.id, { ...changes, updated_at: changes.updated_at || nowSql() })
+    if (!result?.success) throw new Error(result?.error || `No se pudo aplicar realtime en ${tabla}`)
+    notifyLocalRealtimeChange('UPDATE', tabla, recordUid)
+    notify({ running: false, tabla, progreso: `Realtime UPDATE ${tabla}`, realtime: true })
+  }
+}
+
+async function deleteLocalFromRealtime(tabla: string, id: number): Promise<void> {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tabla)) throw new Error('Tabla invalida en realtime')
+  const result = await (window as any).electron?.invoke('consultaservidor', 'rawQuery', `DELETE FROM "${tabla}" WHERE id = ${Number(id)}`)
+  if (result && result.success === false) throw new Error(result.error || `No se pudo borrar ${tabla}`)
+}
+
+export async function startRealtime() {
+  stopRealtime()
+  if (!await ensureCloudApi() || currentMode === 'offline') return false
+  realtimeStop = tmc.subscribeRealtime(
+    (payload) => {
+      applyRealtimeChange(payload).catch((error) => {
+        notify({ running: false, error: error?.message || 'Error aplicando realtime', realtime: false })
+      })
+    },
+    () => {
+      realtimeConnected = false
+      notify({ running: false, error: 'Realtime desconectado', realtime: false })
+    },
+  )
+  realtimeConnected = true
+  notify({ running: false, progreso: 'Realtime conectado', realtime: true })
+  return true
+}
+
+export function stopRealtime() {
+  if (realtimeStop) realtimeStop()
+  realtimeStop = null
+  realtimeConnected = false
 }
 
 async function upsertCloud(tabla: string, rows: any[]): Promise<{ inserted: number; updated: number; errors: number }> {
@@ -623,6 +708,7 @@ export async function syncAll(mode?: SyncMode, incremental = false): Promise<Syn
 export async function startAutoSync(intervalMs = 30000) {
   stopAutoSync()
   if (!await ensureCloudApi() || currentMode === 'offline') return
+  await startRealtime()
   if (syncingInProgress) return
 
   syncingInProgress = true
@@ -648,6 +734,7 @@ export function stopAutoSync() {
   if (intervalId) clearInterval(intervalId)
   intervalId = null
   syncingInProgress = false
+  stopRealtime()
 }
 
 export async function initAutoSyncFromConfig() {
@@ -658,5 +745,6 @@ export async function initAutoSyncFromConfig() {
     const enabled = await getConfigValue('tm_auto_sync') === '1'
     currentMode = mode
     if (enabled && mode !== 'offline') await startAutoSync(interval)
+    else if (mode !== 'offline') await startRealtime()
   } catch { /* Configuration will be retried when the user opens TM Cloud. */ }
 }

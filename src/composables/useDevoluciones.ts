@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { reactive } from 'vue'
 
 export interface DevolucionItem {
   facturaId: number
@@ -10,17 +10,67 @@ export interface DevolucionItem {
 }
 
 export function useDevoluciones() {
-  const dialogDevolucion = ref(false)
-  const facturaDevolucion = ref<any>(null)
-  const productosDevolucion = ref<any[]>([])
-  const devolucionSeleccion = ref<any[]>([])
-  const motivoDevolucion = ref('')
-  const cargandoDevolucion = ref(false)
-  const resultadoDevolucion = ref<string | null>(null)
+  const state = reactive({
+    dialogDevolucion: false as boolean,
+    facturaDevolucion: null as any,
+    productosDevolucion: [] as any[],
+    devolucionSeleccion: [] as any[],
+    motivoDevolucion: '' as string,
+    cargandoDevolucion: false as boolean,
+    resultadoDevolucion: null as string | null,
+    facturasDisponibles: [] as any[],
+    busquedaFactura: '' as string,
+    cargandoFacturas: false as boolean,
+  })
+
+  function facturasFiltradas() {
+    const texto = state.busquedaFactura.toLowerCase().trim()
+    if (!texto) return state.facturasDisponibles
+    return state.facturasDisponibles.filter((f: any) =>
+      String(f.no_factura || '').toLowerCase().includes(texto) ||
+      String(f.nombre_cliente || '').toLowerCase().includes(texto) ||
+      String(f.ncf || '').toLowerCase().includes(texto)
+    )
+  }
+
+  async function cargarFacturas() {
+    state.cargandoFacturas = true
+    try {
+      const res = await window.db.getAll('facturas')
+      if (res.success) {
+        state.facturasDisponibles = (res.data || [])
+          .filter((f: any) => f.tipo_factura === 'FACTURA_VENTA')
+          .sort((a: any, b: any) => {
+            const da = new Date(a.fecha_emision || a.created_at || 0).getTime()
+            const db = new Date(b.fecha_emision || b.created_at || 0).getTime()
+            return db - da
+          })
+      }
+    } catch {} finally {
+      state.cargandoFacturas = false
+    }
+  }
+
+  function seleccionarFactura(factura: any) {
+    state.facturaDevolucion = factura
+    const productos = typeof factura.productos === 'string'
+      ? JSON.parse(factura.productos || '[]')
+      : (factura.productos || [])
+    state.productosDevolucion = productos.map((p: any) => ({ ...p, _devolver: false }))
+    state.devolucionSeleccion = []
+    state.busquedaFactura = ''
+  }
+
+  function volverALista() {
+    state.facturaDevolucion = null
+    state.productosDevolucion = []
+    state.devolucionSeleccion = []
+    state.motivoDevolucion = ''
+  }
 
   async function buscarFacturaParaDevolucion(noFactura: string) {
-    cargandoDevolucion.value = true
-    resultadoDevolucion.value = null
+    state.cargandoDevolucion = true
+    state.resultadoDevolucion = null
     try {
       const res = await window.db.getAll('facturas')
       if (res.success) {
@@ -29,44 +79,38 @@ export function useDevoluciones() {
           f.tipo_factura === 'FACTURA_VENTA'
         )
         if (factura) {
-          facturaDevolucion.value = factura
-          const productos = typeof factura.productos === 'string'
-            ? JSON.parse(factura.productos || '[]')
-            : (factura.productos || [])
-          productosDevolucion.value = productos.map((p: any) => ({ ...p, _devolver: false }))
-          devolucionSeleccion.value = productosDevolucion.value.filter((p: any) => p._devolver)
-          dialogDevolucion.value = true
+          seleccionarFactura(factura)
         } else {
-          resultadoDevolucion.value = 'Factura no encontrada o no es de tipo venta'
+          state.resultadoDevolucion = 'Factura no encontrada o no es de tipo venta'
         }
       }
     } catch {
-      resultadoDevolucion.value = 'Error al buscar factura'
+      state.resultadoDevolucion = 'Error al buscar factura'
     } finally {
-      cargandoDevolucion.value = false
+      state.cargandoDevolucion = false
     }
   }
 
   function toggleDevolucionProducto(producto: any) {
     producto._devolver = !producto._devolver
-    devolucionSeleccion.value = productosDevolucion.value.filter((p: any) => p._devolver)
+    state.devolucionSeleccion = state.productosDevolucion.filter((p: any) => p._devolver)
   }
 
   async function procesarDevolucion(): Promise<boolean> {
-    if (!facturaDevolucion.value || devolucionSeleccion.value.length === 0) return false
-    if (!motivoDevolucion.value.trim()) return false
+    if (!state.facturaDevolucion || state.devolucionSeleccion.length === 0) return false
+    if (!state.motivoDevolucion.trim()) return false
 
-    cargandoDevolucion.value = true
+    state.cargandoDevolucion = true
     try {
-      const factura = facturaDevolucion.value
+      const factura = state.facturaDevolucion
       const ahora = new Date()
       const fechaStr = ahora.toISOString().split('T')[0]
       const horaStr = `${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`
       const noNC = `NC-${fechaStr}-${String(ahora.getSeconds()).padStart(2, '0')}`
 
-      const productosDevueltos = devolucionSeleccion.value.map((p: any) => ({
+      const productosDevueltos = state.devolucionSeleccion.map((p: any) => ({
         ...p,
-        motivo: motivoDevolucion.value,
+        motivo: state.motivoDevolucion,
         fecha_devolucion: fechaStr,
       }))
 
@@ -86,7 +130,7 @@ export function useDevoluciones() {
         total: totalDevuelto,
         subtotal: totalDevuelto,
         productos: JSON.stringify(productosDevueltos),
-        nota: `DEVOLUCION: ${factura.no_factura} | ${motivoDevolucion.value}`,
+        nota: `DEVOLUCION: ${factura.no_factura} | ${state.motivoDevolucion}`,
         metodo_pago: 'NOTA_CREDITO',
         almacen_id: factura.almacen_id || 0,
         usuario: 'POS',
@@ -94,7 +138,7 @@ export function useDevoluciones() {
 
       const resNC = await window.db.insert('facturas', notaCreditoData)
       if (!resNC.success) {
-        resultadoDevolucion.value = 'Error al crear nota de crédito'
+        state.resultadoDevolucion = 'Error al crear nota de crédito'
         return false
       }
 
@@ -118,34 +162,33 @@ export function useDevoluciones() {
         }
       }
 
-      resultadoDevolucion.value = `NC ${noNC} creada por RD$ ${totalDevuelto.toFixed(2)}`
-      dialogDevolucion.value = false
+      state.resultadoDevolucion = `NC ${noNC} creada por RD$ ${totalDevuelto.toFixed(2)}`
+      state.dialogDevolucion = false
       return true
     } catch (e: any) {
-      resultadoDevolucion.value = `Error: ${e.message}`
+      state.resultadoDevolucion = `Error: ${e.message}`
       return false
     } finally {
-      cargandoDevolucion.value = false
+      state.cargandoDevolucion = false
     }
   }
 
   function cerrarDevolucion() {
-    dialogDevolucion.value = false
-    facturaDevolucion.value = null
-    productosDevolucion.value = []
-    devolucionSeleccion.value = []
-    motivoDevolucion.value = ''
-    resultadoDevolucion.value = null
+    state.dialogDevolucion = false
+    state.facturaDevolucion = null
+    state.productosDevolucion = []
+    state.devolucionSeleccion = []
+    state.motivoDevolucion = ''
+    state.resultadoDevolucion = null
+    state.busquedaFactura = ''
   }
 
   return {
-    dialogDevolucion,
-    facturaDevolucion,
-    productosDevolucion,
-    devolucionSeleccion,
-    motivoDevolucion,
-    cargandoDevolucion,
-    resultadoDevolucion,
+    state,
+    facturasFiltradas,
+    cargarFacturas,
+    seleccionarFactura,
+    volverALista,
     buscarFacturaParaDevolucion,
     toggleDevolucionProducto,
     procesarDevolucion,

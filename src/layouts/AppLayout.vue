@@ -1,13 +1,32 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useToast } from 'primevue/usetoast'
+import Toast from 'primevue/toast'
 import AppTopbar from '@/components/AppTopbar.vue'
 import { version } from '../../package.json'
 
 const route = useRoute()
+const toast = useToast()
 const isLogin = () => route.name === 'login'
+
+function onTmCloudLocalChange(event: Event) {
+  const detail = (event as CustomEvent).detail || {}
+  if (!['INSERT', 'UPDATE'].includes(detail.eventType)) return
+  toast.add({
+    severity: detail.eventType === 'INSERT' ? 'success' : 'info',
+    summary: detail.eventType === 'INSERT' ? 'Dato nuevo recibido' : 'Dato actualizado',
+    detail: `${detail.table || 'Tabla'} se actualizo desde TM Cloud`,
+    life: 3500,
+  })
+}
+
+onMounted(() => window.addEventListener('tmcloud:local-change', onTmCloudLocalChange))
+onBeforeUnmount(() => window.removeEventListener('tmcloud:local-change', onTmCloudLocalChange))
 </script>
 
 <template>
+  <Toast position="top-right" />
   <div v-if="isLogin()" class="h-screen overflow-hidden bg-surface-100 dark:bg-surface-900">
     <router-view />
   </div>

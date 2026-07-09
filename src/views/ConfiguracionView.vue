@@ -18,6 +18,8 @@ import TMCloudComp from '@/components/configuracion/TMCloudComp.vue'
 import ActualizacionComp from '@/components/configuracion/ActualizacionComp.vue'
 import AlmacenesComp from '@/components/configuracion/AlmacenesComp.vue'
 import MetodosPagoComp from '@/components/configuracion/MetodosPagoComp.vue'
+import AlanubeComp from '@/components/configuracion/AlanubeComp.vue'
+import ComprobantesElectronicosComp from '@/components/configuracion/ComprobantesElectronicosComp.vue'
 
 const auth = useAuthStore()
 
@@ -36,6 +38,8 @@ const items = computed<SubMenuItem[]>(() => {
     { label: 'Actualizacion', icon: 'pi pi-refresh', key: 'actualizacion' },
     { label: 'Almacenes', icon: 'pi pi-warehouse', key: 'almacenes' },
     { label: 'Metodos Pago', icon: 'pi pi-credit-card', key: 'metodos-pago' },
+    { label: 'Alanube', icon: 'pi pi-cloud', key: 'alanube' },
+    { label: 'Comprobantes e-CF', icon: 'pi pi-receipt', key: 'comprobantes-electronicos' },
   ]
   if (auth.isSoporte || auth.isAdmin) {
     list.push({ label: 'Soporte', icon: 'pi pi-shield', key: 'soporte' })
@@ -60,6 +64,8 @@ const components: Record<string, any> = {
   bitacora: BitacoraComp,
   almacenes: AlmacenesComp,
   'metodos-pago': MetodosPagoComp,
+  alanube: AlanubeComp,
+  'comprobantes-electronicos': ComprobantesElectronicosComp,
 }
 
 const active = shallowRef('empresa')
