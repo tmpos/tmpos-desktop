@@ -1,5 +1,8 @@
 # Roadmap - Sistema de Gestion para Tiendas de Celulares
 
+> **Ultima version:** [v2.11.1](https://github.com/tmpos/tmpos-desktop/releases/tag/v2.11.1)
+> **Descargar:** [TMPOS Setup 2.11.1.exe](https://github.com/tmpos/tmpos-desktop/releases/download/v2.11.1/TMPOS-Setup-2.11.1.exe)
+
 ## Estado actual del proyecto
 
 ### ✅ Implementado
@@ -120,3 +123,200 @@
 - [ ] Companion app para escanear IMEIs/Seriales
 - [ ] Consulta de precios desde el movil
 - [ ] Notificaciones push
+
+---
+
+# Roadmap Profesional - Manteniendo el sistema simple
+
+Este bloque organiza las mejoras que harian el sistema mas profesional sin cambiar su filosofia principal: vender rapido, cobrar facil, imprimir claro y administrar sin complicaciones.
+
+## Principios
+
+- Mantener el POS rapido y directo.
+- Ocultar opciones tecnicas al cajero.
+- Registrar todo lo importante sin pedir pasos innecesarios.
+- Proteger la informacion fiscal, inventario y caja.
+- Facilitar soporte, diagnostico y recuperacion.
+
+---
+
+## Fase 1 - Base profesional obligatoria
+
+### 1. Facturacion electronica robusta
+- [x] Crear tabla propia para datos e-CF / Alanube.
+- [x] Guardar `factura_id`, `alanube_id`, `document_number`, `document_stamp_url`, `security_code`, `legal_status`, `status`, `pdf_url`, `xml_url`, `payload`, `response` y fechas.
+- [x] Bloquear edicion de facturas electronicas aceptadas por DGII.
+- [x] Permitir reimpresion sin modificar QR, codigo de seguridad ni datos fiscales.
+- [x] Agregar boton para reintentar envio a Alanube cuando falle.
+- [x] Manejar estados: pendiente, enviada, aceptada, rechazada y error.
+
+### 2. Impresion unificada
+- [ ] Centralizar la preparacion de datos para ticket y PDF.
+- [ ] Usar la misma fuente para QR, e-CF, codigo de seguridad y URL de timbre.
+- [ ] Evitar logica duplicada entre POS, Facturas, ticket termico y PDF.
+- [ ] Garantizar que una factura reimpresa conserve el mismo QR fiscal.
+
+### 3. Auditoria de acciones
+- [ ] Registrar anulaciones.
+- [x] Registrar edicion de facturas.
+- [ ] Registrar cambios de precios.
+- [ ] Registrar ajustes de inventario.
+- [x] Registrar cambios de configuracion fiscal.
+- [x] Guardar usuario, fecha, accion y datos relevantes.
+
+### 4. Permisos por accion
+- [ ] Permiso para vender.
+- [ ] Permiso para aplicar descuento.
+- [ ] Permiso para cambiar precio en POS.
+- [ ] Permiso para anular factura.
+- [ ] Permiso para editar factura.
+- [ ] Permiso para abrir y cerrar caja.
+- [ ] Permiso para cambiar configuracion.
+- [ ] Validar permisos tambien en procesos internos, no solo en pantalla.
+
+### 5. Kardex de inventario
+- [ ] Registrar entradas.
+- [ ] Registrar salidas.
+- [ ] Registrar ajustes.
+- [ ] Registrar devoluciones.
+- [ ] Registrar transferencias.
+- [ ] Guardar existencia antes y despues del movimiento.
+- [ ] Mostrar historial por producto.
+
+---
+
+## Fase 2 - Control operativo
+
+### 6. Cierre de caja formal
+- [ ] Apertura de caja con monto inicial.
+- [ ] Registro de ingresos y egresos.
+- [ ] Arqueo por metodo de pago.
+- [ ] Diferencia esperada vs contada.
+- [ ] Firma o confirmacion del usuario responsable.
+- [ ] Impresion o PDF del cierre.
+
+### 7. Devoluciones y notas de credito
+- [ ] Crear flujo formal de devolucion.
+- [ ] Devolver inventario cuando aplique.
+- [ ] Generar nota de credito para facturas fiscales.
+- [ ] Relacionar nota de credito con factura original.
+- [ ] Registrar motivo de devolucion.
+
+### 8. Alertas inteligentes
+- [ ] Productos bajo minimo.
+- [ ] Comprobantes proximos a agotarse.
+- [ ] Facturas electronicas pendientes de envio.
+- [ ] Facturas rechazadas por DGII.
+- [ ] Cuentas por cobrar vencidas.
+- [ ] Backups atrasados.
+
+### 9. Centro de diagnostico
+- [ ] Mostrar version del sistema.
+- [ ] Mostrar estado de base de datos.
+- [ ] Mostrar estado de Alanube.
+- [ ] Mostrar estado de impresora configurada.
+- [ ] Mostrar ultimo backup.
+- [ ] Exportar paquete de soporte con errores recientes y configuracion segura.
+
+### 10. Backup y recuperacion
+- [ ] Backup manual.
+- [ ] Backup automatico.
+- [ ] Verificar que el backup sea legible.
+- [ ] Restaurar desde backup.
+- [ ] Mostrar fecha del ultimo backup correcto.
+
+---
+
+## Fase 3 - Reportes y administracion
+
+### 11. Dashboard diario
+- [ ] Ventas del dia.
+- [ ] Ventas por metodo de pago.
+- [ ] Facturas pendientes.
+- [ ] Cuentas por cobrar vencidas.
+- [ ] Productos bajos.
+- [ ] Ganancia estimada del dia.
+
+### 12. Reporte de rentabilidad
+- [ ] Ganancia por producto.
+- [ ] Ganancia por categoria.
+- [ ] Ganancia por vendedor.
+- [ ] Ganancia por cliente.
+- [ ] Productos con mejor margen.
+- [ ] Productos sin movimiento.
+
+### 13. Reporte fiscal
+- [ ] ITBIS cobrado.
+- [ ] Ventas gravadas.
+- [ ] Ventas exentas.
+- [ ] Comprobantes emitidos.
+- [ ] Comprobantes anulados.
+- [ ] Facturas electronicas aceptadas/rechazadas.
+
+### 14. Clientes profesionales
+- [ ] Historial de compras.
+- [ ] Balance pendiente.
+- [ ] Limite de credito.
+- [ ] Dias de credito.
+- [ ] Ultima compra.
+- [ ] Estado del cliente.
+
+### 15. Compras y proveedores
+- [ ] Orden de compra.
+- [ ] Recepcion de mercancia.
+- [ ] Actualizacion de costo.
+- [ ] Cuenta por pagar.
+- [ ] Historial por proveedor.
+
+---
+
+## Fase 4 - Experiencia y soporte
+
+### 16. Busqueda global
+- [ ] Buscar factura.
+- [ ] Buscar cliente.
+- [ ] Buscar producto.
+- [ ] Buscar IMEI o serial.
+- [ ] Buscar comprobante.
+
+### 17. Atajos de teclado en POS
+- [ ] Buscar producto.
+- [ ] Cobrar.
+- [ ] Imprimir.
+- [ ] Cambiar cantidad.
+- [ ] Aplicar descuento.
+- [ ] Seleccionar cliente.
+
+### 18. Pantallas por rol
+- [ ] Vista simple para cajero.
+- [ ] Vista administrativa para dueno/admin.
+- [ ] Vista tecnica para soporte.
+- [ ] Ocultar configuraciones avanzadas al usuario normal.
+
+### 19. Seguridad de datos sensibles
+- [ ] Enmascarar token de Alanube.
+- [ ] Proteger configuracion fiscal.
+- [ ] Proteger secuencias.
+- [ ] Bloquear sesion por inactividad.
+- [ ] Pedir PIN para acciones sensibles.
+
+### 20. Consistencia visual y textos
+- [ ] Unificar nombres: factura, comprobante, e-CF, NCF, sin comprobante.
+- [ ] Usar estados visuales claros.
+- [ ] Mejorar mensajes de error para usuarios no tecnicos.
+- [ ] Mantener pantallas limpias y directas.
+
+---
+
+## Orden recomendado de implementacion
+
+1. Tabla propia para e-CF / Alanube.
+2. Bloqueo de edicion fiscal aceptada.
+3. Impresion unificada de ticket/PDF/QR.
+4. Auditoria de acciones.
+5. Kardex de inventario.
+6. Cierre de caja formal.
+7. Reintentos y estados de facturacion electronica.
+8. Centro de diagnostico.
+9. Backup automatico verificable.
+10. Reportes de rentabilidad y fiscal.
