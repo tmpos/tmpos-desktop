@@ -23,6 +23,9 @@ import { getImageUrl } from '@/services/tmCloudClient'
 import NotasComp from '@/components/ventas/NotasComp.vue'
 import FacturaPdfPrint from '@/components/ventas/FacturaPdfPrint.vue'
 import TicketCuentaCobrarPrint from '@/components/contabilidad/TicketCuentaCobrarPrint.vue'
+import OrdenTallerForm from '@/components/taller/OrdenTallerForm.vue'
+import TicketTallerPrint from '@/components/taller/TicketTallerPrint.vue'
+import RecibirEquipoDialog from '@/components/ventas/RecibirEquipoDialog.vue'
 import { useAlmacenStore } from '@/stores/almacen.store'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAuthStore } from '@/stores/auth.store'
@@ -96,6 +99,10 @@ const dialogCambiarImei = ref(false)
 const itemCambiarImei = ref<any>(null)
 const imeisDisponiblesParaCambio = ref<any[]>([])
 const busquedaCambiarImei = ref('')
+const dialogGestionImeis = ref(false)
+const itemGestionImeis = ref<any>(null)
+const indexGestionImeis = ref<number | null>(null)
+const busquedaGestionImeis = ref('')
 const clienteExpress = ref('')
 const esCotizacion = ref(false)
 const prodPersonalizado = ref({ nombre: '', precio: 0, costo: 0 })
@@ -160,18 +167,22 @@ const modosAgregarProductoFactCoti = [
 const busquedaProductoDbFactCoti = ref('')
 const productoDbFactCotiSeleccionado = ref<any>(null)
 const confirmPago = ref(false)
+const bancosPos = ref<any[]>([])
+const bancoPosSeleccionado = ref<any>(null)
+const cargandoBancosPos = ref(false)
 const dialogMixto = ref(false)
-const pasoMixto = ref<'elegir' | 'montos'>('elegir')
 const metodosMixto = ref({ efectivo: false, tarjeta: false, transferencia: false, cheque: false })
 const mixtoEfectivo = ref(0)
 const mixtoTarjeta = ref(0)
 const mixtoTransferencia = ref(0)
+const transferenciasMixto = ref<Array<{ banco_id: number | null; monto: number }>>([])
 const mixtoCheque = ref(0)
 const mixtoError = ref('')
 const dialogTicket = ref(false)
 const dialogPrintChoice = ref(false)
 const facturaPdfRef = ref<any>(null)
 const ticketCuentaCobrarRef = ref<any>(null)
+const ticketTallerRef = ref<any>(null)
 const dialogPdf = ref(false)
 const pdfUrl = ref('')
 const ticketInvoiceNo = ref('')
@@ -207,6 +218,29 @@ const alanubeToken = ref('')
 const alanubeIdCompania = ref('')
 const alanubeCompanyData = ref<any | null>(null)
 const clienteSeleccionado = ref<any>(null)
+const dialogOrdenTallerPos = ref(false)
+const dialogOrdenTallerPostSave = ref(false)
+const ordenTallerPosGuardada = ref<any | null>(null)
+const dialogEtiquetaTallerPos = ref(false)
+const plantillasEtiquetasTallerPos = ref<any[]>([])
+const printersTallerPos = ref<any[]>([])
+const printerTallerPos = ref('')
+const escaneandoPrintersTallerPos = ref(false)
+const dialogRecibirEquipo = ref(false)
+const dialogAplicarNotaRecibido = ref(false)
+const recibidoParaDescuento = ref<any | null>(null)
+const notaCreditoRecibido = ref<any | null>(null)
+const ordenTallerInitialData = computed(() => ({
+  nombre: clienteSeleccionado.value?.nombre || clienteExpress.value || '',
+  cedula: clienteSeleccionado.value?.cedula || clienteSeleccionado.value?.rnc || '',
+  telefono: clienteSeleccionado.value?.telefono || clienteSeleccionado.value?.whatsapp || '',
+  email: clienteSeleccionado.value?.email || '',
+}))
+const recibirEquipoInitialData = computed(() => ({
+  customer_name: clienteSeleccionado.value?.nombre || clienteExpress.value || '',
+  customer_phone: clienteSeleccionado.value?.telefono || clienteSeleccionado.value?.whatsapp || '',
+  customer_cedula: clienteSeleccionado.value?.cedula || clienteSeleccionado.value?.rnc || '',
+}))
 const noFactura = ref('')
 const metodoPago = ref('EFECTIVO')
 const montoRecibido = ref(0)
@@ -505,6 +539,10 @@ const metodosPago = computed(() => {
   return db
 })
 const metodoPagoSelected = computed(() => metodosPagoDB.value.find((m: any) => m.nombre === metodoPago.value))
+const needsBankSelection = computed(() => {
+  const m = String(metodoPago.value).toUpperCase()
+  return m === 'TRANSFERENCIA' || m === 'TARJETA'
+})
 const comisionPorcentaje = computed(() => {
   if (metodoPago.value === 'CREDITO' || metodoPago.value === 'MIXTO') return 0
   return Number(metodoPagoSelected.value?.porcentaje || 0)
@@ -825,6 +863,168 @@ async function abrirFatCoti() {
   dialogFatCoti.value = true
   registroFatCotiSeleccionado.value = null
   await cargarRegistrosFatCoti()
+}
+
+function abrirRecibirEquipo() {
+  dialogRecibirEquipo.value = true
+}
+
+function abrirOrdenTallerPos() {
+  dialogOrdenTallerPos.value = true
+}
+
+async function onOrdenTallerPosGuardada(payload?: any) {
+  dialogOrdenTallerPos.value = false
+  ordenTallerPosGuardada.value = payload?.orden || null
+  if (ordenTallerPosGuardada.value) {
+    dialogOrdenTallerPostSave.value = true
+  }
+}
+
+async function cargarPlantillasEtiquetasTallerPos() {
+  const res = await window.db.getAll('plantillas_etiquetas')
+  if (res.success) plantillasEtiquetasTallerPos.value = res.data || []
+}
+
+async function escanearPrintersTallerPos() {
+  escaneandoPrintersTallerPos.value = true
+  try {
+    const res = await window.electron.invoke('getPrinters')
+    if (res.success) printersTallerPos.value = res.data || []
+  } catch (_) {
+    printersTallerPos.value = []
+  } finally {
+    escaneandoPrintersTallerPos.value = false
+  }
+}
+
+async function imprimirOrdenTallerPos() {
+  if (!ordenTallerPosGuardada.value) return
+  await ticketTallerRef.value?.printTicket(ordenTallerPosGuardada.value)
+}
+
+async function abrirEtiquetaOrdenTallerPos() {
+  if (!ordenTallerPosGuardada.value) return
+  printerTallerPos.value = localStorage.getItem('etiquetas_printer') || ''
+  await Promise.all([cargarPlantillasEtiquetasTallerPos(), escanearPrintersTallerPos()])
+  dialogEtiquetaTallerPos.value = true
+}
+
+function aplicarVariablesEtiquetaTallerPos(valor: string, orden: any): string {
+  const numeroOrden = orden?.no_orden || orden?.id || ''
+  return String(valor || '')
+    .replace(/\{CLIENTE\}/g, orden?.nombre || '')
+    .replace(/\{NO_ORDEN\}/g, numeroOrden)
+    .replace(/\{ORDEN\}/g, numeroOrden)
+    .replace(/\{NUMERO_ORDEN\}/g, numeroOrden)
+}
+
+async function imprimirEtiquetaOrdenTallerPos(plantilla: any) {
+  const orden = ordenTallerPosGuardada.value
+  if (!orden || !plantilla?.elementos) return
+  if (!printerTallerPos.value) {
+    toast.add({ severity: 'warn', summary: 'Selecciona una impresora', life: 2000 })
+    return
+  }
+
+  localStorage.setItem('etiquetas_printer', printerTallerPos.value)
+  dialogEtiquetaTallerPos.value = false
+
+  let elementos: any[]
+  try { elementos = JSON.parse(plantilla.elementos) } catch { return }
+
+  const mmToPx = (mm: number) => mm * 3.7795275591
+  const ancho = plantilla.ancho || 50
+  const alto = plantilla.alto || 30
+  let html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiqueta Taller</title><style>'
+  html += 'body{margin:0;padding:0;font-family:Arial,sans-serif}'
+  html += `.label{width:${mmToPx(ancho)}px;height:${mmToPx(alto)}px;position:relative;overflow:hidden;background:white}`
+  html += '.elem{position:absolute;overflow:hidden;word-wrap:break-word;display:flex;align-items:center;justify-content:center}'
+  html += '</style></head><body><div class="label">'
+
+  const elClone = JSON.parse(JSON.stringify(elementos))
+  for (const el of elClone) {
+    if (typeof el.contenido === 'string') el.contenido = aplicarVariablesEtiquetaTallerPos(el.contenido, orden)
+    const style = `left:${mmToPx(el.x)}px;top:${mmToPx(el.y)}px;width:${mmToPx(el.ancho)}px;height:${mmToPx(el.alto)}px;`
+    if (el.tipo === 'texto') {
+      html += `<div class="elem" style="${style}font-size:${(el.fontSize || 8) * 1.333}px;font-weight:${el.bold ? 'bold' : 'normal'}">${el.contenido}</div>`
+    } else if (el.tipo === 'barcode') {
+      html += `<div class="elem" style="${style}overflow:hidden">${generarBarcodeSVG(aplicarVariablesEtiquetaTallerPos(el.contenido, orden))}</div>`
+    } else if (el.tipo === 'qr') {
+      const qrData = await QRCode.toDataURL(aplicarVariablesEtiquetaTallerPos(el.contenido, orden), { width: 200, margin: 1 })
+      html += `<img class="elem" style="${style}object-fit:contain;max-width:100%;max-height:100%" src="${qrData}" />`
+    }
+  }
+  html += '</div></body></html>'
+
+  try {
+    const res = await window.electron.invoke('print:ticket', html, printerTallerPos.value || undefined)
+    if (res.success) toast.add({ severity: 'success', summary: 'Impreso', detail: 'Etiqueta enviada a la impresora', life: 2000 })
+    else toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo imprimir', life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error.message || 'Error al imprimir etiqueta', life: 3000 })
+  }
+}
+
+function onRecibidoPosGuardado(payload?: any) {
+  dialogRecibirEquipo.value = false
+  const notaCredito = payload?.notaCredito || null
+  const valor = Number(notaCredito?.total || getNotaCreditoValueFromRecibido(payload) || 0)
+  if (payload && valor > 0) {
+    recibidoParaDescuento.value = payload
+    notaCreditoRecibido.value = notaCredito || {
+      id: null,
+      no_factura: getNotaCreditoNoFromRecibido(payload) || 'NOTA_CREDITO',
+      total: valor,
+    }
+    dialogAplicarNotaRecibido.value = true
+  }
+}
+
+function getNotaCreditoValueFromRecibido(recibido: any): number {
+  try {
+    const nota = typeof recibido?.nota === 'string' ? JSON.parse(recibido.nota || '{}') : recibido?.nota || {}
+    return Number(nota.credit_note_value || 0)
+  } catch {
+    return 0
+  }
+}
+
+function getNotaCreditoNoFromRecibido(recibido: any): string {
+  try {
+    const nota = typeof recibido?.nota === 'string' ? JSON.parse(recibido.nota || '{}') : recibido?.nota || {}
+    return nota.credit_note_no || ''
+  } catch {
+    return ''
+  }
+}
+
+async function aplicarNotaRecibidoComoDescuento() {
+  const notaRecibido = notaCreditoRecibido.value
+  const valor = Number(notaRecibido?.total || getNotaCreditoValueFromRecibido(recibidoParaDescuento.value) || 0)
+  if (valor <= 0) return
+  if (subtotal.value <= 0) {
+    toast.add({ severity: 'warn', summary: 'Carrito vacio', detail: 'Agrega productos antes de aplicar la nota de credito', life: 3000 })
+    return
+  }
+
+  descuentoTipo.value = 'nota_credito'
+  descuentoValor.value = valor
+  descuentoFijo.value = Math.min(subtotal.value, Math.max(0, valor))
+  descuentoPorc.value = 0
+  notaCreditoSeleccionada.value = notaRecibido
+  notaCreditoUsada.value = `NC: ${notaRecibido?.no_factura || 'RECIBIDO'} - RD$${formatCurrency(descuentoFijo.value)}`
+  if (notaRecibido?.id) await window.db.update('facturas', notaRecibido.id, { estado_factura: 'UTILIZADA' })
+  dialogAplicarNotaRecibido.value = false
+  recibidoParaDescuento.value = null
+  notaCreditoRecibido.value = null
+  toast.add({ severity: 'success', summary: 'Nota aplicada', detail: 'La nota de credito se aplico como descuento', life: 3000 })
+}
+
+function omitirNotaRecibidoComoDescuento() {
+  dialogAplicarNotaRecibido.value = false
+  recibidoParaDescuento.value = null
+  notaCreditoRecibido.value = null
 }
 
 function tipoRegistroFactCoti(factura: any = registroFatCotiSeleccionado.value): 'factura' | 'cotizacion' {
@@ -1163,19 +1363,29 @@ function parseProductosFacturaFactCoti(factura: any = registroFatCotiSeleccionad
 
 function normalizarProductoFacturaParaCart(producto: any) {
   const precio = Number(producto.precio ?? producto.precio_venta ?? 0)
+  const imeiIds = normalizarListaIds(producto.imei_ids || producto.imei_id)
+  const serialIds = normalizarListaIds(producto.serial_ids || producto.serial_id)
+  const imeis = normalizarListaTextos(producto.imeis || producto.imei)
+  const seriales = normalizarListaTextos(producto.seriales || producto.serial)
   return {
     tipo: producto.tipo || (producto.imei_id ? 'imei' : producto.serial_id ? 'serial' : producto.accesorio_id ? 'accesorio' : 'manual'),
     nombre: producto.nombre || producto.descripcion || 'PRODUCTO',
-    cantidad: Number(producto.cantidad || 1),
+    cantidad: Number(producto.cantidad || imeiIds.length || serialIds.length || 1),
     precio,
     precio_normal: Number(producto.precio_normal || producto.precio_venta || precio),
     costo: Number(producto.costo || 0),
-    imei: producto.imei || '',
-    imei_id: producto.imei_id || null,
-    serial: producto.serial || '',
-    serial_id: producto.serial_id || null,
+    imei: imeis[0] || producto.imei || '',
+    imeis,
+    imei_id: imeiIds[0] || producto.imei_id || null,
+    imei_ids: imeiIds,
+    serial: seriales[0] || producto.serial || '',
+    seriales,
+    serial_id: serialIds[0] || producto.serial_id || null,
+    serial_ids: serialIds,
     color: producto.color || '',
+    colores: normalizarListaTextos(producto.colores || producto.color),
     capacidad: producto.capacidad || '',
+    capacidades: normalizarListaTextos(producto.capacidades || producto.capacidad),
     accesorio_id: producto.accesorio_id || null,
     stock: Number(producto.stock || 0),
   }
@@ -1199,6 +1409,8 @@ function cantidadesAccesorios(productos: any[]) {
 }
 
 async function sincronizarInventarioEdicionFactura(productosOriginales: any[], productosNuevos: any[], invoiceNo: string, fechaStr: string, horaStr: string) {
+  productosOriginales = expandirItemsInventario(productosOriginales)
+  productosNuevos = expandirItemsInventario(productosNuevos)
   const cliente = clienteSeleccionado.value?.nombre?.toUpperCase() || clienteExpress.value?.toUpperCase() || 'CONSUMIDOR FINAL'
   const originalesKeys = new Set(productosOriginales.map(productoInventarioKey).filter(Boolean))
   const nuevosKeys = new Set(productosNuevos.map(productoInventarioKey).filter(Boolean))
@@ -1816,6 +2028,19 @@ async function cargarBancosFactCoti() {
   }
 }
 
+async function cargarBancosPos() {
+  cargandoBancosPos.value = true
+  try {
+    await asegurarTablaBancosFactCoti()
+    const res = await window.db.getAll('bancos')
+    bancosPos.value = res.success ? (res.data || []) : []
+  } catch {
+    bancosPos.value = []
+  } finally {
+    cargandoBancosPos.value = false
+  }
+}
+
 async function crearCuentaCobrarDesdeFactCoti(factura: any): Promise<boolean> {
   try {
     const totalFactura = Number(factura.total || 0)
@@ -2181,6 +2406,10 @@ function serialesDelElec(electrodomesticoId: number) {
 }
 
 function seleccionarImeiDirecto(imei: any) {
+  if (imeiEstaEnCarrito(imei)) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Este IMEI ya esta en el carrito', life: 2000 })
+    return
+  }
   const telefono = telefonos.value.find(t => t.id === imei.id_equi)
   if (!telefono) return
   imeiParaPrecio.value = imei
@@ -2192,6 +2421,10 @@ function seleccionarImeiDirecto(imei: any) {
 }
 
 function seleccionarSerialDirecto(serial: any) {
+  if (serialEstaEnCarrito(serial)) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Este Serial ya esta en el carrito', life: 2000 })
+    return
+  }
   const elec = electrodomesticos.value.find(t => t.id === serial.id_equi)
   if (!elec) return
   imeiParaPrecio.value = serial
@@ -2203,6 +2436,14 @@ function seleccionarSerialDirecto(serial: any) {
 }
 
 function abrirPrecio(imei: any) {
+  if (selectedTelefono.value && imeiEstaEnCarrito(imei)) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Este IMEI ya esta en el carrito', life: 2000 })
+    return
+  }
+  if (selectedElectrodomestico.value && serialEstaEnCarrito(imei)) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Este Serial ya esta en el carrito', life: 2000 })
+    return
+  }
   imeiParaPrecio.value = imei
   precioSeleccionado.value = 'venta'
   precioManual.value = imei.precio_venta || 0
@@ -2240,18 +2481,231 @@ function itemTieneDescuento(item: any): boolean {
   return precioNormal > 0 && precioActual >= 0 && precioActual < precioNormal
 }
 
+function normalizarListaIds(value: any): number[] {
+  const lista = Array.isArray(value) ? value : (value ? [value] : [])
+  return lista
+    .map((id: any) => Number(id))
+    .filter((id: number) => Number.isFinite(id) && id > 0)
+}
+
+function normalizarListaTextos(value: any): string[] {
+  const lista = Array.isArray(value) ? value : (value ? String(value).split(',') : [])
+  return lista
+    .map((texto: any) => String(texto || '').trim())
+    .filter(Boolean)
+}
+
+function getCapacidadImei(imei: any): string {
+  return String(imei?.capacidad || imei?.almacenamiento || imei?.memoria || imei?.storage || '').trim()
+}
+
+function itemTieneImei(item: any, imeiId: any): boolean {
+  const id = Number(imeiId)
+  if (!id) return false
+  return Number(item?.imei_id || 0) === id || normalizarListaIds(item?.imei_ids).includes(id)
+}
+
+function itemTieneSerial(item: any, serialId: any): boolean {
+  const id = Number(serialId)
+  if (!id) return false
+  return Number(item?.serial_id || 0) === id || normalizarListaIds(item?.serial_ids).includes(id)
+}
+
+function imeiEstaEnCarrito(imei: any): boolean {
+  return cart.value.some((item: any) => item?.tipo === 'imei' && itemTieneImei(item, imei?.id))
+}
+
+function serialEstaEnCarrito(serial: any): boolean {
+  return cart.value.some((item: any) => item?.tipo === 'serial' && itemTieneSerial(item, serial?.id))
+}
+
+function varianteRowClass(data: any) {
+  const enCarrito = selectedTelefono.value ? imeiEstaEnCarrito(data) : serialEstaEnCarrito(data)
+  return enCarrito ? 'opacity-60 cursor-not-allowed' : ''
+}
+
+function agregarValorUnico(lista: any[], valor: any) {
+  const normalizado = typeof valor === 'number' ? valor : String(valor || '').trim()
+  if (normalizado && !lista.some((item: any) => String(item) === String(normalizado))) lista.push(normalizado)
+}
+
+function sincronizarResumenLineaAgrupada(item: any) {
+  const imeiIds = normalizarListaIds(item.imei_ids || item.imei_id)
+  const serialIds = normalizarListaIds(item.serial_ids || item.serial_id)
+  const imeis = normalizarListaTextos(item.imeis || item.imei)
+  const seriales = normalizarListaTextos(item.seriales || item.serial)
+  const colores = normalizarListaTextos(item.colores || item.color)
+  const capacidades = normalizarListaTextos(item.capacidades || item.capacidad)
+  item.cantidad = Math.max(1, Number(item.cantidad || 1))
+  item.imei_id = imeiIds[0] || null
+  item.imei_ids = imeiIds
+  item.imei = imeis[0] || ''
+  item.imeis = imeis
+  item.serial_id = serialIds[0] || null
+  item.serial_ids = serialIds
+  item.serial = seriales[0] || ''
+  item.seriales = seriales
+  item.color = colores.length > 1 ? 'Varios' : (colores[0] || '')
+  item.colores = colores
+  item.capacidad = capacidades.length > 1 ? 'Varios' : (capacidades[0] || '')
+  item.capacidades = capacidades
+}
+
+function buscarLineaAgrupable(tipo: 'imei' | 'serial', refId: any, precio: number, capacidad = '') {
+  return cart.value.find((item: any) => {
+    if (item.tipo !== tipo || Number(item.precio || 0) !== Number(precio || 0)) return false
+    if (tipo === 'imei') {
+      const mismaCapacidad = String(item.capacidad || '').trim().toUpperCase() === String(capacidad || '').trim().toUpperCase()
+      return String(item.telefono_id || '') === String(refId || '') && mismaCapacidad
+    }
+    return String(item.electrodomestico_id || '') === String(refId || '')
+  })
+}
+
+function expandirItemsInventario(productos: any[]) {
+  const expandidos: any[] = []
+  for (const producto of productos || []) {
+    if (producto?.tipo === 'imei') {
+      const ids = normalizarListaIds(producto.imei_ids || producto.imei_id)
+      const imeis = normalizarListaTextos(producto.imeis || producto.imei)
+      if (ids.length > 1) {
+        ids.forEach((id: number, index: number) => {
+          expandidos.push({
+            ...producto,
+            cantidad: 1,
+            imei_id: id,
+            imei: imeis[index] || imeis[0] || producto.imei || '',
+            imei_ids: [id],
+            imeis: imeis[index] ? [imeis[index]] : [],
+          })
+        })
+        continue
+      }
+    }
+    if (producto?.tipo === 'serial') {
+      const ids = normalizarListaIds(producto.serial_ids || producto.serial_id)
+      const seriales = normalizarListaTextos(producto.seriales || producto.serial)
+      if (ids.length > 1) {
+        ids.forEach((id: number, index: number) => {
+          expandidos.push({
+            ...producto,
+            cantidad: 1,
+            serial_id: id,
+            serial: seriales[index] || seriales[0] || producto.serial || '',
+            serial_ids: [id],
+            seriales: seriales[index] ? [seriales[index]] : [],
+          })
+        })
+        continue
+      }
+    }
+    expandidos.push(producto)
+  }
+  return expandidos
+}
+
+function getImeisDetalleItem(item: any) {
+  const ids = normalizarListaIds(item?.imei_ids || item?.imei_id)
+  const imeis = normalizarListaTextos(item?.imeis || item?.imei)
+  const colores = normalizarListaTextos(item?.colores || item?.color)
+  const capacidades = normalizarListaTextos(item?.capacidades || item?.capacidad)
+  const total = Math.max(ids.length, imeis.length, Number(item?.cantidad || 1))
+  return Array.from({ length: total }, (_, index) => ({
+    id: ids[index] || null,
+    imei: imeis[index] || '',
+    color: colores[index] || '',
+    capacidad: capacidades[index] || '',
+  }))
+}
+
+function getImeisGestionFiltrados(item: any) {
+  const texto = busquedaGestionImeis.value.toLowerCase().trim()
+  return getImeisDetalleItem(item)
+    .map((detalle: any, pos: number) => ({ ...detalle, pos }))
+    .filter((detalle: any) => {
+      if (!texto) return true
+      return String(detalle.imei || '').toLowerCase().includes(texto) ||
+        String(detalle.color || '').toLowerCase().includes(texto) ||
+        String(detalle.capacidad || '').toLowerCase().includes(texto)
+    })
+}
+
+function abrirGestionImeis(item: any, index: number) {
+  if (item?.tipo !== 'imei' || Number(item?.cantidad || 1) <= 1) return
+  itemGestionImeis.value = item
+  indexGestionImeis.value = index
+  busquedaGestionImeis.value = ''
+  dialogGestionImeis.value = true
+}
+
+function prepararCambioImeiAgrupado(posicion: number) {
+  const item = itemGestionImeis.value
+  const idx = indexGestionImeis.value
+  if (!item || idx === null) return
+  const idsActuales = new Set(normalizarListaIds(item.imei_ids || item.imei_id))
+  const idsEnCarrito = new Set<number>()
+  cart.value.forEach((cartItem: any, cartIndex: number) => {
+    if (cartIndex === idx || cartItem?.tipo !== 'imei') return
+    normalizarListaIds(cartItem.imei_ids || cartItem.imei_id).forEach((id: number) => idsEnCarrito.add(id))
+  })
+  const detalle = getImeisDetalleItem(item)[posicion]
+  imeisDisponiblesParaCambio.value = imeisDisponibles.value.filter((i: any) => {
+    if (String(i.id_equi) !== String(item.telefono_id || 0)) return false
+    if (idsEnCarrito.has(Number(i.id))) return false
+    return !idsActuales.has(Number(i.id)) || Number(i.id) === Number(detalle?.id || 0)
+  })
+  itemCambiarImei.value = { ...item, _index: idx, _imeiPos: posicion, imei: detalle?.imei || '' }
+  busquedaCambiarImei.value = ''
+  dialogCambiarImei.value = true
+}
+
+function quitarImeiAgrupado(posicion: number) {
+  const idx = indexGestionImeis.value
+  if (idx === null || !cart.value[idx]) return
+  const item = cart.value[idx]
+  const imeiIds = normalizarListaIds(item.imei_ids || item.imei_id)
+  const imeis = normalizarListaTextos(item.imeis || item.imei)
+  const colores = normalizarListaTextos(item.colores || item.color)
+  const capacidades = normalizarListaTextos(item.capacidades || item.capacidad)
+  imeiIds.splice(posicion, 1)
+  imeis.splice(posicion, 1)
+  colores.splice(posicion, 1)
+  capacidades.splice(posicion, 1)
+  if (imeiIds.length === 0 && imeis.length === 0) {
+    cart.value.splice(idx, 1)
+    dialogGestionImeis.value = false
+    itemGestionImeis.value = null
+    indexGestionImeis.value = null
+    toast.add({ severity: 'info', summary: 'Producto eliminado', detail: 'Se quitaron todos los IMEI de la linea', life: 2000 })
+    return
+  }
+  item.imei_ids = imeiIds
+  item.imeis = imeis
+  item.cantidad = Math.max(1, imeiIds.length || imeis.length)
+  item.colores = colores
+  item.capacidades = capacidades
+  sincronizarResumenLineaAgrupada(item)
+  itemGestionImeis.value = item
+  if (Number(item.cantidad || 1) <= 1) {
+    dialogGestionImeis.value = false
+    itemGestionImeis.value = null
+    indexGestionImeis.value = null
+  }
+  toast.add({ severity: 'info', summary: 'IMEI quitado', detail: 'Se quito una unidad de la linea', life: 2000 })
+}
+
 function agregarImeiAlCarrito() {
   const imei = imeiParaPrecio.value
   if (!imei) return
 
   if (selectedTelefono.value) {
-    const yaExiste = cart.value.find((item: any) => item.tipo === 'imei' && item.imei_id === imei.id)
+    const yaExiste = cart.value.find((item: any) => item.tipo === 'imei' && itemTieneImei(item, imei.id))
     if (yaExiste) {
       toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Este IMEI ya esta en el carrito', life: 2000 })
       return
     }
   } else if (selectedElectrodomestico.value) {
-    const yaExiste = cart.value.find((item: any) => item.tipo === 'serial' && item.serial_id === imei.id)
+    const yaExiste = cart.value.find((item: any) => item.tipo === 'serial' && itemTieneSerial(item, imei.id))
     if (yaExiste) {
       toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Este Serial ya esta en el carrito', life: 2000 })
       return
@@ -2265,14 +2719,40 @@ function agregarImeiAlCarrito() {
   }
 
   if (selectedTelefono.value) {
+    const agrupado = buscarLineaAgrupable('imei', selectedTelefono.value?.id, precioFinal, imei.capacidad || '')
+    if (agrupado) {
+      const imeiIds = normalizarListaIds(agrupado.imei_ids || agrupado.imei_id)
+      const imeis = normalizarListaTextos(agrupado.imeis || agrupado.imei)
+      const colores = normalizarListaTextos(agrupado.colores || agrupado.color)
+      const capacidades = normalizarListaTextos(agrupado.capacidades || agrupado.capacidad)
+      agregarValorUnico(imeiIds, Number(imei.id))
+      agregarValorUnico(imeis, imei.nombre)
+      agregarValorUnico(colores, imei.color)
+      agregarValorUnico(capacidades, imei.capacidad)
+      agrupado.imei_ids = imeiIds
+      agrupado.imeis = imeis
+      agrupado.colores = colores
+      agrupado.capacidades = capacidades
+      agrupado.cantidad = imeiIds.length || Number(agrupado.cantidad || 1) + 1
+      agrupado.costo = ((Number(agrupado.costo || 0) * (agrupado.cantidad - 1)) + Number(imei.costo || 0)) / agrupado.cantidad
+      sincronizarResumenLineaAgrupada(agrupado)
+      toast.add({ severity: 'success', summary: 'Agrupado', detail: `${selectedTelefono.value?.nombre} agregado a la misma linea`, life: 2000 })
+      dialogPrecio.value = false
+      return
+    }
     cart.value.push({
       tipo: 'imei',
       imei_id: imei.id,
+      imei_ids: [imei.id],
       imei: imei.nombre,
+      imeis: [imei.nombre],
+      codigo: imei.nombre || '',
       nombre: selectedTelefono.value?.nombre || '',
       telefono_id: selectedTelefono.value?.id,
       color: imei.color || '',
+      colores: imei.color ? [imei.color] : [],
       capacidad: imei.capacidad || '',
+      capacidades: imei.capacidad ? [imei.capacidad] : [],
       precio: precioFinal,
       precio_normal: imei.precio_venta || precioFinal,
       costo: imei.costo || 0,
@@ -2280,13 +2760,40 @@ function agregarImeiAlCarrito() {
     })
     toast.add({ severity: 'success', summary: 'Agregado', detail: `${selectedTelefono.value?.nombre} agregado`, life: 2000 })
   } else if (selectedElectrodomestico.value) {
+    const agrupado = buscarLineaAgrupable('serial', selectedElectrodomestico.value?.id, precioFinal)
+    if (agrupado) {
+      const serialIds = normalizarListaIds(agrupado.serial_ids || agrupado.serial_id)
+      const seriales = normalizarListaTextos(agrupado.seriales || agrupado.serial)
+      const colores = normalizarListaTextos(agrupado.colores || agrupado.color)
+      const capacidades = normalizarListaTextos(agrupado.capacidades || agrupado.capacidad)
+      agregarValorUnico(serialIds, Number(imei.id))
+      agregarValorUnico(seriales, imei.nombre)
+      agregarValorUnico(colores, imei.color)
+      agregarValorUnico(capacidades, imei.capacidad)
+      agrupado.serial_ids = serialIds
+      agrupado.seriales = seriales
+      agrupado.colores = colores
+      agrupado.capacidades = capacidades
+      agrupado.cantidad = serialIds.length || Number(agrupado.cantidad || 1) + 1
+      agrupado.costo = ((Number(agrupado.costo || 0) * (agrupado.cantidad - 1)) + Number(imei.costo || 0)) / agrupado.cantidad
+      sincronizarResumenLineaAgrupada(agrupado)
+      toast.add({ severity: 'success', summary: 'Agrupado', detail: `${selectedElectrodomestico.value?.nombre} agregado a la misma linea`, life: 2000 })
+      dialogPrecio.value = false
+      return
+    }
     cart.value.push({
       tipo: 'serial',
       serial_id: imei.id,
+      serial_ids: [imei.id],
       serial: imei.nombre,
+      seriales: [imei.nombre],
+      codigo: imei.nombre || '',
       nombre: selectedElectrodomestico.value?.nombre || '',
+      electrodomestico_id: selectedElectrodomestico.value?.id,
       color: imei.color || '',
+      colores: imei.color ? [imei.color] : [],
       capacidad: imei.capacidad || '',
+      capacidades: imei.capacidad ? [imei.capacidad] : [],
       precio: precioFinal,
       precio_normal: imei.precio_venta || precioFinal,
       costo: imei.costo || 0,
@@ -2313,6 +2820,8 @@ function agregarAccesorio(accesorio: any) {
     tipo: 'accesorio',
     accesorio_id: accesorio.id,
     nombre: accesorio.nombre,
+    codigo: accesorio.codigo_barra || accesorio.codigo || accesorio.id || '',
+    codigo_barra: accesorio.codigo_barra || accesorio.codigo || '',
     precio: accesorio.precio_venta || 0,
     precio_normal: accesorio.precio_venta || 0,
     costo: accesorio.costo || 0,
@@ -2323,7 +2832,16 @@ function agregarAccesorio(accesorio: any) {
 }
 
 function abrirCambiarImei(item: any, index: number) {
-  const imeis = imeisDisponibles.value.filter((i: any) => String(i.id_equi) === String(item.telefono_id || 0) || i.nombre !== item.imei)
+  const idsEnCarrito = new Set<number>()
+  cart.value.forEach((cartItem: any, cartIndex: number) => {
+    if (cartIndex === index || cartItem?.tipo !== 'imei') return
+    normalizarListaIds(cartItem.imei_ids || cartItem.imei_id).forEach((id: number) => idsEnCarrito.add(id))
+  })
+  const imeis = imeisDisponibles.value.filter((i: any) =>
+    String(i.id_equi) === String(item.telefono_id || 0) &&
+    !idsEnCarrito.has(Number(i.id)) &&
+    i.nombre !== item.imei
+  )
   imeisDisponiblesParaCambio.value = imeis
   itemCambiarImei.value = { ...item, _index: index }
   busquedaCambiarImei.value = ''
@@ -2333,10 +2851,38 @@ function abrirCambiarImei(item: any, index: number) {
 function seleccionarImeiCambio(nuevoImei: any) {
   const idx = itemCambiarImei.value?._index
   if (idx === undefined || idx === null) return
+  const imeiPos = itemCambiarImei.value?._imeiPos
+  if (imeiPos !== undefined && imeiPos !== null) {
+    const item = cart.value[idx]
+    if (!item) return
+    const imeiIds = normalizarListaIds(item.imei_ids || item.imei_id)
+    const imeis = normalizarListaTextos(item.imeis || item.imei)
+    const colores = normalizarListaTextos(item.colores || item.color)
+    const capacidades = normalizarListaTextos(item.capacidades || item.capacidad)
+    imeiIds[imeiPos] = Number(nuevoImei.id)
+    imeis[imeiPos] = nuevoImei.nombre || ''
+    colores[imeiPos] = nuevoImei.color || ''
+    capacidades[imeiPos] = nuevoImei.capacidad || ''
+    item.imei_ids = imeiIds
+    item.imeis = imeis
+    item.colores = colores
+    item.capacidades = capacidades
+    item.cantidad = Math.max(1, imeiIds.length || imeis.length)
+    sincronizarResumenLineaAgrupada(item)
+    itemGestionImeis.value = item
+    dialogCambiarImei.value = false
+    itemCambiarImei.value = null
+    toast.add({ severity: 'success', summary: 'IMEI cambiado', detail: nuevoImei.nombre, life: 2000 })
+    return
+  }
   cart.value[idx].imei_id = nuevoImei.id
+  cart.value[idx].imei_ids = [nuevoImei.id]
   cart.value[idx].imei = nuevoImei.nombre
+  cart.value[idx].imeis = [nuevoImei.nombre]
   cart.value[idx].color = nuevoImei.color || ''
+  cart.value[idx].colores = nuevoImei.color ? [nuevoImei.color] : []
   cart.value[idx].capacidad = nuevoImei.capacidad || ''
+  cart.value[idx].capacidades = nuevoImei.capacidad ? [nuevoImei.capacidad] : []
   cart.value[idx].precio = nuevoImei.precio_venta || cart.value[idx].precio
   dialogCambiarImei.value = false
   itemCambiarImei.value = null
@@ -2548,9 +3094,6 @@ async function imprimirPdf() {
   if (ticketData.value) {
     await asegurarQrFiscalTicket()
     facturaPdfRef.value?.printFactura(ticketData.value)
-    setTimeout(() => {
-      dialogTicket.value = true
-    }, 500)
   }
 }
 
@@ -2713,8 +3256,10 @@ function getTicketBody(d: any): string {
 
   const itemsHtml = d.items.map((item: any) => {
     const nombre = `${item.nombre || ''}${item.color ? ` ${item.color}` : ''}${item.capacidad ? ` ${item.capacidad}` : ''}`
-    const imei = item.imei ? `<br><span style="font-size:8px;color:#555;">IMEI: ${item.imei}</span>` : ''
-    const serial = item.serial ? `<br><span style="font-size:8px;color:#555;">Serial: ${item.serial}</span>` : ''
+    const imeis = normalizarListaTextos(item.imeis || item.imei)
+    const seriales = normalizarListaTextos(item.seriales || item.serial)
+    const imei = imeis.length ? `<br><span style="font-size:8px;color:#555;">IMEI: ${imeis.join(', ')}</span>` : ''
+    const serial = seriales.length ? `<br><span style="font-size:8px;color:#555;">Serial: ${seriales.join(', ')}</span>` : ''
     const precioNormal = getPrecioNormal(item)
     const oferta = itemTieneDescuento(item)
       ? `<br><span style="font-size:8px;font-weight:normal;">Normal: <span style="text-decoration:line-through;">RD$${fmt(precioNormal)}</span> &nbsp; Con descuento: <b>RD$${fmt(item.precio || 0)}</b></span>`
@@ -2908,6 +3453,13 @@ function limpiarCarrito() {
   noFactura.value = ''
   esCotizacion.value = false
   metodoPago.value = 'EFECTIVO'
+  mixtoEfectivo.value = 0
+  mixtoTarjeta.value = 0
+  mixtoTransferencia.value = 0
+  transferenciasMixto.value = []
+  mixtoCheque.value = 0
+  metodosMixto.value = { efectivo: false, tarjeta: false, transferencia: false, cheque: false }
+  bancoPosSeleccionado.value = null
   clienteSeleccionado.value = null
   facturaEditandoPos.value = null
   productosOriginalesEditandoPos.value = []
@@ -2936,8 +3488,10 @@ async function generarPdfCotizacion(invoiceNo: string, ncf: string, compTipo: st
     const nombre = item.nombre || ''
     const cant = item.cantidad || 1
     const precio = item.precio || 0
-    const imei = item.imei ? `<br><span style="font-size:9px;color:#666">IMEI: ${item.imei}</span>` : ''
-    const serial = item.serial ? `<br><span style="font-size:9px;color:#666">Serial: ${item.serial}</span>` : ''
+    const imeis = normalizarListaTextos(item.imeis || item.imei)
+    const seriales = normalizarListaTextos(item.seriales || item.serial)
+    const imei = imeis.length ? `<br><span style="font-size:9px;color:#666">IMEI: ${imeis.join(', ')}</span>` : ''
+    const serial = seriales.length ? `<br><span style="font-size:9px;color:#666">Serial: ${seriales.join(', ')}</span>` : ''
     const extra = imei || serial
     return `<tr><td style="padding:6px 8px;border-bottom:1px solid #ddd;font-size:10px;text-align:center">${cant}</td><td style="padding:6px 8px;border-bottom:1px solid #ddd;font-size:10px">${nombre}${extra ? '' : ''}</td><td style="padding:6px 8px;border-bottom:1px solid #ddd;font-size:10px;text-align:right">${fmt(precio)}</td><td style="padding:6px 8px;border-bottom:1px solid #ddd;font-size:10px;text-align:right;font-weight:bold">${fmt(precio * cant)}</td></tr>${extra ? `<tr><td colspan="2" style="padding:0 8px 4px 8px;font-size:9px;color:#666">${extra}</td><td></td><td></td></tr>` : ''}`
   }).join('')
@@ -3061,60 +3615,91 @@ watch(comprobanteSeleccionado, (comp) => {
 })
 
 watch(metodoPago, (val) => {
+  bancoPosSeleccionado.value = null
   if (String(val).toLowerCase() === 'mixto') {
     metodosMixto.value = { efectivo: false, tarjeta: false, transferencia: false, cheque: false }
     mixtoEfectivo.value = 0
     mixtoTarjeta.value = 0
     mixtoTransferencia.value = 0
+    transferenciasMixto.value = []
     mixtoCheque.value = 0
     mixtoError.value = ''
-    pasoMixto.value = 'elegir'
     dialogMixto.value = true
+    cargarBancosPos()
+  }
+})
+
+watch(confirmPago, async (val) => {
+  if (val && needsBankSelection.value) {
+    bancoPosSeleccionado.value = null
+    await cargarBancosPos()
   }
 })
 
 function autoCalcularMixto() {
-  if (pasoMixto.value !== 'montos') return
+  if (!dialogMixto.value) return
   const ef = Number(mixtoEfectivo.value) || 0
   const tj = Number(mixtoTarjeta.value) || 0
-  const tr = Number(mixtoTransferencia.value) || 0
+  const tr = totalTransferenciasMixto()
   const ch = Number(mixtoCheque.value) || 0
   const suma = ef + tj + tr + ch
   if (suma >= total.value) return
   const restante = total.value - suma
   const orden = ['efectivo', 'tarjeta', 'transferencia', 'cheque']
-  const campos: Record<string, any> = { efectivo: mixtoEfectivo, tarjeta: mixtoTarjeta, transferencia: mixtoTransferencia, cheque: mixtoCheque }
+  const campos: Record<string, any> = { efectivo: mixtoEfectivo, tarjeta: mixtoTarjeta, cheque: mixtoCheque }
   for (const key of orden) {
-    if (metodosMixto.value[key] && Number(campos[key].value) === 0) {
+    if (key === 'transferencia' && metodosMixto.value.transferencia && totalTransferenciasMixto() === 0) {
+      if (transferenciasMixto.value.length === 0) transferenciasMixto.value.push({ banco_id: null, monto: 0 })
+      transferenciasMixto.value[0].monto = restante
+      mixtoTransferencia.value = restante
+      break
+    }
+    if (metodosMixto.value[key] && campos[key] && Number(campos[key].value) === 0) {
       campos[key].value = restante
       break
     }
   }
 }
 
-watch([mixtoEfectivo, mixtoTarjeta, mixtoTransferencia, mixtoCheque], () => {
-  autoCalcularMixto()
-})
-
-function siguientePasoMixto() {
-  const seleccionados = Object.values(metodosMixto.value).filter(Boolean).length
-  if (seleccionados < 2) {
-    mixtoError.value = 'Selecciona al menos dos metodos de pago'
-    return
-  }
-  mixtoError.value = ''
-  pasoMixto.value = 'montos'
+function totalTransferenciasMixto(): number {
+  return transferenciasMixto.value.reduce((sum, item) => sum + (Number(item.monto) || 0), 0)
 }
+
+function agregarTransferenciaMixto() {
+  transferenciasMixto.value.push({ banco_id: null, monto: 0 })
+}
+
+function quitarTransferenciaMixto(index: number) {
+  transferenciasMixto.value.splice(index, 1)
+  if (transferenciasMixto.value.length === 0) agregarTransferenciaMixto()
+  mixtoTransferencia.value = totalTransferenciasMixto()
+}
+
+function bancoNombrePos(id: any): string {
+  return bancosPos.value.find((b: any) => Number(b.id) === Number(id))?.nombre || ''
+}
+
+watch([mixtoEfectivo, mixtoTarjeta, mixtoTransferencia, mixtoCheque, transferenciasMixto], () => {
+  mixtoTransferencia.value = totalTransferenciasMixto()
+  autoCalcularMixto()
+}, { deep: true })
 
 function confirmarMixto() {
   const ef = Number(mixtoEfectivo.value) || 0
   const tj = Number(mixtoTarjeta.value) || 0
-  const tr = Number(mixtoTransferencia.value) || 0
+  const tr = totalTransferenciasMixto()
   const ch = Number(mixtoCheque.value) || 0
   const suma = ef + tj + tr + ch
   if (suma <= 0) {
     mixtoError.value = 'Debes ingresar al menos un metodo de pago'
     return
+  }
+  if (metodosMixto.value.transferencia) {
+    const invalidas = transferenciasMixto.value.filter((t) => Number(t.monto || 0) > 0 && !t.banco_id)
+    if (invalidas.length > 0) {
+      mixtoError.value = 'Selecciona un banco para cada transferencia'
+      return
+    }
   }
   if (Math.abs(suma - total.value) > 0.01) {
     mixtoError.value = `La suma ($${formatCurrency(suma)}) no coincide con el total ($${formatCurrency(total.value)})`
@@ -3385,19 +3970,32 @@ async function completarVenta() {
     const fechaStr = now.toISOString().split('T')[0]
     const horaStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
 
+    if (needsBankSelection.value && !bancoPosSeleccionado.value) {
+      toast.add({ severity: 'warn', summary: 'Banco requerido', detail: 'Selecciona el banco destino para el pago', life: 3000 })
+      guardando.value = false; return
+    }
+
     const productosJson = JSON.stringify(cart.value.map(item => ({
       tipo: item.tipo,
       nombre: item.nombre,
+      codigo: item.codigo || item.codigo_barra || item.cod_producto || item.sku || item.accesorio_id || item.imei || item.serial || '',
+      codigo_barra: item.codigo_barra || item.codigo || '',
       cantidad: item.cantidad,
       precio: item.precio,
       precio_normal: item.precio_normal || item.precio,
       costo: item.costo || 0,
       imei: item.imei || '',
+      imeis: normalizarListaTextos(item.imeis || item.imei),
       imei_id: item.imei_id || null,
+      imei_ids: normalizarListaIds(item.imei_ids || item.imei_id),
       serial: item.serial || '',
+      seriales: normalizarListaTextos(item.seriales || item.serial),
       serial_id: item.serial_id || null,
+      serial_ids: normalizarListaIds(item.serial_ids || item.serial_id),
       color: item.color || '',
+      colores: normalizarListaTextos(item.colores || item.color),
       capacidad: item.capacidad || '',
+      capacidades: normalizarListaTextos(item.capacidades || item.capacidad),
       accesorio_id: item.accesorio_id || null,
       stock: item.stock || 0,
     })))
@@ -3435,7 +4033,7 @@ async function completarVenta() {
       metodo_pago: metodoPago.value,
       efectivo: metodoPago.value === 'EFECTIVO' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoEfectivo.value) || 0 : 0,
       tarjeta: metodoPago.value === 'TARJETA' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoTarjeta.value) || 0 : 0,
-      transferencia: metodoPago.value === 'TRANSFERENCIA' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoTransferencia.value) || 0 : 0,
+      transferencia: metodoPago.value === 'TRANSFERENCIA' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? totalTransferenciasMixto() : 0,
       cheque: String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoCheque.value) || 0 : 0,
       canal_venta: 'LOCAL',
       fecha_emision: fechaStr,
@@ -3456,6 +4054,17 @@ async function completarVenta() {
         facturacion_electronica: facturacionElectronicaActiva.value && !esCotizacion.value ? 1 : 0,
         alanube_id_compania: facturacionElectronicaActiva.value ? alanubeIdCompania.value : '',
         alanube_company_data: facturacionElectronicaActiva.value ? alanubeCompanyData.value : null,
+        banco_id: needsBankSelection.value ? bancoPosSeleccionado.value : null,
+        banco_nombre: needsBankSelection.value ? bancosPos.value.find((b: any) => b.id === bancoPosSeleccionado.value)?.nombre : '',
+        transferencias_mixtas: String(metodoPago.value).toLowerCase() === 'mixto'
+          ? transferenciasMixto.value
+              .filter((t) => Number(t.monto || 0) > 0)
+              .map((t) => ({
+                banco_id: t.banco_id,
+                banco_nombre: bancoNombrePos(t.banco_id),
+                monto: Number(t.monto || 0),
+              }))
+          : [],
       }),
       ncf,
       comprobante: compTipo,
@@ -3580,7 +4189,7 @@ async function completarVenta() {
         comp.secuencia_actual = (comp.secuencia_actual || 1) + 1
       }
 
-      for (const item of cart.value) {
+      for (const item of expandirItemsInventario(cart.value)) {
         if (item.tipo === 'imei' && item.imei_id) {
           await window.db.update('imei', item.imei_id, {
             estado: 'VENDIDO',
@@ -3644,6 +4253,8 @@ async function completarVenta() {
       telefono: clienteSeleccionado.value?.telefono || clienteSeleccionado.value?.whatsapp || '',
       items: JSON.parse(JSON.stringify(cartConComision.value.map((item: any) => {
         const i = { ...item }
+        i.codigo = i.codigo || i.codigo_barra || i.cod_producto || i.sku || i.accesorio_id || i.imei || i.serial || ''
+        i.codigo_barra = i.codigo_barra || i.codigo || ''
         delete i.precioOriginal
         return i
       }))),
@@ -3652,8 +4263,22 @@ async function completarVenta() {
       impuesto: impuestoMonto.value,
       impuesto_incluido: impuestoIncluido.value,
       total: total.value,
-      nota: nota.value,
+      nota: (nota.value.trim() + (notaCreditoUsada.value ? ' | ' + notaCreditoUsada.value : '')).toUpperCase(),
       metodo_pago: metodoPago.value,
+      efectivo: String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoEfectivo.value) || 0 : metodoPago.value === 'EFECTIVO' ? total.value : 0,
+      tarjeta: String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoTarjeta.value) || 0 : metodoPago.value === 'TARJETA' ? total.value : 0,
+      transferencia: String(metodoPago.value).toLowerCase() === 'mixto' ? totalTransferenciasMixto() : metodoPago.value === 'TRANSFERENCIA' ? total.value : 0,
+      cheque: String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoCheque.value) || 0 : metodoPago.value === 'CHEQUE' ? total.value : 0,
+      banco_nombre: needsBankSelection.value ? bancosPos.value.find((b: any) => b.id === bancoPosSeleccionado.value)?.nombre : '',
+      transferencias_mixtas: String(metodoPago.value).toLowerCase() === 'mixto'
+        ? transferenciasMixto.value
+            .filter((t) => Number(t.monto || 0) > 0)
+            .map((t) => ({
+              banco_id: t.banco_id,
+              banco_nombre: bancoNombrePos(t.banco_id),
+              monto: Number(t.monto || 0),
+            }))
+        : [],
       document_stamp_url: alanubeDocumentStampUrl,
       codigo_seguridad: alanubeSecurityCode,
       alanube_id: alanubeResponse?.id || '',
@@ -3682,12 +4307,43 @@ async function completarVenta() {
       if (ticketData.value) {
         await asegurarQrFiscalTicket()
         facturaPdfRef.value?.printFactura(ticketData.value)
-        setTimeout(() => { dialogTicket.value = true }, 500)
       }
       nota.value = ''
       limpiarCarrito()
       await cargarImeisDisponibles()
       return
+    }
+
+    if (!editandoFactura?.id && String(metodoPago.value).toLowerCase() === 'mixto' && totalTransferenciasMixto() > 0) {
+      try {
+        await asegurarTablaBancosFactCoti()
+        for (const transferencia of transferenciasMixto.value) {
+          const monto = Number(transferencia.monto || 0)
+          if (!monto || !transferencia.banco_id) continue
+          const banco = bancosPos.value.find((b: any) => Number(b.id) === Number(transferencia.banco_id))
+          if (!banco) continue
+          const saldoAnterior = Number(banco.saldo || 0)
+          await window.db.update('bancos', banco.id, {
+            saldo: saldoAnterior + monto,
+            fecha_transaccion: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          banco.saldo = saldoAnterior + monto
+        }
+      } catch (_) {}
+    } else if (needsBankSelection.value && bancoPosSeleccionado.value && !editandoFactura?.id) {
+      try {
+        const banco = bancosPos.value.find((b: any) => b.id === bancoPosSeleccionado.value)
+        if (banco) {
+          const saldoAnterior = Number(banco.saldo || 0)
+          await asegurarTablaBancosFactCoti()
+          await window.db.update('bancos', banco.id, {
+            saldo: saldoAnterior + Number(total.value),
+            fecha_transaccion: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+        }
+      } catch (_) {}
     }
 
     toast.add({
@@ -4077,6 +4733,69 @@ function quitarDescuento() {
   notaCreditoUsada.value = ''
   dialogDescuento.value = false
 }
+
+function cambiarSeleccionTodosDevolucion(event: Event) {
+  devoluciones.seleccionarTodosProductos(Boolean((event.target as HTMLInputElement)?.checked))
+}
+
+const actionCardColors: Record<string, { bg: string; border: string }> = {
+  amber: { bg: 'rgba(120, 53, 15, 0.22)', border: 'rgba(245, 158, 11, 0.45)' },
+  emerald: { bg: 'rgba(6, 78, 59, 0.24)', border: 'rgba(16, 185, 129, 0.42)' },
+  sky: { bg: 'rgba(12, 74, 110, 0.24)', border: 'rgba(14, 165, 233, 0.42)' },
+  blue: { bg: 'rgba(30, 64, 175, 0.22)', border: 'rgba(59, 130, 246, 0.42)' },
+  red: { bg: 'rgba(127, 29, 29, 0.22)', border: 'rgba(239, 68, 68, 0.42)' },
+  green: { bg: 'rgba(20, 83, 45, 0.22)', border: 'rgba(34, 197, 94, 0.42)' },
+  purple: { bg: 'rgba(88, 28, 135, 0.22)', border: 'rgba(168, 85, 247, 0.42)' },
+  cyan: { bg: 'rgba(21, 94, 117, 0.22)', border: 'rgba(6, 182, 212, 0.42)' },
+  teal: { bg: 'rgba(17, 94, 89, 0.22)', border: 'rgba(20, 184, 166, 0.42)' },
+  pink: { bg: 'rgba(131, 24, 67, 0.22)', border: 'rgba(236, 72, 153, 0.42)' },
+  gray: { bg: 'rgba(51, 65, 85, 0.36)', border: 'rgba(148, 163, 184, 0.35)' },
+}
+
+function actionCardStyle(color: string) {
+  if (!themeStore.isDark) return {}
+  const cfg = actionCardColors[color] || actionCardColors.gray
+  return {
+    backgroundColor: cfg.bg,
+    borderColor: cfg.border,
+    color: '#e5e7eb',
+  }
+}
+
+const productCardColors: Record<string, { bg: string; border: string; backBg: string; backBorder: string }> = {
+  telefono: {
+    bg: 'rgba(76, 29, 149, 0.20)',
+    border: 'rgba(139, 92, 246, 0.40)',
+    backBg: 'rgba(46, 16, 101, 0.34)',
+    backBorder: 'rgba(167, 139, 250, 0.45)',
+  },
+  accesorio: {
+    bg: 'rgba(6, 78, 59, 0.20)',
+    border: 'rgba(16, 185, 129, 0.38)',
+    backBg: 'rgba(6, 78, 59, 0.32)',
+    backBorder: 'rgba(52, 211, 153, 0.45)',
+  },
+  electrodomestico: {
+    bg: 'rgba(21, 94, 117, 0.20)',
+    border: 'rgba(6, 182, 212, 0.38)',
+    backBg: 'rgba(22, 78, 99, 0.34)',
+    backBorder: 'rgba(103, 232, 249, 0.45)',
+  },
+}
+
+function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', side: 'front' | 'back' = 'front') {
+  const cfg = productCardColors[tipo]
+  if (themeStore.isDark) {
+    return {
+      backgroundColor: side === 'back' ? cfg.backBg : cfg.bg,
+      borderColor: side === 'back' ? cfg.backBorder : cfg.border,
+      color: '#e5e7eb',
+    }
+  }
+  if (tipo === 'telefono') return { backgroundColor: '#f5f3ff', borderColor: '#ddd6fe' }
+  if (tipo === 'accesorio') return { backgroundColor: '#ecfdf5', borderColor: '#bbf7d0' }
+  return { backgroundColor: '#ecfeff', borderColor: '#a5f3fc' }
+}
 </script>
 
 <template>
@@ -4122,7 +4841,7 @@ function quitarDescuento() {
             </SelectButton>
           </div>
 
-          <div class="flex-1 overflow-y-auto px-4 pb-4 min-h-0">
+          <div class="flex-1 overflow-y-auto px-4 pb-4 min-h-0" :style="{ background: themeStore.isDark ? '#1a1a2e' : '#ffffff' }">
             <div v-if="loading" class="flex items-center justify-center py-20 text-surface-400 gap-2">
               <i class="pi pi-spin pi-spinner text-lg"></i>
               <span>Cargando...</span>
@@ -4147,6 +4866,7 @@ function quitarDescuento() {
                     <!-- FRONT -->
                     <div
                       class="absolute inset-0 rounded-xl border border-surface-200/60 dark:border-surface-700/60 bg-surface-0 dark:bg-surface-800 p-3.5 flex flex-col gap-2 transition-all duration-200 backface-hidden"
+                      :style="productCardStyle('telefono')"
                       @click="abrirVariantes(tel)"
                       @contextmenu.prevent="() => { flippedTelId = flippedTelId === tel.id ? null : tel.id; imeiSearch = '' }"
                     >
@@ -4171,6 +4891,7 @@ function quitarDescuento() {
                     <!-- BACK: IMEIs disponibles -->
                     <div
                       class="absolute inset-0 rounded-xl border border-violet-300 dark:border-violet-600 bg-surface-0 dark:bg-surface-800 p-3 flex flex-col gap-2 backface-hidden overflow-y-auto [transform:rotateY(180deg)]"
+                      :style="productCardStyle('telefono', 'back')"
                       @contextmenu.prevent="flippedTelId = null"
                     >
                       <div class="flex items-center justify-between shrink-0">
@@ -4185,11 +4906,20 @@ function quitarDescuento() {
                       <div
                         v-for="imei in imeisDelTel(tel.id)"
                         :key="imei.id"
-                        class="flex items-center justify-between py-1.5 px-2 rounded-lg bg-surface-50 dark:bg-surface-700/50 hover:bg-primary-50 dark:hover:bg-primary-900/20 cursor-pointer transition-colors text-xs"
-                        @click="flippedTelId = null; seleccionarImeiDirecto(imei)"
+                        class="flex items-start justify-between gap-2 py-1.5 px-2 rounded-lg transition-colors text-xs"
+                        :class="imeiEstaEnCarrito(imei)
+                          ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 cursor-not-allowed'
+                          : 'bg-surface-50 dark:bg-surface-700/50 hover:bg-primary-50 dark:hover:bg-primary-900/20 cursor-pointer'"
+                        @click="!imeiEstaEnCarrito(imei) && (flippedTelId = null, seleccionarImeiDirecto(imei))"
                       >
-                        <span class="font-mono font-medium truncate">{{ imei.nombre }}</span>
-                        <span v-if="imei.precio_venta" class="text-primary font-semibold shrink-0 ml-2">${{ formatCurrency(imei.precio_venta) }}</span>
+                        <span class="min-w-0 flex flex-col flex-1">
+                          <span class="font-mono font-medium truncate">{{ imei.nombre }}</span>
+                          <span class="text-[10px] font-semibold text-violet-600 dark:text-violet-300 truncate">
+                            Cap: {{ getCapacidadImei(imei) || 'Sin capacidad' }}
+                          </span>
+                        </span>
+                        <span v-if="imeiEstaEnCarrito(imei)" class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 shrink-0">En carrito</span>
+                        <span v-else-if="imei.precio_venta" class="text-primary font-semibold shrink-0 ml-2">${{ formatCurrency(imei.precio_venta) }}</span>
                       </div>
                       <p class="text-[9px] text-surface-400 text-center mt-auto shrink-0">Click derecho para volver</p>
                     </div>
@@ -4217,6 +4947,7 @@ function quitarDescuento() {
                     <!-- FRONT -->
                     <div
                       class="absolute inset-0 rounded-xl border border-surface-200/60 dark:border-surface-700/60 bg-surface-0 dark:bg-surface-800 p-3.5 flex flex-col gap-2 transition-all duration-200 backface-hidden"
+                      :style="productCardStyle('electrodomestico')"
                       @click="abrirVariantesSerial(elec)"
                       @contextmenu.prevent="() => { flippedElecId = flippedElecId === elec.id ? null : elec.id; elecSearch = '' }"
                     >
@@ -4238,6 +4969,7 @@ function quitarDescuento() {
                     <!-- BACK: seriales disponibles -->
                     <div
                       class="absolute inset-0 rounded-xl border border-cyan-300 dark:border-cyan-600 bg-surface-0 dark:bg-surface-800 p-3 flex flex-col gap-2 backface-hidden overflow-y-auto [transform:rotateY(180deg)]"
+                      :style="productCardStyle('electrodomestico', 'back')"
                       @contextmenu.prevent="flippedElecId = null"
                     >
                       <div class="flex items-center justify-between shrink-0">
@@ -4266,7 +4998,7 @@ function quitarDescuento() {
             </div>
 
             <div v-else-if="activeTab === 'acciones'">
-              <div class="rounded-xl border border-surface-200/70 dark:border-surface-700/50 bg-surface-50 dark:bg-surface-800/60 p-4 min-h-[220px]">
+              <div class="rounded-xl border border-surface-200/70 dark:border-surface-700/50 bg-surface-50 dark:bg-surface-800 p-4 min-h-[220px]">
                 <div class="flex items-center justify-between gap-3 mb-4">
                   <div>
                     <h3 class="font-bold text-base">Acciones</h3>
@@ -4280,7 +5012,7 @@ function quitarDescuento() {
                 </div>
 
                 <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-                  <button type="button" class="group aspect-square rounded-2xl border border-amber-200 dark:border-amber-800/70 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/25 dark:to-orange-900/20 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" @click="abrirFatCoti">
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('amber')" @click="abrirFatCoti">
                     <span class="w-14 h-14 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-file-edit text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
                       <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Fact-Coti</span>
@@ -4288,7 +5020,23 @@ function quitarDescuento() {
                     </span>
                   </button>
 
-                  <button type="button" class="group aspect-square rounded-2xl border border-blue-200 dark:border-blue-800/70 bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/25 dark:to-indigo-900/20 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursorursor-pointer" @click="holdRecall.dialogHold = true">
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('emerald')" @click="abrirRecibirEquipo">
+                    <span class="w-14 h-14 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-download text-2xl"></i></span>
+                    <span class="flex flex-col gap-0.5">
+                      <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Recibir equipo</span>
+                      <span class="text-[11px] leading-tight text-surface-500 dark:text-surface-400">Trade-in y nota de credito</span>
+                    </span>
+                  </button>
+
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('sky')" @click="abrirOrdenTallerPos">
+                    <span class="w-14 h-14 rounded-2xl bg-sky-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-wrench text-2xl"></i></span>
+                    <span class="flex flex-col gap-0.5">
+                      <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Orden taller</span>
+                      <span class="text-[11px] leading-tight text-surface-500 dark:text-surface-400">Crear reparacion</span>
+                    </span>
+                  </button>
+
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('blue')" @click="holdRecall.dialogHold = true">
                     <span class="w-14 h-14 rounded-2xl bg-blue-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-pause-circle text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
                       <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Hold/Recall</span>
@@ -4296,7 +5044,7 @@ function quitarDescuento() {
                     </span>
                   </button>
 
-                  <button type="button" class="group aspect-square rounded-2xl border border-red-200 dark:border-red-800/70 bg-gradient-to-br from-red-50 to-rose-50 dark:from-red-900/25 dark:to-rose-900/20 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" @click="dev.dialogDevolucion = true; devoluciones.cargarFacturas()">
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('red')" @click="dev.dialogDevolucion = true; devoluciones.cargarFacturas()">
                     <span class="w-14 h-14 rounded-2xl bg-red-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-undo text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
                       <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Devoluciones</span>
@@ -4304,7 +5052,7 @@ function quitarDescuento() {
                     </span>
                   </button>
 
-                  <button type="button" class="group aspect-square rounded-2xl border border-green-200 dark:border-green-800/70 bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/25 dark:to-emerald-900/20 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" @click="combos.dialogSeleccionarCombo = true">
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('green')" @click="combos.dialogSeleccionarCombo = true">
                     <span class="w-14 h-14 rounded-2xl bg-green-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-th-large text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
                       <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Combos</span>
@@ -4312,7 +5060,7 @@ function quitarDescuento() {
                     </span>
                   </button>
 
-                  <button type="button" class="group aspect-square rounded-2xl border border-purple-200 dark:border-purple-800/70 bg-gradient-to-br from-purple-50 to-violet-50 dark:from-purple-900/25 dark:to-violet-900/20 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" @click="caja.verificarTurno(); caja.dialogAperturaCaja = true">
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('purple')" @click="caja.verificarTurno(); caja.dialogAperturaCaja = true">
                     <span class="w-14 h-14 rounded-2xl bg-purple-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-dollar text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
                       <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Caja</span>
@@ -4320,7 +5068,7 @@ function quitarDescuento() {
                     </span>
                   </button>
 
-                  <button type="button" class="group aspect-square rounded-2xl border border-cyan-200 dark:border-cyan-800/70 bg-gradient-to-br from-cyan-50 to-sky-50 dark:from-cyan-900/25 dark:to-sky-900/20 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" @click="miniDashboard.toggleDashboard()">
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-cyan-200 dark:border-cyan-800 bg-cyan-50 dark:bg-cyan-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('cyan')" @click="miniDashboard.toggleDashboard()">
                     <span class="w-14 h-14 rounded-2xl bg-cyan-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-chart-bar text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
                       <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Dashboard</span>
@@ -4328,7 +5076,7 @@ function quitarDescuento() {
                     </span>
                   </button>
 
-                  <button type="button" class="group aspect-square rounded-2xl border border-teal-200 dark:border-teal-800/70 bg-gradient-to-br from-teal-50 to-emerald-50 dark:from-teal-900/25 dark:to-emerald-900/20 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" @click="customerDisplay.abrirPantallaCliente(cart, total, metodoPago, clienteSeleccionado?.nombre || 'CONSUMIDOR FINAL', montoRecibido, cambio)">
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-teal-200 dark:border-teal-800 bg-teal-50 dark:bg-teal-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('teal')" @click="customerDisplay.abrirPantallaCliente(cart, total, metodoPago, clienteSeleccionado?.nombre || 'CONSUMIDOR FINAL', montoRecibido, cambio)">
                     <span class="w-14 h-14 rounded-2xl bg-teal-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-desktop text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
                       <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Cliente</span>
@@ -4336,7 +5084,7 @@ function quitarDescuento() {
                     </span>
                   </button>
 
-                  <button type="button" class="group aspect-square rounded-2xl border border-pink-200 dark:border-pink-800/70 bg-gradient-to-br from-pink-50 to-rose-50 dark:from-pink-900/25 dark:to-rose-900/20 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" @click="stockAlertas.abrirAlertas()">
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-pink-200 dark:border-pink-800 bg-pink-50 dark:bg-pink-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('pink')" @click="stockAlertas.abrirAlertas()">
                     <span class="w-14 h-14 rounded-2xl bg-pink-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-exclamation-triangle text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
                       <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Alertas</span>
@@ -4344,7 +5092,7 @@ function quitarDescuento() {
                     </span>
                   </button>
 
-                  <button type="button" class="group aspect-square rounded-2xl border border-gray-200 dark:border-gray-800/70 bg-gradient-to-br from-gray-50 to-slate-50 dark:from-gray-900/25 dark:to-slate-900/20 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" @click="dialogAyudaAtajos = true">
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('gray')" @click="dialogAyudaAtajos = true">
                     <span class="w-14 h-14 rounded-2xl bg-gray-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-question-circle text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
                       <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Atajos</span>
@@ -4375,6 +5123,7 @@ function quitarDescuento() {
                     <!-- FRONT -->
                     <div
                       class="absolute inset-0 rounded-xl border border-surface-200/60 dark:border-surface-700/60 bg-surface-0 dark:bg-surface-800 p-3.5 flex flex-col gap-2 transition-all duration-200 backface-hidden"
+                      :style="productCardStyle('accesorio')"
                       @click="(acc.cantidad || 0) > 0 && agregarAccesorio(acc)"
                       @contextmenu.prevent="() => { flippedAccId = flippedAccId === acc.id ? null : acc.id }"
                     >
@@ -4413,6 +5162,7 @@ function quitarDescuento() {
                     <!-- BACK -->
                     <div
                       class="absolute inset-0 rounded-xl border border-emerald-300 dark:border-emerald-600 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-3 backface-hidden overflow-y-auto [transform:rotateY(180deg)]"
+                      :style="productCardStyle('accesorio', 'back')"
                       @contextmenu.prevent="flippedAccId = null"
                     >
                       <div class="flex items-center justify-between">
@@ -4574,6 +5324,8 @@ function quitarDescuento() {
               v-for="(item, index) in cartConComision"
               :key="index"
               class="group flex items-start gap-2 p-2 rounded-lg border border-transparent hover:border-surface-200/60 dark:hover:border-surface-600/40 hover:bg-surface-50 dark:hover:bg-surface-700/40 transition-colors"
+              :class="item.tipo === 'imei' && Number(item.cantidad || 1) > 1 ? 'cursor-pointer' : ''"
+              @click="abrirGestionImeis(item, index)"
             >
               <div class="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 mt-0.5 shadow-xs"
                 :class="item.tipo === 'imei' ? 'bg-violet-500' : item.tipo === 'serial' ? 'bg-cyan-500' : 'bg-emerald-500'">
@@ -4582,18 +5334,19 @@ function quitarDescuento() {
               <div class="flex-1 min-w-0">
                 <div class="flex items-start justify-between gap-1">
                   <p class="text-xs font-medium leading-tight truncate text-surface-900 dark:text-surface-50">{{ item.nombre }}</p>
-                  <Button icon="pi pi-times" severity="danger" text rounded size="small" class="!w-5 !h-5 !text-[9px] opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 -mt-0.5 -mr-1" @click="quitarDelCarrito(index)" />
+                  <Button icon="pi pi-times" severity="danger" text rounded size="small" class="!w-5 !h-5 !text-[9px] opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 -mt-0.5 -mr-1" @click.stop="quitarDelCarrito(index)" />
                 </div>
                 <div v-if="itemTieneDescuento(item)" class="flex items-center gap-1.5 mt-0.5 text-[10px] leading-tight">
                   <span class="text-surface-400 line-through">${{ formatCurrency(getPrecioNormal(item)) }}</span>
                   <span class="font-bold text-emerald-600 dark:text-emerald-400">${{ formatCurrency(item.precio) }}</span>
                   <span class="rounded bg-emerald-50 px-1 py-0.5 font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Con descuento</span>
                 </div>
-                <p v-if="item.imei" class="text-[10px] text-surface-400 font-mono truncate leading-tight">
-    IMEI: {{ item.imei }}
-    <button class="text-primary hover:underline ml-1 font-semibold" @click.stop="abrirCambiarImei(item, index)">cambiar</button>
-</p>
-                <p v-if="item.serial" class="text-[10px] text-surface-400 font-mono truncate leading-tight">Serial: {{ item.serial }}</p>
+                <p v-if="item.imei || item.imeis?.length" class="text-[10px] text-surface-400 font-mono truncate leading-tight">
+                  IMEI: {{ (item.imeis?.length ? item.imeis : [item.imei]).filter(Boolean).join(', ') }}
+                  <button v-if="Number(item.cantidad || 1) === 1" class="text-primary hover:underline ml-1 font-semibold" @click.stop="abrirCambiarImei(item, index)">cambiar</button>
+                  <span v-else class="text-primary font-semibold ml-1">click para gestionar</span>
+                </p>
+                <p v-if="item.serial || item.seriales?.length" class="text-[10px] text-surface-400 font-mono truncate leading-tight">Serial: {{ (item.seriales?.length ? item.seriales : [item.serial]).filter(Boolean).join(', ') }}</p>
                 <p v-if="item.color || item.capacidad" class="text-[10px] text-surface-400 leading-tight">{{ [item.color, item.capacidad].filter(Boolean).join(' - ') }}</p>
                 <div class="flex items-center justify-between mt-1">
                   <div class="flex items-center gap-1">
@@ -4650,11 +5403,17 @@ function quitarDescuento() {
       modal
       :style="{ width: 'min(45rem, 95vw)' }"
     >
-      <div class="flex gap-4">
-        <div v-if="getImageUrl(selectedTelefono?.imagen)" class="w-24 h-24 rounded-xl overflow-hidden border border-surface-200 dark:border-surface-700 shrink-0 hidden sm:block">
-          <img :src="getImageUrl(selectedTelefono?.imagen)" class="w-full h-full object-cover" alt="" />
+      <div class="flex flex-col gap-4">
+        <div v-if="getImageUrl(selectedTelefono?.imagen)" class="w-full flex items-center gap-3 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800/70 p-3">
+          <div class="w-20 h-20 rounded-xl overflow-hidden border border-surface-200 dark:border-surface-700 shrink-0">
+            <img :src="getImageUrl(selectedTelefono?.imagen)" class="w-full h-full object-cover" alt="" />
+          </div>
+          <div class="min-w-0">
+            <p class="font-semibold text-sm truncate">{{ selectedTelefono?.nombre }}</p>
+            <p class="text-xs text-surface-500">{{ variantesFiltradas.length }} IMEI disponibles</p>
+          </div>
         </div>
-        <div class="flex-1 space-y-3">
+        <div class="w-full min-w-0 space-y-3">
           <IconField>
             <InputIcon class="pi pi-search" />
             <InputText v-model="busquedaImei" :placeholder="selectedTelefono ? 'Buscar por IMEI, color o capacidad...' : 'Buscar por Serial, color o capacidad...'" fluid />
@@ -4670,31 +5429,38 @@ function quitarDescuento() {
           dataKey="id"
           scrollable
           responsiveLayout="scroll"
+          :rowClass="varianteRowClass"
           @row-click="abrirPrecio($event.data)"
         >
           <Column field="nombre" :header="selectedTelefono ? 'IMEI' : 'Serial'" sortable>
             <template #body="{ data }">
-              <span class="font-mono text-xs">{{ data.nombre }}</span>
+              <div class="flex items-center gap-2">
+                <span class="font-mono text-xs">{{ data.nombre }}</span>
+                <span
+                  v-if="selectedTelefono ? imeiEstaEnCarrito(data) : serialEstaEnCarrito(data)"
+                  class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
+                >En carrito</span>
+              </div>
             </template>
           </Column>
           <Column field="color" header="Color" sortable />
           <Column field="capacidad" header="Capacidad" sortable />
-          <Column header="Precio Venta" sortable>
+          <Column header="Venta" sortable style="width: 7rem">
             <template #body="{ data }">
               <span class="font-semibold">${{ formatCurrency(data.precio_venta || 0) }}</span>
             </template>
           </Column>
-          <Column header="Precio Min" sortable>
+          <Column header="Min" sortable style="width: 6rem">
             <template #body="{ data }">
               <span class="text-surface-500">${{ formatCurrency(data.precio_min || 0) }}</span>
             </template>
           </Column>
-          <Column header="Precio xMayor" sortable>
+          <Column header="xMayor" sortable style="width: 6.5rem">
             <template #body="{ data }">
               <span class="text-surface-500">${{ formatCurrency(data.precio_xmayor || 0) }}</span>
             </template>
           </Column>
-          <Column header="Costo">
+          <Column header="Costo" style="width: 6rem">
             <template #body="{ data }">
               <span class="text-surface-400 text-xs">${{ formatCurrency(data.costo || 0) }}</span>
             </template>
@@ -4707,8 +5473,8 @@ function quitarDescuento() {
 
         <div v-else-if="selectedTelefono ? variantesImei.length === 0 : variantesSerial.length === 0" class="text-center py-6 text-surface-400">No hay unidades disponibles de este modelo.</div>
         <div v-else class="text-center py-6 text-surface-400">No hay resultados para la busqueda.</div>
-          </div>
         </div>
+      </div>
 
       <template #footer>
         <Button label="Cerrar" severity="secondary" text @click="dialogVariantes = false" />
@@ -4721,12 +5487,19 @@ function quitarDescuento() {
       modal
       :style="{ width: 'min(28rem, 95vw)' }"
     >
-      <div class="flex gap-4">
-        <div v-if="getImageUrl(selectedTelefono?.imagen)" class="w-20 h-20 rounded-xl overflow-hidden border border-surface-200 dark:border-surface-700 shrink-0 hidden sm:block">
-          <img :src="getImageUrl(selectedTelefono?.imagen)" class="w-full h-full object-cover" alt="" />
+      <div class="flex flex-col gap-4">
+        <div v-if="getImageUrl(selectedTelefono?.imagen)" class="w-full flex items-center gap-3 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800/70 p-3">
+          <div class="w-20 h-20 rounded-xl overflow-hidden border border-surface-200 dark:border-surface-700 shrink-0">
+            <img :src="getImageUrl(selectedTelefono?.imagen)" class="w-full h-full object-cover" alt="" />
+          </div>
+          <div class="min-w-0">
+            <p class="font-semibold text-sm truncate">{{ selectedTelefono?.nombre || selectedElectrodomestico?.nombre }}</p>
+            <p class="text-xs text-surface-500 font-mono truncate">{{ selectedTelefono ? 'IMEI:' : 'Serial:' }} {{ imeiParaPrecio?.nombre }}</p>
+            <p class="text-xs text-surface-500 truncate">{{ [imeiParaPrecio?.color, imeiParaPrecio?.capacidad].filter(Boolean).join(' / ') }}</p>
+          </div>
         </div>
-        <div class="flex-1 space-y-4">
-          <div class="text-sm bg-surface-50 dark:bg-surface-700/50 p-3 rounded-lg">
+        <div class="w-full min-w-0 space-y-4">
+          <div v-if="!getImageUrl(selectedTelefono?.imagen)" class="text-sm bg-surface-50 dark:bg-surface-700/50 p-3 rounded-lg">
             <p class="font-medium">{{ selectedTelefono?.nombre || selectedElectrodomestico?.nombre }}</p>
             <p class="text-surface-400 text-xs font-mono">{{ selectedTelefono ? 'IMEI:' : 'Serial:' }} {{ imeiParaPrecio?.nombre }}</p>
             <p class="text-surface-400 text-xs">{{ imeiParaPrecio?.color }} {{ imeiParaPrecio?.capacidad }}</p>
@@ -4918,75 +5691,80 @@ function quitarDescuento() {
       modal
       :style="{ width: 'min(28rem, 95vw)' }"
     >
-      <div v-if="pasoMixto === 'elegir'" class="space-y-4">
-        <p class="text-sm text-surface-500">Selecciona los metodos de pago a combinar (minimo 2):</p>
-
-        <div v-if="mixtoError" class="p-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-600 dark:text-red-400">{{ mixtoError }}</div>
-
-        <div class="space-y-2">
-          <label class="flex items-center gap-3 p-3 rounded-lg border border-surface-200 dark:border-surface-700 cursor-pointer hover:border-primary-300 transition-all" :class="metodosMixto.efectivo ? 'bg-primary text-primary-contrast border-primary' : ''">
-            <input type="checkbox" v-model="metodosMixto.efectivo" class="w-4 h-4" />
-            <i class="pi pi-money-bill"></i>
-            <span class="text-sm font-medium">Efectivo</span>
-          </label>
-          <label class="flex items-center gap-3 p-3 rounded-lg border border-surface-200 dark:border-surface-700 cursor-pointer hover:border-primary-300 transition-all" :class="metodosMixto.tarjeta ? 'bg-primary text-primary-contrast border-primary' : ''">
-            <input type="checkbox" v-model="metodosMixto.tarjeta" class="w-4 h-4" />
-            <i class="pi pi-credit-card"></i>
-            <span class="text-sm font-medium">Tarjeta</span>
-          </label>
-          <label class="flex items-center gap-3 p-3 rounded-lg border border-surface-200 dark:border-surface-700 cursor-pointer hover:border-primary-300 transition-all" :class="metodosMixto.transferencia ? 'bg-primary text-primary-contrast border-primary' : ''">
-            <input type="checkbox" v-model="metodosMixto.transferencia" class="w-4 h-4" />
-            <i class="pi pi-send"></i>
-            <span class="text-sm font-medium">Transferencia</span>
-          </label>
-          <label class="flex items-center gap-3 p-3 rounded-lg border border-surface-200 dark:border-surface-700 cursor-pointer hover:border-primary-300 transition-all" :class="metodosMixto.cheque ? 'bg-primary text-primary-contrast border-primary' : ''">
-            <input type="checkbox" v-model="metodosMixto.cheque" class="w-4 h-4" />
-            <i class="pi pi-check"></i>
-            <span class="text-sm font-medium">Cheque</span>
-          </label>
-        </div>
-      </div>
-
-      <div v-else class="space-y-4">
-        <p class="text-sm text-surface-500">Distribuye el total de <strong>${{ formatCurrency(total) }}</strong> entre los metodos seleccionados:</p>
+      <div class="space-y-4">
+        <p class="text-sm text-surface-500">Selecciona los metodos y distribuye el total de <strong>${{ formatCurrency(total) }}</strong>:</p>
 
         <div v-if="mixtoError" class="p-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-600 dark:text-red-400">{{ mixtoError }}</div>
 
         <div class="space-y-3">
-          <div v-if="metodosMixto.efectivo" class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded-lg bg-green-100 dark:bg-green-900/30 flex items-center justify-center text-green-600"><i class="pi pi-money-bill text-sm"></i></div>
-            <span class="text-sm font-medium w-24">Efectivo</span>
-            <InputNumber v-model="mixtoEfectivo" :min="0" fluid @focus="(e: any) => e.target.select()" />
+          <div class="flex items-center gap-3 p-3 rounded-lg border border-surface-200 dark:border-surface-700" :class="metodosMixto.efectivo ? 'bg-primary text-primary-contrast border-primary' : ''">
+            <input type="checkbox" v-model="metodosMixto.efectivo" class="w-4 h-4 shrink-0" />
+            <i class="pi pi-money-bill shrink-0"></i>
+            <span class="text-sm font-medium w-20 shrink-0">Efectivo</span>
+            <InputNumber v-if="metodosMixto.efectivo" v-model="mixtoEfectivo" :min="0" fluid @focus="(e: any) => e.target.select()" />
           </div>
-          <div v-if="metodosMixto.tarjeta" class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600"><i class="pi pi-credit-card text-sm"></i></div>
-            <span class="text-sm font-medium w-24">Tarjeta</span>
-            <InputNumber v-model="mixtoTarjeta" :min="0" fluid @focus="(e: any) => e.target.select()" />
+          <div class="flex items-center gap-3 p-3 rounded-lg border border-surface-200 dark:border-surface-700" :class="metodosMixto.tarjeta ? 'bg-primary text-primary-contrast border-primary' : ''">
+            <input type="checkbox" v-model="metodosMixto.tarjeta" class="w-4 h-4 shrink-0" />
+            <i class="pi pi-credit-card shrink-0"></i>
+            <span class="text-sm font-medium w-20 shrink-0">Tarjeta</span>
+            <InputNumber v-if="metodosMixto.tarjeta" v-model="mixtoTarjeta" :min="0" fluid @focus="(e: any) => e.target.select()" />
           </div>
-          <div v-if="metodosMixto.transferencia" class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center text-purple-600"><i class="pi pi-send text-sm"></i></div>
-            <span class="text-sm font-medium w-24">Transferencia</span>
-            <InputNumber v-model="mixtoTransferencia" :min="0" fluid @focus="(e: any) => e.target.select()" />
+          <div class="p-3 rounded-lg border border-surface-200 dark:border-surface-700 space-y-2" :class="metodosMixto.transferencia ? 'border-purple-300 dark:border-purple-700' : ''">
+            <div class="flex items-center gap-3">
+              <input type="checkbox" v-model="metodosMixto.transferencia" class="w-4 h-4 shrink-0" />
+              <i class="pi pi-send shrink-0"></i>
+              <span class="text-sm font-medium w-20 shrink-0">Transferencia</span>
+              <Button v-if="metodosMixto.transferencia" icon="pi pi-plus" label="Agregar" size="small" severity="secondary" outlined @click="agregarTransferenciaMixto" class="ml-auto" />
+            </div>
+            <template v-if="metodosMixto.transferencia">
+              <div
+                v-for="(transferencia, idx) in transferenciasMixto"
+                :key="idx"
+                class="grid grid-cols-[1fr_8rem_2rem] gap-2 items-center"
+              >
+                <Select
+                  v-model="transferencia.banco_id"
+                  :options="bancosPos"
+                  optionLabel="nombre"
+                  optionValue="id"
+                  placeholder="Banco"
+                  fluid
+                  filter
+                >
+                  <template #option="{ option }">
+                    <div class="flex flex-col">
+                      <span class="font-medium">{{ option.nombre }}</span>
+                      <span v-if="option.numero_cuenta" class="text-xs text-surface-400">{{ option.numero_cuenta }}</span>
+                    </div>
+                  </template>
+                </Select>
+                <InputNumber v-model="transferencia.monto" :min="0" fluid @focus="(e: any) => e.target.select()" />
+                <Button icon="pi pi-trash" severity="danger" text rounded size="small" :disabled="transferenciasMixto.length === 1" @click="quitarTransferenciaMixto(idx)" />
+              </div>
+              <div class="flex justify-between text-xs font-semibold text-surface-500">
+                <span>Total transferencia</span>
+                <span>${{ formatCurrency(totalTransferenciasMixto()) }}</span>
+              </div>
+            </template>
           </div>
-          <div v-if="metodosMixto.cheque" class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded-lg bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center text-orange-600"><i class="pi pi-check text-sm"></i></div>
-            <span class="text-sm font-medium w-24">Cheque</span>
-            <InputNumber v-model="mixtoCheque" :min="0" fluid @focus="(e: any) => e.target.select()" />
+          <div class="flex items-center gap-3 p-3 rounded-lg border border-surface-200 dark:border-surface-700" :class="metodosMixto.cheque ? 'bg-primary text-primary-contrast border-primary' : ''">
+            <input type="checkbox" v-model="metodosMixto.cheque" class="w-4 h-4 shrink-0" />
+            <i class="pi pi-check shrink-0"></i>
+            <span class="text-sm font-medium w-20 shrink-0">Cheque</span>
+            <InputNumber v-if="metodosMixto.cheque" v-model="mixtoCheque" :min="0" fluid @focus="(e: any) => e.target.select()" />
           </div>
         </div>
 
         <div class="flex justify-between text-sm font-bold border-t border-surface-200 dark:border-surface-700 pt-3">
           <span>Total distribuido</span>
-          <span :class="(Number(mixtoEfectivo) + Number(mixtoTarjeta) + Number(mixtoTransferencia) + Number(mixtoCheque)) === total.value ? 'text-green-600' : 'text-red-600'">
-            ${{ formatCurrency((Number(mixtoEfectivo) || 0) + (Number(mixtoTarjeta) || 0) + (Number(mixtoTransferencia) || 0) + (Number(mixtoCheque) || 0)) }}
+          <span :class="(Number(mixtoEfectivo) + Number(mixtoTarjeta) + totalTransferenciasMixto() + Number(mixtoCheque)) === total.value ? 'text-green-600' : 'text-red-600'">
+            ${{ formatCurrency((Number(mixtoEfectivo) || 0) + (Number(mixtoTarjeta) || 0) + totalTransferenciasMixto() + (Number(mixtoCheque) || 0)) }}
           </span>
         </div>
       </div>
       <template #footer>
-        <Button v-if="pasoMixto === 'elegir'" label="Cancelar" severity="secondary" text @click="dialogMixto = false" />
-        <Button v-if="pasoMixto === 'elegir'" label="Siguiente" icon="pi pi-arrow-right" @click="siguientePasoMixto" />
-        <Button v-if="pasoMixto === 'montos'" label="Atras" severity="secondary" text @click="pasoMixto = 'elegir'" />
-        <Button v-if="pasoMixto === 'montos'" label="Confirmar" icon="pi pi-check" @click="confirmarMixto" />
+        <Button label="Cancelar" severity="secondary" text @click="dialogMixto = false" />
+        <Button label="Confirmar" icon="pi pi-check" @click="confirmarMixto" />
       </template>
     </Dialog>
 
@@ -5046,6 +5824,25 @@ function quitarDescuento() {
         <div class="flex justify-between text-sm">
           <span>Metodo de Pago</span>
           <span>{{ metodoPago }}</span>
+        </div>
+        <div v-if="needsBankSelection" class="flex flex-col gap-1">
+          <label class="text-xs font-semibold">Banco destino</label>
+          <Select
+            v-model="bancoPosSeleccionado"
+            :options="bancosPos"
+            optionLabel="nombre"
+            optionValue="id"
+            placeholder="Seleccionar banco..."
+            :loading="cargandoBancosPos"
+            fluid
+          >
+            <template #option="{ option }">
+              <div class="flex flex-col">
+                <span class="font-medium">{{ option.nombre }}</span>
+                <span v-if="option.numero_cuenta" class="text-xs text-surface-400">{{ option.numero_cuenta }}</span>
+              </div>
+            </template>
+          </Select>
         </div>
         <div class="pt-1 border-t border-surface-100 dark:border-surface-700">
           <div class="flex items-start gap-1.5">
@@ -6010,6 +6807,7 @@ function quitarDescuento() {
 
     <FacturaPdfPrint ref="facturaPdfRef" />
     <TicketCuentaCobrarPrint ref="ticketCuentaCobrarRef" />
+    <TicketTallerPrint ref="ticketTallerRef" />
 
     <Dialog
       v-model:visible="dialogPrintChoice"
@@ -6158,6 +6956,39 @@ function quitarDescuento() {
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogCambiarPrecio = false; cartItemPrecio = null; itemParaPrecio = null" />
         <Button label="Aplicar" icon="pi pi-check" @click="aplicarCambioPrecio" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogGestionImeis" header="Gestionar IMEI" modal :style="{ width: 'min(34rem, 95vw)' }">
+      <div class="space-y-3 pt-2">
+        <div class="text-sm bg-surface-50 dark:bg-surface-700/30 p-3 rounded-lg">
+          <p class="font-semibold">{{ itemGestionImeis?.nombre }}</p>
+          <p class="text-xs text-surface-400">{{ itemGestionImeis?.cantidad || 0 }} IMEI agregados en esta linea</p>
+        </div>
+        <IconField>
+          <InputIcon class="pi pi-search" />
+          <InputText v-model="busquedaGestionImeis" placeholder="Buscar IMEI, color o capacidad..." fluid />
+        </IconField>
+        <div class="flex flex-col gap-2 max-h-80 overflow-y-auto">
+          <div
+            v-for="detalle in getImeisGestionFiltrados(itemGestionImeis)"
+            :key="`${detalle.id || detalle.imei}-${detalle.pos}`"
+            class="flex items-center justify-between gap-3 p-3 rounded-lg border border-surface-200/60 dark:border-surface-700/50 bg-surface-0 dark:bg-surface-800"
+          >
+            <div class="min-w-0">
+              <p class="text-sm font-mono font-semibold truncate">{{ detalle.imei || 'IMEI sin numero' }}</p>
+              <p v-if="detalle.color || detalle.capacidad" class="text-xs text-surface-400 truncate">{{ [detalle.color, detalle.capacidad].filter(Boolean).join(' / ') }}</p>
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+              <Button icon="pi pi-refresh" severity="secondary" text rounded size="small" @click="prepararCambioImeiAgrupado(detalle.pos)" v-tooltip="'Cambiar este IMEI'" />
+              <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click="quitarImeiAgrupado(detalle.pos)" v-tooltip="'Quitar este IMEI'" />
+            </div>
+          </div>
+          <div v-if="getImeisGestionFiltrados(itemGestionImeis).length === 0" class="text-center py-6 text-surface-400 text-sm">No hay IMEI que coincidan con la busqueda.</div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cerrar" severity="secondary" text @click="dialogGestionImeis = false; itemGestionImeis = null; indexGestionImeis = null" />
       </template>
     </Dialog>
 
@@ -6488,15 +7319,39 @@ function quitarDescuento() {
             <p class="text-xs text-surface-500">{{ dev.facturaDevolucion.nombre_cliente || 'CONSUMIDOR FINAL' }} · ${{ formatCurrency(dev.facturaDevolucion.total || 0) }}</p>
           </div>
         </div>
-        <p class="text-xs font-semibold text-surface-500 uppercase tracking-wide">Selecciona los productos a devolver:</p>
+        <div class="flex items-center justify-between gap-3">
+          <p class="text-xs font-semibold text-surface-500 uppercase tracking-wide">Selecciona los productos a devolver:</p>
+          <label class="inline-flex items-center gap-2 text-xs font-semibold cursor-pointer select-none">
+            <input
+              type="checkbox"
+              class="w-4 h-4 accent-red-500"
+              :checked="devoluciones.todosProductosSeleccionados()"
+              :indeterminate="devoluciones.algunosProductosSeleccionados()"
+              @change="cambiarSeleccionTodosDevolucion"
+            />
+            <span>
+              {{ devoluciones.todosProductosSeleccionados() ? 'Quitar todos' : devoluciones.algunosProductosSeleccionados() ? 'Seleccionar restantes' : 'Seleccionar todos' }}
+            </span>
+          </label>
+        </div>
         <div class="flex flex-col gap-2 max-h-48 overflow-y-auto">
           <div v-for="(p, i) in dev.productosDevolucion" :key="i" class="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer transition-colors" :class="p._devolver ? 'border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20' : 'border-surface-200/50 dark:border-surface-700/30 hover:border-red-300'" @click="devoluciones.toggleDevolucionProducto(p)">
             <div class="flex items-center gap-2">
-              <i class="pi" :class="p._devolver ? 'pi-check-circle text-red-500' : 'pi-circle text-surface-300'"></i>
+              <input
+                type="checkbox"
+                class="w-4 h-4 accent-red-500 shrink-0"
+                :checked="p._devolver"
+                @click.stop
+                @change="devoluciones.toggleDevolucionProducto(p)"
+              />
               <div>
                 <p class="text-sm font-medium">{{ p.nombre }}</p>
-                <p v-if="p.imei" class="text-xs text-surface-400 font-mono">IMEI: {{ p.imei }}</p>
-                <p v-if="p.serial" class="text-xs text-surface-400 font-mono">Serial: {{ p.serial }}</p>
+                <p v-if="p.imei || p.imeis?.length" class="text-xs text-surface-400 font-mono">
+                  IMEI: {{ (p.imeis?.length ? p.imeis : [p.imei]).filter(Boolean).join(', ') }}
+                </p>
+                <p v-if="p.serial || p.seriales?.length" class="text-xs text-surface-400 font-mono">
+                  Serial: {{ (p.seriales?.length ? p.seriales : [p.serial]).filter(Boolean).join(', ') }}
+                </p>
               </div>
             </div>
             <span class="font-semibold text-sm">${{ formatCurrency((p.precio || 0) * (p.cantidad || 1)) }}</span>
@@ -6513,7 +7368,7 @@ function quitarDescuento() {
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="devoluciones.cerrarDevolucion()" />
-        <Button v-if="dev.facturaDevolucion" label="Procesar NC" icon="pi pi-undo" severity="danger" :loading="dev.cargandoDevolucion" :disabled="dev.devolucionSeleccion.length === 0 || !dev.motivoDevolucion.trim()" @click="devoluciones.procesarDevolucion().then(() => { cargarProductos(); cargarImeisDisponibles(); sonidos.playSuccess() })" />
+        <Button v-if="dev.facturaDevolucion" label="Procesar Devolucion" icon="pi pi-undo" severity="danger" :loading="dev.cargandoDevolucion" :disabled="dev.devolucionSeleccion.length === 0 || !dev.motivoDevolucion.trim()" @click="devoluciones.procesarDevolucion().then(() => { cargarProductos(); cargarImeisDisponibles(); sonidos.playSuccess() })" />
       </template>
     </Dialog>
 
@@ -6630,6 +7485,126 @@ function quitarDescuento() {
       <template #footer><Button label="Cerrar" severity="secondary" text @click="dialogAyudaAtajos = false" /></template>
     </Dialog>
 
+    <OrdenTallerForm
+      :order-id="null"
+      :visible="dialogOrdenTallerPos"
+      :initial-data="ordenTallerInitialData"
+      @close="dialogOrdenTallerPos = false"
+      @saved="onOrdenTallerPosGuardada"
+    />
+
+    <Dialog
+      v-model:visible="dialogOrdenTallerPostSave"
+      header="Orden de taller creada"
+      modal
+      :style="{ width: 'min(28rem, 95vw)' }"
+    >
+      <div class="space-y-4 pt-2">
+        <div class="rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3 text-sm">
+          <p class="font-semibold">{{ ordenTallerPosGuardada?.no_orden || ordenTallerPosGuardada?.id }}</p>
+          <p class="text-xs text-surface-500">{{ ordenTallerPosGuardada?.nombre || 'SIN CLIENTE' }}</p>
+          <p class="text-xs text-surface-500">{{ ordenTallerPosGuardada?.equipo || '' }} {{ ordenTallerPosGuardada?.marca_modelo || '' }}</p>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <Button label="Imprimir orden" icon="pi pi-print" severity="info" outlined class="justify-center" @click="imprimirOrdenTallerPos" />
+          <Button label="Imprimir etiqueta" icon="pi pi-tag" severity="success" outlined class="justify-center" @click="abrirEtiquetaOrdenTallerPos" />
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cerrar" severity="secondary" text @click="dialogOrdenTallerPostSave = false; ordenTallerPosGuardada = null" />
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="dialogEtiquetaTallerPos"
+      header="Imprimir Etiqueta de Taller"
+      modal
+      :style="{ width: '34rem' }"
+    >
+      <div class="space-y-4">
+        <div class="rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3">
+          <p class="text-sm font-semibold">{{ ordenTallerPosGuardada?.nombre || 'Sin cliente' }}</p>
+          <p class="text-xs text-surface-500">Orden: {{ ordenTallerPosGuardada?.no_orden || ordenTallerPosGuardada?.id || '-' }}</p>
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label class="text-sm font-semibold">Impresora</label>
+          <div class="flex gap-2">
+            <Select
+              v-model="printerTallerPos"
+              :options="printersTallerPos"
+              optionLabel="name"
+              optionValue="name"
+              placeholder="Seleccionar impresora"
+              class="flex-1"
+              filter
+            />
+            <Button icon="pi pi-refresh" severity="secondary" outlined :loading="escaneandoPrintersTallerPos" @click="escanearPrintersTallerPos" />
+          </div>
+        </div>
+
+        <div>
+          <p class="text-sm font-semibold mb-2">Plantilla</p>
+          <div v-if="plantillasEtiquetasTallerPos.length === 0" class="text-center py-4 text-surface-400 text-sm">No hay plantillas. Crea una en Inventario &gt; Etiquetas.</div>
+          <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-72 overflow-y-auto">
+            <button
+              v-for="p in plantillasEtiquetasTallerPos"
+              :key="p.id"
+              type="button"
+              class="text-left rounded-lg border border-surface-200 dark:border-surface-700 p-3 hover:border-primary transition-colors"
+              @click="imprimirEtiquetaOrdenTallerPos(p)"
+            >
+              <p class="font-semibold text-sm">{{ p.nombre }}</p>
+              <p class="text-xs text-surface-500">{{ p.ancho }}mm x {{ p.alto }}mm</p>
+            </button>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogEtiquetaTallerPos = false" />
+      </template>
+    </Dialog>
+
+    <RecibirEquipoDialog
+      :visible="dialogRecibirEquipo"
+      :initial-data="recibirEquipoInitialData"
+      :ask-publish-after-save="true"
+      @close="dialogRecibirEquipo = false"
+      @saved="onRecibidoPosGuardado"
+    />
+
+    <Dialog
+      v-model:visible="dialogAplicarNotaRecibido"
+      header="Aplicar nota de credito"
+      modal
+      :style="{ width: 'min(30rem, 95vw)' }"
+      :closable="false"
+    >
+      <div class="space-y-4 pt-2">
+        <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-3 text-sm space-y-2">
+          <div class="flex justify-between gap-3">
+            <span class="text-surface-500">Nota</span>
+            <span class="font-semibold text-right">{{ notaCreditoRecibido?.no_factura || getNotaCreditoNoFromRecibido(recibidoParaDescuento) || 'RECIBIDO' }}</span>
+          </div>
+          <div class="flex justify-between gap-3">
+            <span class="text-surface-500">Valor</span>
+            <span class="font-bold text-primary">RD$ {{ formatCurrency(notaCreditoRecibido?.total || getNotaCreditoValueFromRecibido(recibidoParaDescuento)) }}</span>
+          </div>
+          <div class="flex justify-between gap-3">
+            <span class="text-surface-500">Subtotal actual</span>
+            <span class="font-semibold">RD$ {{ formatCurrency(subtotal) }}</span>
+          </div>
+        </div>
+        <p class="text-sm text-surface-500 dark:text-surface-400">
+          El equipo recibido genero una nota de credito. Puedes aplicarla ahora como descuento en la venta actual.
+        </p>
+      </div>
+      <template #footer>
+        <Button label="No aplicar" severity="secondary" text @click="omitirNotaRecibidoComoDescuento" />
+        <Button label="Aplicar descuento" icon="pi pi-check" :disabled="subtotal <= 0" @click="aplicarNotaRecibidoComoDescuento" />
+      </template>
+    </Dialog>
+
     <!-- ==================== CAUSA DESCUENTO ==================== -->
     <Dialog v-model:visible="causaDescuento.dialogCausaDescuento" header="Motivo del descuento" modal :style="{ width: 'min(26rem, 95vw)' }">
       <div class="space-y-3 pt-2">
@@ -6658,5 +7633,17 @@ function quitarDescuento() {
 .backface-hidden {
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+}
+
+.pos-action-card[style] > span.flex.flex-col span {
+  color: inherit !important;
+}
+
+.pos-action-card[style] > span.flex.flex-col span + span {
+  opacity: 0.72;
+}
+
+.flip-inner [style] h4 {
+  color: inherit;
 }
 </style>

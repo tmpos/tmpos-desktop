@@ -8,12 +8,25 @@ import { useToast } from 'primevue/usetoast'
 import { envioElectron } from '@/funciones/funciones.js'
 
 function formatearMetodoPago(factura: any): string {
-  if (String(factura.metodo_pago || '').toLowerCase() !== 'mixto') return factura.metodo_pago || ''
+  const metodo = String(factura.metodo_pago || '').toUpperCase()
+  const otro = parseJson(factura?.otro, {})
+  const bancoNombre = factura.banco_nombre || otro?.banco_nombre || ''
+  if (metodo !== 'MIXTO') {
+    return bancoNombre ? `${factura.metodo_pago || ''} - ${bancoNombre}` : (factura.metodo_pago || '')
+  }
   const partes: string[] = []
   const fmt = (n: any) => Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })
   if (Number(factura.efectivo) > 0) partes.push(`Efectivo: $${fmt(factura.efectivo)}`)
   if (Number(factura.tarjeta) > 0) partes.push(`Tarjeta: $${fmt(factura.tarjeta)}`)
-  if (Number(factura.transferencia) > 0) partes.push(`Transferencia: $${fmt(factura.transferencia)}`)
+  const transferencias = factura.transferencias_mixtas
+    ? (Array.isArray(factura.transferencias_mixtas) ? factura.transferencias_mixtas : [])
+    : otro?.transferencias_mixtas
+      ? (Array.isArray(otro.transferencias_mixtas) ? otro.transferencias_mixtas : [])
+      : (Number(factura.transferencia) > 0 ? [{ monto: factura.transferencia, banco_nombre: bancoNombre }] : [])
+  for (const t of transferencias) {
+    const banco = t.banco_nombre ? ` (${t.banco_nombre})` : ''
+    partes.push(`Transferencia${banco}: $${fmt(t.monto)}`)
+  }
   if (Number(factura.cheque) > 0) partes.push(`Cheque: $${fmt(factura.cheque)}`)
   return `MIXTO (${partes.join(', ')})`
 }
@@ -76,7 +89,7 @@ function formatoMoneda(value: any): string {
 }
 
 function obtenerImeisProducto(producto: any): string[] {
-  const valores = [producto?.imei, producto?.lista_imei, producto?.imeis, producto?.serial]
+  const valores = [producto?.imei, producto?.lista_imei, producto?.imeis, producto?.serial, producto?.seriales]
   return valores
     .flatMap((valor) => {
       if (Array.isArray(valor)) return valor
@@ -89,6 +102,24 @@ function obtenerImeisProducto(producto: any): string[] {
     })
     .filter(Boolean)
     .filter((valor, index, lista) => lista.indexOf(valor) === index)
+}
+
+function obtenerCodigoProducto(producto: any): string {
+  return String(
+    producto?.codigo ||
+    producto?.codigo_barra ||
+    producto?.cod_producto ||
+    producto?.sku ||
+    producto?.referencia ||
+    producto?.barcode ||
+    producto?.imei ||
+    producto?.serial ||
+    producto?.accesorio_id ||
+    producto?.telefono_id ||
+    producto?.imei_id ||
+    producto?.serial_id ||
+    ''
+  ).trim()
 }
 
 function normalizarRutaImagen(ruta: any, baseUrl = ''): string {
@@ -121,14 +152,42 @@ async function cargarCliente(factura: any) {
   try {
     const res = await window.db.getAll('clientes')
     if (!res.success || !Array.isArray(res.data)) return {}
+    const codCliente = String(factura.cod_cliente || factura.cliente_id || '').trim()
+    const nombreCliente = String(factura.nombre_cliente || factura.cliente || factura.comprador || '').trim().toUpperCase()
+    const telefonoCliente = String(factura.telefono_cliente || factura.telefono || factura.whatsapp || '').trim()
+    const documentoCliente = String(factura.rnc_cliente || factura.cedula_cliente || factura.rnc || factura.cedula || '').trim()
     return res.data.find((cliente: any) =>
-      cliente.codigo === factura.cod_cliente ||
-      cliente.nombre === factura.nombre_cliente ||
-      cliente.telefono === factura.telefono_cliente
+      String(cliente.id || '') === codCliente ||
+      String(cliente.codigo || '') === codCliente ||
+      String(cliente.nombre || '').trim().toUpperCase() === nombreCliente ||
+      String(cliente.telefono || '').trim() === telefonoCliente ||
+      String(cliente.whatsapp || '').trim() === telefonoCliente ||
+      String(cliente.rnc || '').trim() === documentoCliente ||
+      String(cliente.cedula || '').trim() === documentoCliente
     ) || {}
   } catch (_) {
     return {}
   }
+}
+
+function normalizarClienteFactura(factura: any, clienteData: any = {}) {
+  return {
+    nombre: factura.nombre_cliente || factura.cliente || factura.comprador || clienteData?.nombre || 'CONSUMIDOR FINAL',
+    telefono: factura.telefono_cliente || factura.telefono || factura.whatsapp || clienteData?.telefono || clienteData?.whatsapp || '',
+    documento: factura.rnc_cliente || factura.cedula_cliente || factura.rnc || factura.cedula || clienteData?.rnc || clienteData?.cedula || '',
+    direccion: factura.direccion_cliente || factura.direccion || clienteData?.direccion || '',
+  }
+}
+
+function obtenerNotaFactura(factura: any): string {
+  return String(
+    factura.nota ||
+    factura.observacion ||
+    factura.observaciones ||
+    factura.nota_factura ||
+    factura.comentario ||
+    ''
+  ).trim()
 }
 
 async function cargarConfig() {
@@ -146,8 +205,11 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
 }) {
   const datosJSON = await cargarConfig()
   const link = datosJSON?.VITE_LINKURL || ''
-  const empresa = datosEmpresa?.empresa || datosEmpresa?.datosEmpresa?.empresa || await cargarEmpresa()
+  const empresa = datosEmpresa?.empresa || datosEmpresa?.datosEmpresa?.empresa || factura.empresa || await cargarEmpresa()
   const clienteData = cliente || await cargarCliente(factura)
+  const clienteFactura = normalizarClienteFactura(factura, clienteData)
+  const notaFactura = obtenerNotaFactura(factura) || 'Gracias por su compra!'
+  const notaFacturaHtml = notaFactura.replace(/\n/g, '<br>')
   const productos = parseJson(factura.productos, Array.isArray(factura.items) ? factura.items : [])
   const logoEmpresa = normalizarRutaImagen(empresa?.logoprinter || empresa?.logo, link)
 
@@ -161,14 +223,19 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
   const productosProcesados = Array.isArray(productos) ? productos.map((producto: any) => {
     const cantidad = toNumber(producto.cantidad ?? producto.quantity, 0)
     const precioUnidad = toNumber(producto.precio_final ?? producto.precio_venta ?? producto.precio_unitario ?? producto.precio, 0)
+    const precioNormal = toNumber(producto.precio_normal ?? producto.precio_lista ?? producto.precio_venta_normal, precioUnidad)
     const descuento = toNumber(producto.descuento, 0)
     const impuesto = toNumber(producto.impuesto_venta ?? producto.impuesto, 0)
     const totalProducto = toNumber(producto.total, (precioUnidad * cantidad) - descuento)
+    const tieneDescuentoProducto = precioNormal > 0 && precioUnidad >= 0 && precioUnidad < precioNormal
     return {
       ...producto,
+      codigoProducto: obtenerCodigoProducto(producto),
       cantidad,
       precioUnidad,
+      precioNormal,
       descuento,
+      tieneDescuentoProducto,
       impuestoTotal: impuesto * cantidad,
       totalProducto,
       imeis: obtenerImeisProducto(producto),
@@ -184,11 +251,15 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
 
   const productosHTML = productosProcesados.map((producto: any) => {
     const imeiHTML = producto.imeis.length ? `<div class="imei-line">IMEI: ${producto.imeis.join(', ')}</div>` : ''
+    const ofertaHTML = producto.tieneDescuentoProducto
+      ? `<div class="discount-line">Normal: <span class="line-through">${formatoMoneda(producto.precioNormal)}</span> &nbsp; Con descuento: <strong>${formatoMoneda(producto.precioUnidad)}</strong></div>`
+      : ''
     return `
       <tr class="invoice-line">
-        <td>${producto.codigo || ''}</td>
+        <td>${producto.codigoProducto || ''}</td>
         <td>
           <div>${producto.nombre || producto.descripcion || ''}</div>
+          ${ofertaHTML}
           ${imeiHTML}
         </td>
         <td class="text-center">${producto.cantidad}</td>
@@ -231,6 +302,8 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
     .invoice-line { min-height: 24px; }
     .empty-row td { height: 24px; }
     .imei-line { margin-top: 3px; font-size: 9px; font-weight: 700; color: #374151; }
+    .discount-line { margin-top: 3px; font-size: 9px; color: #374151; }
+    .line-through { text-decoration: line-through; color: #6b7280; }
     .text-center { text-align: center; }
     .text-right { text-align: right; }
     .bottom { display: flex; justify-content: space-between; gap: 32px; margin-top: 14px; }
@@ -239,7 +312,7 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
     .totals table { width: 100%; border-collapse: collapse; }
     .totals td { padding: 6px 8px; border-bottom: 1px solid #e5e7eb; }
     .totals tr:last-child td { border-bottom: none; background: #f3f4f6; font-size: 14px; font-weight: 700; }
-    .note { margin-top: 16px; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; }
+    .note { margin-top: 10px; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 11px; line-height: 1.35; background: #f9fafb; }
     @media print {
       * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
       .page { padding: 0; }
@@ -261,7 +334,7 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
 
       <div class="invoice-box">
         <table>
-          <tr><td><strong>Fecha</strong></td><td class="text-right">${factura.fecha_emision || ''}</td></tr>
+          <tr><td><strong>Fecha</strong></td><td class="text-right">${factura.fecha_emision || factura.fecha || ''}</td></tr>
           <tr><td><strong>${esCotizacion(factura) ? 'Cotizacion #' : 'Factura #'}</strong></td><td class="text-right">${factura.no_factura || ''}</td></tr>
           ${esCotizacion(factura) ? '' : `<tr><td><strong>NCF</strong></td><td class="text-right">${factura.ncf || factura.comprobante || ''}</td></tr>`}
         </table>
@@ -277,10 +350,10 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
 
     <div class="client-box">
       <div>
-        <p><strong>CLIENTE:</strong> ${factura.nombre_cliente || 'SIN REGISTRO'}</p>
-        <p><strong>TELEFONO:</strong> ${clienteData?.telefono || factura.telefono_cliente || 'N/A'}</p>
-        <p><strong>RNC/CEDULA:</strong> ${clienteData?.rnc || clienteData?.cedula || factura.rnc_cliente || 'N/A'}</p>
-        <p><strong>DIRECCION:</strong> ${clienteData?.direccion || factura.direccion_cliente || 'N/A'}</p>
+        <p><strong>CLIENTE:</strong> ${clienteFactura.nombre || 'SIN REGISTRO'}</p>
+        <p><strong>TELEFONO:</strong> ${clienteFactura.telefono || 'N/A'}</p>
+        <p><strong>RNC/CEDULA:</strong> ${clienteFactura.documento || 'N/A'}</p>
+        <p><strong>DIRECCION:</strong> ${clienteFactura.direccion || 'N/A'}</p>
         <p><strong>METODO DE PAGO:</strong> ${formatearMetodoPago(factura)}</p>
       </div>
       <div class="qr">
@@ -307,12 +380,14 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
       </tbody>
     </table>
 
+    <div class="note"><strong>OBSERVACION:</strong><br>${notaFacturaHtml}</div>
+
     <div class="bottom">
       <div class="signatures">
         ___________________________________________<br>
         <strong>ENTREGADO POR:</strong> ${factura.usuario || factura.cajero || 'Usuario'}<br><br>
         ___________________________________________<br>
-        <strong>RECIBIDO POR:</strong> ${factura.nombre_cliente || 'SIN REGISTRO'}
+        <strong>RECIBIDO POR:</strong> ${clienteFactura.nombre || 'SIN REGISTRO'}
       </div>
 
       <div class="totals">
@@ -325,7 +400,6 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
       </div>
     </div>
 
-    ${factura.nota ? `<div class="note"><strong>OBSERVACION:</strong><br>${String(factura.nota).replace(/\n/g, '<br>')}</div>` : ''}
   </div>
 </body>
 </html>`

@@ -1,24 +1,33 @@
 <template>
   <div class="p-4 sm:p-6 max-w-6xl mx-auto">
-    <div class="flex items-center justify-between mb-6">
-      <div>
-        <h1 class="text-2xl font-bold">Gestion de Garantias</h1>
-        <p class="text-sm text-surface-500">Registra y da seguimiento a las garantias de productos</p>
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h1 class="text-2xl font-bold">Gestion de Garantias</h1>
+          <p class="text-sm text-surface-500">Registra y da seguimiento a las garantias de productos</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <Button
+            v-if="selectedGarantias.length"
+            :label="`Eliminar (${selectedGarantias.length})`"
+            icon="pi pi-trash"
+            severity="danger"
+            outlined
+            @click="confirmarBorrarSeleccionadas"
+          />
+          <button @click="abrirRegistroRapido" class="flex items-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-semibold transition-all hover:opacity-90" style="background:#10b981">
+            <i class="pi pi-plus"></i>Registrar Garantia
+          </button>
+          <button @click="abrirReclamo" class="flex items-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-semibold transition-all hover:opacity-90" :style="{ background: 'var(--p-primary-500)' }">
+            <i class="pi pi-exclamation-triangle"></i>Reclamo
+          </button>
+        </div>
       </div>
-      <div class="flex gap-2">
-        <button @click="abrirRegistroRapido" class="flex items-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-semibold transition-all hover:opacity-90" style="background:#10b981">
-          <i class="pi pi-plus"></i>Registrar Garantia
-        </button>
-        <button @click="abrirReclamo" class="flex items-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-semibold transition-all hover:opacity-90" :style="{ background: 'var(--p-primary-500)' }">
-          <i class="pi pi-exclamation-triangle"></i>Reclamo
-        </button>
-      </div>
-    </div>
 
     <div v-if="loading" class="text-center py-16 text-surface-500"><i class="pi pi-spin pi-spinner text-2xl mb-2 block"></i>Cargando...</div>
 
     <template v-else>
-      <DataTable :value="garantias" stripedRows paginator :rows="15" dataKey="id" sortField="created_at" :sortOrder="-1">
+      <DataTable :value="garantias" stripedRows paginator :rows="15" dataKey="id" sortField="created_at" :sortOrder="-1" v-model:selection="selectedGarantias" responsiveLayout="scroll">
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column field="producto_nombre" header="Producto" sortable />
         <Column field="imei" header="IMEI/Serial" sortable style="width:9rem" />
         <Column field="cliente_nombre" header="Cliente" sortable />
@@ -32,7 +41,7 @@
         <Column field="estado" header="Estado" sortable style="width:7rem">
           <template #body="{ data }">
             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
-              :class="data.estado === 'ACTIVA' ? 'bg-green-100 text-green-700' : data.estado === 'VENCIDA' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700'"
+              :class="data.estado === 'ACTIVA' ? 'bg-green-100 text-green-700' : data.estado === 'EN_REPARACION' ? 'bg-amber-100 text-amber-700' : data.estado === 'VENCIDA' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700'"
             >{{ data.estado }}</span>
           </template>
         </Column>
@@ -42,22 +51,48 @@
             <span v-else class="text-xs text-surface-400">0</span>
           </template>
         </Column>
+        <Column header="Acciones" style="width:8rem">
+          <template #body="{ data }">
+            <div class="flex gap-1">
+              <Button icon="pi pi-whatsapp" severity="success" text rounded size="small" v-tooltip="'Avisar por WhatsApp'" @click.stop="avisarGarantiaWhatsApp(data)" />
+              <Button icon="pi pi-pencil" severity="info" text rounded size="small" v-tooltip="'Editar'" @click.stop="abrirEditar(data)" />
+              <Button icon="pi pi-trash" severity="danger" text rounded size="small" v-tooltip="'Eliminar'" @click.stop="confirmarBorrar(data)" />
+            </div>
+          </template>
+        </Column>
         <template #empty>
           <div class="text-center py-10 text-surface-400">No hay garantias registradas.</div>
         </template>
       </DataTable>
     </template>
 
-    <Dialog v-model:visible="dialogGarantia" header="Registrar Garantia" modal :style="{ width: 'min(36rem, 95vw)' }" :draggable="false">
+    <Dialog v-model:visible="dialogGarantia" :header="editandoId ? 'Editar Garantia' : 'Registrar Garantia'" modal :style="{ width: 'min(36rem, 95vw)' }" :draggable="false">
       <div class="flex flex-col gap-3 pt-2">
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="text-xs font-semibold mb-1 block">Tipo de producto</label>
-            <Select v-model="form.tipo_producto" :options="['IMEI', 'SERIAL', 'ACCESORIO', 'ELECTRODOMESTICO', 'PIEZA']" placeholder="Tipo" fluid @change="cargarProductos" />
+            <Select v-model="form.tipo_producto" :options="['IMEI', 'SERIAL', 'ACCESORIO', 'ELECTRODOMESTICO', 'PIEZA']" placeholder="Tipo" fluid @change="onTipoProductoChange" />
           </div>
           <div>
             <label class="text-xs font-semibold mb-1 block">Producto</label>
-            <Select v-model="form.producto_id" :options="productosDisponibles" optionLabel="nombre" optionValue="id" placeholder="Seleccionar" fluid @change="onProductoSelect" />
+            <Select
+              v-model="form.producto_id"
+              :options="productosDisponibles"
+              optionLabel="_garantiaLabel"
+              optionValue="id"
+              placeholder="Buscar producto..."
+              fluid
+              filter
+              :filterFields="['_garantiaLabel', 'nombre', 'comprador', 'no_factura']"
+              @change="onProductoSelect"
+            >
+              <template #option="{ option }">
+                <div class="flex flex-col min-w-0">
+                  <span class="font-medium truncate">{{ option._garantiaLabel || option.nombre }}</span>
+                  <span v-if="option._garantiaDetalle" class="text-xs text-surface-500 truncate">{{ option._garantiaDetalle }}</span>
+                </div>
+              </template>
+            </Select>
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
@@ -84,13 +119,26 @@
           <label class="text-xs font-semibold mb-1 block">Nota</label>
           <InputText v-model="form.nota" placeholder="Observaciones" fluid />
         </div>
+        <div>
+          <label class="text-xs font-semibold mb-1 block">Estado</label>
+          <Select v-model="form.estado" :options="estadosGarantia" optionLabel="label" optionValue="value" placeholder="Estado" fluid />
+        </div>
         <p v-if="errorGarantia" class="text-red-500 text-xs">{{ errorGarantia }}</p>
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogGarantia = false" />
-        <Button label="Registrar" icon="pi pi-check" :loading="guardando" @click="registrarGarantia" />
+        <Button v-if="editandoId" label="Enviar al taller" icon="pi pi-wrench" severity="warn" outlined @click="abrirOrdenTallerDesdeGarantia" />
+        <Button :label="editandoId ? 'Actualizar' : 'Registrar'" icon="pi pi-check" :loading="guardando" @click="registrarGarantia" />
       </template>
     </Dialog>
+
+    <OrdenTallerForm
+      :order-id="null"
+      :visible="dialogOrdenTallerGarantia"
+      :initial-data="ordenTallerGarantiaInitialData"
+      @close="dialogOrdenTallerGarantia = false"
+      @saved="onOrdenTallerGarantiaGuardada"
+    />
 
     <Dialog v-model:visible="dialogReclamo" header="Registrar Reclamo de Garantia" modal :style="{ width: 'min(36rem, 95vw)' }">
       <div class="flex flex-col gap-3 pt-2">
@@ -127,9 +175,18 @@
         <div v-for="r in reclamosLista" :key="r.id" class="rounded-lg border border-surface-200 dark:border-surface-700 p-3">
           <div class="flex justify-between items-start">
             <span class="text-xs text-surface-400">{{ new Date(r.created_at).toLocaleString('es-DO') }}</span>
-            <span class="text-xs font-semibold px-2 py-0.5 rounded-full"
-              :class="r.estado === 'RESUELTO' ? 'bg-green-100 text-green-700' : r.estado === 'EN_PROCESO' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'"
-            >{{ r.estado }}</span>
+            <div class="flex items-center gap-2">
+              <Button icon="pi pi-whatsapp" severity="success" text rounded size="small" @click="avisarReclamoWhatsApp(r)" v-tooltip="'Avisar por WhatsApp'" />
+              <Select
+                v-model="r.estado"
+                :options="estadosReclamo"
+                optionLabel="label"
+                optionValue="value"
+                size="small"
+                class="w-36"
+                @change="actualizarEstadoReclamo(r)"
+              />
+            </div>
           </div>
           <p class="text-sm mt-1">{{ r.descripcion }}</p>
           <p v-if="r.solucion" class="text-sm text-green-600 mt-1"><strong>Solucion:</strong> {{ r.solucion }}</p>
@@ -137,6 +194,42 @@
       </div>
       <template #footer>
         <Button label="Cerrar" severity="secondary" text @click="dialogVerReclamos = false" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="deleteDialogVisible" header="Eliminar Garantia" modal :style="{ width: '24rem' }">
+      <div class="space-y-4">
+        <div class="flex items-center gap-3">
+          <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
+          <span>Seguro que deseas eliminar {{ garantiasParaEliminar.length > 1 ? `estas ${garantiasParaEliminar.length} garantias` : 'esta garantia' }}?</span>
+        </div>
+        <div class="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm text-amber-800 dark:text-amber-200">
+          Esta accion requiere codigo OTP enviado al correo de la empresa.
+        </div>
+        <div v-if="deleteOtpEnviado" class="space-y-2">
+          <p class="text-xs text-surface-500">Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la licencia' }}.</p>
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly />
+        </div>
+        <p v-if="deleteOtpError" class="text-sm text-red-500">{{ deleteOtpError }}</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false; resetDeleteOtp()" />
+        <Button
+          v-if="!deleteOtpEnviado"
+          label="Enviar OTP"
+          icon="pi pi-send"
+          severity="warning"
+          :loading="deleteOtpLoading"
+          @click="solicitarOtpEliminarGarantia"
+        />
+        <Button
+          v-else
+          label="Eliminar"
+          icon="pi pi-trash"
+          severity="danger"
+          :loading="deleteOtpConfirmando"
+          @click="borrarGarantias"
+        />
       </template>
     </Dialog>
   </div>
@@ -151,10 +244,13 @@ import Dialog from 'primevue/dialog'
 import Select from 'primevue/select'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
+import InputOtp from 'primevue/inputotp'
 import Calendar from 'primevue/calendar'
 import Textarea from 'primevue/textarea'
 import { useToast } from 'primevue/usetoast'
 import { useAlmacenStore } from '@/stores/almacen.store'
+import OrdenTallerForm from '@/components/taller/OrdenTallerForm.vue'
+import Swal from 'sweetalert2'
 
 const toast = useToast()
 const almacenStore = useAlmacenStore()
@@ -166,6 +262,7 @@ const productosDisponibles = ref<any[]>([])
 const dialogGarantia = ref(false)
 const dialogReclamo = ref(false)
 const dialogVerReclamos = ref(false)
+const dialogOrdenTallerGarantia = ref(false)
 const guardando = ref(false)
 const errorGarantia = ref('')
 const errorReclamo = ref('')
@@ -173,16 +270,69 @@ const busquedaReclamo = ref('')
 const garantiasEncontradas = ref<any[]>([])
 const garantiaSeleccionada = ref<any>(null)
 const garantiaReclamos = ref<any>(null)
+const garantiaTallerOrigen = ref<any>(null)
 const reclamosLista = ref<any[]>([])
+const estadosGarantia = [
+  { label: 'Activa', value: 'ACTIVA' },
+  { label: 'En reparacion', value: 'EN_REPARACION' },
+  { label: 'Vencida', value: 'VENCIDA' },
+  { label: 'Cancelada', value: 'CANCELADA' },
+  { label: 'Resuelta', value: 'RESUELTA' },
+]
+const estadosReclamo = [
+  { label: 'Pendiente', value: 'PENDIENTE' },
+  { label: 'En proceso', value: 'EN_PROCESO' },
+  { label: 'Resuelto', value: 'RESUELTO' },
+]
+
+const editandoId = ref<number | null>(null)
+const selectedGarantias = ref<any[]>([])
+const deleteDialogVisible = ref(false)
+const deleteOtpEnviado = ref(false)
+const deleteOtpLoading = ref(false)
+const deleteOtpConfirmando = ref(false)
+const deleteOtp = ref('')
+const deleteOtpEmail = ref('')
+const deleteOtpError = ref('')
+const garantiaParaEliminar = ref<any>(null)
+const deleteMultipleDialogVisible = ref(false)
+
+const garantiasParaEliminar = computed(() => {
+  if (garantiaParaEliminar.value) return [garantiaParaEliminar.value]
+  return selectedGarantias.value || []
+})
+
+const totalSeleccionadoEliminar = computed(() =>
+  garantiasParaEliminar.value.length
+)
+
+function resetDeleteOtp() {
+  deleteOtpEnviado.value = false
+  deleteOtpEmail.value = ''
+  deleteOtp.value = ''
+  deleteOtpError.value = ''
+  deleteOtpLoading.value = false
+  deleteOtpConfirmando.value = false
+}
 
 const form = ref({
   tipo_producto: '', producto_id: null as number | null,
   cliente_id: null as number | null, cliente_nombre: '', cliente_telefono: '',
   dias_garantia: 30, fecha_venta: new Date(), no_factura: '', nota: '',
-  imei: '', serial: '',
+  imei: '', serial: '', estado: 'ACTIVA',
 })
 
 const reclamoForm = ref({ garantia_id: 0, descripcion: '' })
+
+const ordenTallerGarantiaInitialData = computed(() => ({
+  nombre: form.value.cliente_nombre || '',
+  telefono: form.value.cliente_telefono || '',
+  equipo: form.value.tipo_producto || '',
+  imei: form.value.imei || '',
+  serial: form.value.serial || '',
+  marca_modelo: productosDisponibles.value.find((x: any) => x.id === form.value.producto_id)?.nombre || '',
+  fallas: form.value.nota || 'GARANTIA',
+}))
 
 function diasRestantes(g: any): number {
   if (!g.fecha_vencimiento) return 0
@@ -204,15 +354,69 @@ async function cargar() {
         const resRec = await (window as any).electron.invoke('db:getWhere', 'reclamos_garantia', `garantia_id IN (${ids.join(',')})`)
         if (resRec.success) {
           const counts = new Map<number, number>()
-          for (const r of resRec.data || []) counts.set(r.garantia_id, (counts.get(r.garantia_id) || 0) + 1)
-          garantias.value = (resGar.data || []).map((g: any) => ({ ...g, reclamos_count: counts.get(g.id) || 0 }))
+          const ultimos = new Map<number, any>()
+          for (const r of resRec.data || []) {
+            counts.set(r.garantia_id, (counts.get(r.garantia_id) || 0) + 1)
+            const actual = ultimos.get(r.garantia_id)
+            const fechaActual = new Date(actual?.created_at || actual?.fecha_ingreso || 0).getTime()
+            const fechaNueva = new Date(r.created_at || r.fecha_ingreso || 0).getTime()
+            if (!actual || fechaNueva >= fechaActual) ultimos.set(r.garantia_id, r)
+          }
+          garantias.value = (resGar.data || []).map((g: any) => ({ ...g, reclamos_count: counts.get(g.id) || 0, ultimo_reclamo: ultimos.get(g.id) || null }))
         }
       } else {
         garantias.value = resGar.data || []
       }
     }
     if (resCli.success) clientes.value = resCli.data || []
-  } catch {} finally { loading.value = false }
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al cargar garantias', life: 3000 })
+  } finally { loading.value = false }
+}
+
+function productoVendido(item: any): boolean {
+  return String(item?.estado || '').toUpperCase() === 'VENDIDO'
+}
+
+function prepararProductoGarantia(item: any) {
+  const tipo = form.value.tipo_producto
+  if (tipo === 'IMEI') {
+    const detalle = [
+      item.comprador ? `Cliente: ${item.comprador}` : '',
+      item.no_factura ? `Factura: ${item.no_factura}` : '',
+      item.fecha_venta ? `Venta: ${item.fecha_venta}` : '',
+    ].filter(Boolean).join(' - ')
+    return {
+      ...item,
+      _garantiaLabel: `IMEI: ${item.nombre || ''}`,
+      _garantiaDetalle: detalle,
+    }
+  }
+
+  if (tipo === 'SERIAL') {
+    return {
+      ...item,
+      _garantiaLabel: `Serial: ${item.nombre || ''}`,
+      _garantiaDetalle: item.estado ? `Estado: ${item.estado}` : '',
+    }
+  }
+
+  return {
+    ...item,
+    _garantiaLabel: item.nombre || item.descripcion || `Producto #${item.id}`,
+    _garantiaDetalle: item.codigo_barra || item.codigo || item.referencia || '',
+  }
+}
+
+function getNombreProductoGarantia(item: any): string {
+  return item?.nombre || item?.descripcion || item?._garantiaLabel || ''
+}
+
+async function onTipoProductoChange() {
+  form.value.producto_id = null
+  form.value.imei = ''
+  form.value.serial = ''
+  await cargarProductos()
 }
 
 async function cargarProductos() {
@@ -221,12 +425,33 @@ async function cargarProductos() {
   const tabla = tablaMap[form.value.tipo_producto]
   if (!tabla) return
   const res = await (window as any).electron.invoke('db:getAll', tabla)
-  if (res.success) productosDisponibles.value = res.data || []
+  if (res.success) {
+    let productos = res.data || []
+    if (form.value.tipo_producto === 'IMEI') {
+      productos = productos.filter((p: any) =>
+        productoVendido(p) || Number(p.id) === Number(form.value.producto_id)
+      )
+    }
+    productosDisponibles.value = productos.map(prepararProductoGarantia)
+  }
 }
 
 function onProductoSelect() {
   const p = productosDisponibles.value.find((x: any) => x.id === form.value.producto_id)
-  if (p) { form.value.imei = p.nombre || ''; form.value.serial = p.nombre || '' }
+  if (p) {
+    if (form.value.tipo_producto === 'IMEI') form.value.imei = p.nombre || ''
+    else if (form.value.tipo_producto === 'SERIAL') form.value.serial = p.nombre || ''
+    if (form.value.tipo_producto === 'IMEI') {
+      form.value.no_factura = p.no_factura || form.value.no_factura
+      form.value.fecha_venta = p.fecha_venta ? new Date(p.fecha_venta) : form.value.fecha_venta
+      if (p.comprador && !form.value.cliente_nombre) {
+        const cliente = clientes.value.find((c: any) => String(c.nombre || '').trim().toUpperCase() === String(p.comprador || '').trim().toUpperCase())
+        form.value.cliente_id = cliente?.id || form.value.cliente_id
+        form.value.cliente_nombre = cliente?.nombre || p.comprador || form.value.cliente_nombre
+        form.value.cliente_telefono = cliente?.telefono || form.value.cliente_telefono
+      }
+    }
+  }
 }
 
 function onClienteSelect() {
@@ -235,9 +460,121 @@ function onClienteSelect() {
 }
 
 function abrirRegistroRapido() {
-  form.value = { tipo_producto: '', producto_id: null, cliente_id: null, cliente_nombre: '', cliente_telefono: '', dias_garantia: 30, fecha_venta: new Date(), no_factura: '', nota: '', imei: '', serial: '' }
+  editandoId.value = null
+  form.value = { tipo_producto: '', producto_id: null, cliente_id: null, cliente_nombre: '', cliente_telefono: '', dias_garantia: 30, fecha_venta: new Date(), no_factura: '', nota: '', imei: '', serial: '', estado: 'ACTIVA' }
   errorGarantia.value = ''
   dialogGarantia.value = true
+}
+
+async function abrirEditar(g: any) {
+  editandoId.value = g.id
+  form.value = {
+    tipo_producto: g.tipo_producto || '',
+    producto_id: g.producto_id,
+    cliente_id: clientes.value.find((c: any) => c.nombre === g.cliente_nombre)?.id || null,
+    cliente_nombre: g.cliente_nombre || '',
+    cliente_telefono: g.cliente_telefono || '',
+    dias_garantia: g.dias_garantia || 30,
+    fecha_venta: g.fecha_venta ? new Date(g.fecha_venta) : new Date(),
+    no_factura: g.no_factura || '',
+    nota: g.nota || '',
+    imei: g.imei || '',
+    serial: g.serial || '',
+    estado: g.estado || 'ACTIVA',
+  }
+  if (g.tipo_producto) await cargarProductos()
+  errorGarantia.value = ''
+  dialogGarantia.value = true
+}
+
+function confirmarBorrar(g: any) {
+  garantiaParaEliminar.value = g
+  selectedGarantias.value = []
+  deleteOtpEnviado.value = false
+  deleteOtp.value = ''
+  deleteOtpEmail.value = ''
+  deleteOtpError.value = ''
+  deleteDialogVisible.value = true
+}
+
+async function confirmarBorrarSeleccionadas() {
+  if (!selectedGarantias.value.length) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona al menos una garantia', life: 2500 })
+    return
+  }
+  garantiaParaEliminar.value = null
+  deleteOtpEnviado.value = false
+  deleteOtp.value = ''
+  deleteOtpEmail.value = ''
+  deleteOtpError.value = ''
+  deleteDialogVisible.value = true
+}
+
+async function solicitarOtpEliminarGarantia() {
+  const garantias = garantiasParaEliminar.value
+  if (!garantias.length) return
+  deleteOtpError.value = ''
+  deleteOtp.value = ''
+  deleteOtpLoading.value = true
+  try {
+    const res = await (window as any).electron.invoke('facturas:solicitarOtpEliminar', {
+      id: garantias[0]?.id,
+      facturaIds: garantias.map((c: any) => c.id),
+      no_factura: garantias.length === 1 ? (garantias[0]?.no_factura || '') : '',
+      nombre_cliente: garantias.length === 1 ? (garantias[0]?.cliente_nombre || '') : '',
+      cantidad: garantias.length,
+      total: garantias.length,
+    })
+    if (res.success) {
+      deleteOtpEmail.value = res.data?.email || ''
+      deleteOtpEnviado.value = true
+      toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
+    } else {
+      deleteOtpError.value = res.error || 'No se pudo enviar el codigo'
+    }
+  } catch (e: any) {
+    deleteOtpError.value = e.message || 'Error solicitando codigo'
+  } finally {
+    deleteOtpLoading.value = false
+  }
+}
+
+async function borrarGarantias() {
+  try {
+    const garantias = garantiasParaEliminar.value
+    if (!garantias.length) return
+    deleteOtpError.value = ''
+    const codigo = String(deleteOtp.value || '').replace(/\D/g, '')
+    if (!/^\d{4}$/.test(codigo)) {
+      deleteOtpError.value = 'Introduce el codigo de 4 digitos'
+      return
+    }
+    deleteOtpConfirmando.value = true
+    const otpRes = await (window as any).electron.invoke('facturas:confirmarOtpEliminar', {
+      facturaId: garantias[0]?.id,
+      facturaIds: garantias.map((c: any) => c.id),
+      codigo,
+    })
+    if (!otpRes.success) {
+      deleteOtpError.value = otpRes.error || 'Codigo no valido'
+      return
+    }
+
+    let eliminadas = 0
+    for (const g of garantias) {
+      await (window as any).electron.invoke('db:delete', 'garantias', g.id)
+      eliminadas++
+    }
+    toast.add({ severity: 'success', summary: 'Exito', detail: `${eliminadas} garantia(s) eliminada(s)`, life: 3000 })
+    deleteDialogVisible.value = false
+    selectedGarantias.value = []
+    garantiaParaEliminar.value = null
+    await cargar()
+  } catch (error) {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'Error al eliminar', life: 3000 })
+  } finally {
+    deleteOtpConfirmando.value = false
+  }
 }
 
 async function registrarGarantia() {
@@ -253,16 +590,57 @@ async function registrarGarantia() {
       imei: form.value.imei, serial: form.value.serial,
       cliente_nombre: form.value.cliente_nombre, cliente_telefono: form.value.cliente_telefono,
       fecha_venta: fechaVenta, fecha_vencimiento: fechaVenc.toISOString().split('T')[0],
-      dias_garantia: form.value.dias_garantia, estado: 'ACTIVA', nota: form.value.nota,
+      dias_garantia: form.value.dias_garantia, estado: form.value.estado || 'ACTIVA', nota: form.value.nota,
       usuario: '', almacen_id: almacenStore.activeId || 0,
     }
-    const res = await (window as any).electron.invoke('db:insert', 'garantias', data)
-    if (!res.success) throw new Error(res.error)
+    let res
+    if (editandoId.value) {
+      res = await (window as any).electron.invoke('db:update', 'garantias', editandoId.value, data)
+      if (!res.success) throw new Error(res.error)
+    } else {
+      res = await (window as any).electron.invoke('db:insert', 'garantias', data)
+      if (!res.success) throw new Error(res.error)
+    }
+    const fueEdicion = !!editandoId.value
     dialogGarantia.value = false
-    toast.add({ severity: 'success', summary: 'Garantia registrada', detail: data.producto_nombre, life: 3000 })
+    editandoId.value = null
+    toast.add({ severity: 'success', summary: fueEdicion ? 'Garantia actualizada' : 'Garantia registrada', detail: data.producto_nombre, life: 3000 })
     await cargar()
   } catch (e: any) { errorGarantia.value = e.message || 'Error al registrar' }
   finally { guardando.value = false }
+}
+
+function abrirOrdenTallerDesdeGarantia() {
+  if (!editandoId.value) {
+    toast.add({ severity: 'warn', summary: 'Guarda primero', detail: 'Debes guardar la garantia antes de enviarla al taller', life: 3000 })
+    return
+  }
+  garantiaTallerOrigen.value = { id: editandoId.value, ...form.value }
+  dialogOrdenTallerGarantia.value = true
+}
+
+async function onOrdenTallerGarantiaGuardada(payload?: any) {
+  dialogOrdenTallerGarantia.value = false
+  const garantiaId = garantiaTallerOrigen.value?.id || editandoId.value
+  const orden = payload?.orden || null
+  if (!garantiaId) return
+
+  const noOrden = orden?.no_orden || orden?.id || ''
+  const notaBase = String(form.value.nota || '').trim()
+  const notaTaller = noOrden ? `Enviada al taller: ${noOrden}` : 'Enviada al taller'
+  const nota = [notaBase, notaTaller].filter(Boolean).join(' | ')
+  const res = await (window as any).electron.invoke('db:update', 'garantias', garantiaId, {
+    estado: 'EN_REPARACION',
+    nota,
+  })
+  if (res.success) {
+    form.value.estado = 'EN_REPARACION'
+    form.value.nota = nota
+    toast.add({ severity: 'success', summary: 'Enviada al taller', detail: noOrden ? `Orden ${noOrden}` : 'Orden creada', life: 3000 })
+    await cargar()
+  } else {
+    toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo actualizar la garantia', life: 3000 })
+  }
 }
 
 function abrirReclamo() {
@@ -313,6 +691,64 @@ async function verReclamos(g: any) {
   const res = await (window as any).electron.invoke('db:getWhere', 'reclamos_garantia', 'garantia_id = ?', [g.id])
   reclamosLista.value = res.success ? (res.data || []) : []
   dialogVerReclamos.value = true
+}
+
+async function actualizarEstadoReclamo(r: any) {
+  if (!r?.id) return
+  const estado = r.estado || 'PENDIENTE'
+  const data: any = { estado }
+  if (estado === 'RESUELTO') data.fecha_cierre = new Date().toISOString().split('T')[0]
+  const res = await (window as any).electron.invoke('db:update', 'reclamos_garantia', r.id, data)
+  if (!res.success) {
+    toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo cambiar el estado', life: 3000 })
+    return
+  }
+  toast.add({ severity: 'success', summary: 'Estado actualizado', detail: estado, life: 2000 })
+  await cargar()
+  if (garantiaReclamos.value?.id) {
+    garantiaReclamos.value = garantias.value.find((g: any) => g.id === garantiaReclamos.value.id) || garantiaReclamos.value
+  }
+}
+
+function normalizarTelefonoWhatsApp(telefono: string): string {
+  const digitos = String(telefono || '').replace(/\D/g, '')
+  if (digitos.length === 10) return `1${digitos}`
+  return digitos
+}
+
+function mensajeEstadoReclamo(r: any, garantiaBase: any = garantiaReclamos.value): string {
+  const garantia = garantiaBase || {}
+  const cliente = garantia.cliente_nombre || 'cliente'
+  const producto = garantia.producto_nombre || 'producto'
+  const identificador = garantia.imei || garantia.serial || ''
+  const estado = String(r?.estado || garantia.estado || 'PENDIENTE').toUpperCase()
+  const estadoTexto = estado === 'RESUELTO'
+    ? 'ya esta resuelto'
+    : `tiene estado: ${estado}`
+  const partes = [
+    `Hola ${cliente}, le informamos que su ${r ? 'reclamo de garantia' : 'garantia'} ${estadoTexto}.`,
+    `Producto: ${producto}${identificador ? ` (${identificador})` : ''}.`,
+  ]
+  if (r?.solucion) partes.push(`Solucion: ${r.solucion}.`)
+  partes.push('Gracias por preferirnos.')
+  return partes.join('\n')
+}
+
+function abrirWhatsAppGarantia(garantia: any, mensaje: string) {
+  const telefono = normalizarTelefonoWhatsApp(garantia?.cliente_telefono || '')
+  if (!telefono) {
+    toast.add({ severity: 'warn', summary: 'WhatsApp', detail: 'El cliente no tiene telefono registrado', life: 3000 })
+    return
+  }
+  window.open(`https://wa.me/${telefono}?text=${encodeURIComponent(mensaje)}`, '_blank')
+}
+
+function avisarReclamoWhatsApp(r: any) {
+  abrirWhatsAppGarantia(garantiaReclamos.value, mensajeEstadoReclamo(r))
+}
+
+function avisarGarantiaWhatsApp(g: any) {
+  abrirWhatsAppGarantia(g, mensajeEstadoReclamo(g?.ultimo_reclamo || null, g))
 }
 
 onMounted(cargar)
