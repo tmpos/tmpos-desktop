@@ -1,18 +1,18 @@
 # TMPOS Desktop
 
-![Version](https://img.shields.io/badge/version-2.12.0-blue)
-![Downloads](https://img.shields.io/github/downloads/tmpos/tmpos-desktop/v2.12.0/total)
+![Version](https://img.shields.io/badge/version-2.12.1-blue)
+![Downloads](https://img.shields.io/github/downloads/tmpos/tmpos-desktop/v2.12.1/total)
 
 Sistema para tiendas de celulares offline con tmcloud
 
-## Novedades v2.12.0
+## Novedades v2.12.1
 
-- POS: seleccion de banco para TRANSFERENCIA y TARJETA
-- Pago Mixto: soporte para multiples transferencias a diferentes bancos
-- Gestion de Garantias: acciones de editar/eliminar con OTP
-- PDF: muestra nombre del banco y detalle de transferencias
-- Varias correcciones y mejoras
+- POS: costo y ganancia en facturas, mejor manejo de ventas gratis y devoluciones de inventario.
+- IMEI: venta express o al carrito, precio por equipo, ganancia y acciones mejoradas.
+- Inventario y perdidas: soporte para equipos, accesorios y electrodomesticos danados.
+- TM Cloud: importacion de tablas externas, sincronizacion de imagenes y mejoras de empresa.
+- Reportes, taller y facturas: mejoras de datos, busqueda de clientes y documentos PDF.
 
 ## Descarga
 
-[![Descargar v2.12.0](https://img.shields.io/badge/Descargar-v2.12.0-brightgreen?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-desktop/releases/download/v2.12.0/TMPOS.Setup.2.12.0.exe)
+[![Descargar v2.12.1](https://img.shields.io/badge/Descargar-v2.12.1-brightgreen?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-desktop/releases/download/v2.12.1/TMPOS%20Setup%202.12.1.exe)
