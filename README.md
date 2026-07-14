@@ -15,4 +15,4 @@ Sistema para tiendas de celulares offline con tmcloud
 
 ## Descarga
 
-[![Descargar v2.12.1](https://img.shields.io/badge/Descargar-v2.12.1-brightgreen?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-desktop/releases/download/v2.12.1/TMPOS%20Setup%202.12.1.exe)
+[![Descargar v2.12.1](https://img.shields.io/badge/Descargar-v2.12.1-brightgreen?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-desktop/releases/download/v2.12.1/TMPOS.Setup.2.12.1.exe)
