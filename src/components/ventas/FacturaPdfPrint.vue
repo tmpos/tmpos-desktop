@@ -88,6 +88,24 @@ function formatoMoneda(value: any): string {
   })}`
 }
 
+function formatoFechaFactura(value: any, hora = ''): string {
+  const horaTexto = String(hora || '').trim().match(/^(\d{1,2}:\d{2})/)
+  const fechaTexto = String(value || '').trim()
+  const horaEnFecha = fechaTexto.match(/(?:T|\s)(\d{1,2}:\d{2})/)
+  const horaFormateada = horaTexto ? horaTexto[1].padStart(5, '0') : (horaEnFecha ? horaEnFecha[1].padStart(5, '0') : '')
+  const fechaSql = fechaTexto.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  const fechaLatina = fechaTexto.match(/^(\d{2})\/(\d{2})\/(\d{4})/)
+
+  if (fechaSql) return `${fechaSql[3]}/${fechaSql[2]}/${fechaSql[1]}${horaFormateada ? ` ${horaFormateada}` : ''}`
+  if (fechaLatina) return `${fechaLatina[1]}/${fechaLatina[2]}/${fechaLatina[3]}${horaFormateada ? ` ${horaFormateada}` : ''}`
+
+  const fecha = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(fecha.getTime())) return horaFormateada
+  const fechaFormateada = `${String(fecha.getDate()).padStart(2, '0')}/${String(fecha.getMonth() + 1).padStart(2, '0')}/${fecha.getFullYear()}`
+  const horaDesdeFecha = `${String(fecha.getHours()).padStart(2, '0')}:${String(fecha.getMinutes()).padStart(2, '0')}`
+  return `${fechaFormateada} ${horaFormateada || horaDesdeFecha}`
+}
+
 function obtenerImeisProducto(producto: any): string[] {
   const valores = [producto?.imei, producto?.lista_imei, producto?.imeis, producto?.serial, producto?.seriales]
   return valores
@@ -248,6 +266,7 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
   const totalFactura = toNumber(factura.total)
   const subtotal = toNumber(factura.subtotal, totalFactura + toNumber(factura.descuento) - totalImpuesto)
   const colCount = 5 + (mostrarImpuesto ? 1 : 0) + (mostrarDescuento ? 1 : 0)
+  const fechaFactura = formatoFechaFactura(factura.fecha_emision || factura.fecha || '', factura.hora || '')
 
   const productosHTML = productosProcesados.map((producto: any) => {
     const imeiHTML = producto.imeis.length ? `<div class="imei-line">IMEI: ${producto.imeis.join(', ')}</div>` : ''
@@ -334,7 +353,7 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
 
       <div class="invoice-box">
         <table>
-          <tr><td><strong>Fecha</strong></td><td class="text-right">${factura.fecha_emision || factura.fecha || ''}</td></tr>
+          <tr><td><strong>Fecha</strong></td><td class="text-right">${fechaFactura}</td></tr>
           <tr><td><strong>${esCotizacion(factura) ? 'Cotizacion #' : 'Factura #'}</strong></td><td class="text-right">${factura.no_factura || ''}</td></tr>
           ${esCotizacion(factura) ? '' : `<tr><td><strong>NCF</strong></td><td class="text-right">${factura.ncf || factura.comprobante || ''}</td></tr>`}
         </table>

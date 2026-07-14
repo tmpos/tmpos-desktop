@@ -143,6 +143,38 @@
       </div>
     </div>
 
+    <div class="rounded-2xl border border-cyan-200 dark:border-cyan-800 bg-cyan-50/40 dark:bg-cyan-950/10 p-5 space-y-4">
+      <div class="flex items-center gap-2">
+        <i class="pi pi-cloud-download text-cyan-600 text-sm"></i>
+        <div><span class="text-xs font-semibold text-cyan-800 dark:text-cyan-200 uppercase tracking-wider">Importar desde otra API</span><p class="text-xs text-surface-500 mt-1">Descarga tablas, campos y registros para prepararlos para TM Cloud.</p></div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><label class="text-xs font-medium text-surface-500 mb-1.5 block">URL base de la API externa</label><InputText v-model="externalApi.url" placeholder="https://servidor.com/api2" class="w-full" /></div>
+        <div><label class="text-xs font-medium text-surface-500 mb-1.5 block">Authorization</label><Password v-model="externalApi.token" :feedback="false" toggleMask placeholder="Token de la API externa" fluid class="w-full" /></div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2"><Button label="Elegir tablas para importar" icon="pi pi-list-check" severity="info" :loading="externalImportLoading" @click="cargarTablasExternas" /><span v-if="externalImportResult" class="text-xs text-surface-600 dark:text-surface-300">{{ externalImportResult }}</span></div>
+    </div>
+
+    <Dialog v-model:visible="externalTableDialog" header="Tablas a importar" modal :style="{ width: 'min(48rem, 96vw)' }">
+      <div class="space-y-3">
+        <p class="text-sm text-surface-500">Marca solo las tablas que deseas bajar. Puedes cambiar el destino de cada una para agrupar datos, por ejemplo <strong>productos → productos_categoria_a</strong>.</p>
+        <div class="flex items-center gap-2"><IconField class="flex-1"><InputIcon class="pi pi-search" /><InputText v-model="externalTableSearch" placeholder="Buscar tabla..." class="w-full" /></IconField><span class="text-xs text-surface-500 whitespace-nowrap">{{ externalTablesFiltradas.length }} tablas</span></div>
+        <div class="max-h-[50vh] overflow-y-auto space-y-2 pr-1">
+          <div v-for="tabla in externalTablesFiltradas" :key="tabla.origen" class="grid grid-cols-1 sm:grid-cols-[auto_1fr_1fr] items-center gap-2 rounded-xl border p-3" :class="tabla.seleccionada ? 'border-cyan-200 bg-cyan-50/50 dark:border-cyan-800 dark:bg-cyan-950/20' : 'border-surface-200 dark:border-surface-700 opacity-65'">
+            <input v-model="tabla.seleccionada" type="checkbox" class="h-4 w-4 accent-cyan-600" />
+            <div><p class="text-xs text-surface-400">Tabla origen</p><p class="font-semibold font-mono text-sm">{{ tabla.origen }}</p></div>
+            <div><label class="text-xs text-surface-400">Guardar en tabla local</label><InputText v-model="tabla.destino" :disabled="!tabla.seleccionada" class="w-full mt-1" /></div>
+          </div>
+        </div>
+        <p v-if="externalTablesFiltradas.length === 0" class="py-4 text-center text-sm text-surface-400">No se encontraron tablas.</p>
+        <p v-if="!externalTables.some(t => t.seleccionada)" class="text-xs text-amber-600">Selecciona al menos una tabla para continuar.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="externalTableDialog = false" />
+        <Button label="Importar seleccionadas" icon="pi pi-download" :loading="externalImportLoading" :disabled="!externalTables.some(t => t.seleccionada)" @click="importarApiExterna" />
+      </template>
+    </Dialog>
+
     <!-- Sync Status -->
     <div v-if="syncStatus" class="rounded-2xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800/50 p-4">
       <div v-if="syncStatus.running" class="flex items-center gap-3">
@@ -181,14 +213,17 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, onMounted } from 'vue'
+import { reactive, ref, computed, onMounted } from 'vue'
 import * as tmc from '@/services/tmCloudClient'
 import * as tmSync from '@/services/tmCloudSyncService'
 import Password from 'primevue/password'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
+import IconField from 'primevue/iconfield'
+import InputIcon from 'primevue/inputicon'
 import Button from 'primevue/button'
 import ToggleSwitch from 'primevue/toggleswitch'
+import Dialog from 'primevue/dialog'
 
 const form = reactive({
   url: '',
@@ -216,6 +251,16 @@ const downloadAllLoading = ref(false)
 const estado = ref<{ connected: boolean; error?: string; stats?: any } | null>(null)
 const syncStatus = ref<any>(null)
 const realtimeConnected = ref(false)
+const externalApi = reactive({ url: '', token: '' })
+const externalImportLoading = ref(false)
+const externalImportResult = ref('')
+const externalTableDialog = ref(false)
+const externalTables = ref<{ origen: string; destino: string; seleccionada: boolean }[]>([])
+const externalTableSearch = ref('')
+const externalTablesFiltradas = computed(() => {
+  const texto = externalTableSearch.value.trim().toLowerCase()
+  return texto ? externalTables.value.filter(tabla => `${tabla.origen} ${tabla.destino}`.toLowerCase().includes(texto)) : externalTables.value
+})
 
 tmSync.setStatusCallback((s) => {
   syncStatus.value = s
@@ -245,6 +290,8 @@ onMounted(async () => {
       form.mode = getVal('tm_sync_mode') || 'ambos'
       form.autoSync = getVal('tm_auto_sync') === '1'
       form.interval = parseInt(getVal('tm_sync_interval') || '30', 10)
+      externalApi.url = getVal('tm_external_api_url')
+      externalApi.token = getVal('tm_external_api_token')
       if (form.mode === 'offline') {
         tmSync.stopRealtime()
         realtimeConnected.value = false
@@ -369,6 +416,111 @@ async function syncNow() {
   }
 }
 
+function nombreSeguro(nombre: any): string {
+  const valor = String(nombre || '').trim()
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(valor)) throw new Error(`Nombre no valido: ${valor}`)
+  return valor
+}
+
+async function guardarConfigExterna(clave: string, valor: string) {
+  const res = await (window as any).db.getAll('configuracion')
+  const actual = res.success ? (res.data || []).find((r: any) => r.clave === clave) : null
+  if (actual) await (window as any).db.update('configuracion', actual.id, { valor })
+  else await (window as any).db.insert('configuracion', { clave, valor, tipo: 'string', categoria: 'tmcloud' })
+}
+
+async function ejecutarSqlLocal(sql: string) {
+  const res = await (window as any).electron.invoke('consultaservidor', 'rawQuery', sql)
+  if (res?.success === false) throw new Error(res.error || 'No se pudo actualizar la base local')
+}
+
+async function cargarTablasExternas() {
+  const base = externalApi.url.trim().replace(/\/+$/, '')
+  const token = externalApi.token.trim()
+  if (!base || !token) { externalImportResult.value = 'Indica la URL y el token de la API externa.'; return }
+  externalImportLoading.value = true
+  externalImportResult.value = ''
+  try {
+    const response = await fetch(`${base}/tablas/`, { headers: { Authorization: token, Accept: 'application/json' } })
+    if (!response.ok) throw new Error(`No se pudieron consultar las tablas (${response.status})`)
+    const data = await response.json()
+    const tablas = (Array.isArray(data) ? data : data?.data || []).map(nombreSeguro)
+    externalTables.value = tablas.map(origen => ({ origen, destino: origen, seleccionada: true }))
+    externalTableSearch.value = ''
+    externalTableDialog.value = true
+  } catch (e: any) {
+    externalImportResult.value = e.message || 'No se pudieron consultar las tablas.'
+  } finally {
+    externalImportLoading.value = false
+  }
+}
+
+async function importarApiExterna() {
+  const base = externalApi.url.trim().replace(/\/+$/, '')
+  const token = externalApi.token.trim()
+  if (!base || !token) { externalImportResult.value = 'Indica la URL y el token de la API externa.'; return }
+  externalImportLoading.value = true
+  externalImportResult.value = ''
+  try {
+    const headers = { Authorization: token, Accept: 'application/json' }
+    const tablas = externalTables.value.filter(tabla => tabla.seleccionada).map(tabla => ({ origen: nombreSeguro(tabla.origen), destino: nombreSeguro(tabla.destino) }))
+    if (!tablas.length) throw new Error('Selecciona al menos una tabla para importar.')
+    let creadas = 0, camposAgregados = 0, registros = 0
+    const schemasCloud: any[] = []
+
+    for (const tablaConfig of tablas) {
+      const { origen, destino } = tablaConfig
+      const camposRes = await fetch(`${base}/campos/${encodeURIComponent(origen)}`, { headers })
+      if (!camposRes.ok) throw new Error(`No se pudieron consultar los campos de ${origen}`)
+      const camposData = await camposRes.json()
+      const campos = (Array.isArray(camposData) ? camposData : camposData?.data || []).map(nombreSeguro)
+      const datosRes = await fetch(`${base}/datosarray/${encodeURIComponent(origen)}`, { headers })
+      if (!datosRes.ok) throw new Error(`No se pudieron descargar los datos de ${origen}`)
+      const datosData = await datosRes.json()
+      const datos = Array.isArray(datosData) ? datosData : datosData?.data || []
+      const columnas = Array.from(new Set(['id', ...campos, 'uid', 'created_at', 'updated_at']))
+      const tablaExiste = await (window as any).electron.invoke('consultaservidor', 'tableExists', destino)
+      const existe = Array.isArray(tablaExiste) ? tablaExiste[0] === 'ok' : Boolean(tablaExiste?.success)
+      if (!existe) {
+        const definiciones = columnas.map(c => c === 'id' ? '"id" INTEGER PRIMARY KEY' : `"${c}" TEXT DEFAULT ''`)
+        await ejecutarSqlLocal(`CREATE TABLE IF NOT EXISTS "${destino}" (${definiciones.join(', ')})`)
+        creadas++
+      } else {
+        const local = await (window as any).electron.invoke('consultaservidor', 'getTableColumns', destino, 'names')
+        const existentes = new Set(Array.isArray(local) ? local : [])
+        for (const campo of columnas) {
+          if (existentes.has(campo) || campo === 'id') continue
+          await ejecutarSqlLocal(`ALTER TABLE "${destino}" ADD COLUMN "${campo}" TEXT DEFAULT ''`)
+          camposAgregados++
+        }
+      }
+      const existentes = await (window as any).db.getAll(destino)
+      const porId = new Map((existentes.success ? existentes.data || [] : []).map((fila: any) => [String(fila.id), fila]))
+      for (const fila of datos) {
+        const limpia: Record<string, any> = {}
+        for (const campo of campos) if (fila[campo] !== undefined && fila[campo] !== null) limpia[campo] = fila[campo]
+        if (fila.id !== undefined && fila.id !== null) limpia.id = Number(fila.id)
+        const actual = porId.get(String(fila.id))
+        const resultado = actual ? await (window as any).db.update(destino, actual.id, limpia) : await (window as any).db.insert(destino, limpia)
+        if (!resultado.success) throw new Error(resultado.error || `No se pudo guardar un registro de ${origen}`)
+        registros++
+      }
+      schemasCloud.push({ name: destino, columns: columnas.filter(c => c !== 'id').map(name => ({ name, type: 'TEXT', nullable: true })) })
+    }
+    if (form.url && form.serviceKey && schemasCloud.length) {
+      await fetch(`${form.url.replace(/\/+$/, '')}/schema/tables/batch`, { method: 'POST', headers: { Authorization: `Bearer ${form.serviceKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tables: schemasCloud }) })
+    }
+    await guardarConfigExterna('tm_external_api_url', base)
+    await guardarConfigExterna('tm_external_api_token', token)
+    externalImportResult.value = `${tablas.length} tablas: ${creadas} creadas, ${camposAgregados} campos agregados y ${registros} registros importados.`
+    externalTableDialog.value = false
+  } catch (e: any) {
+    externalImportResult.value = e.message || 'No se pudo completar la importacion.'
+  } finally {
+    externalImportLoading.value = false
+  }
+}
+
 function abrirAdmin() {
   const base = form.url.replace(/\/+$/, '')
   const adminUrl = base.replace(/\/api\/prj_[A-Za-z0-9]+$/i, '')
@@ -403,6 +555,7 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'uid', type: 'TEXT' },
     { name: 'nombre', type: 'TEXT' },
     { name: 'legal', type: 'TEXT' },
+    { name: 'encargado', type: 'TEXT' },
     { name: 'telefono', type: 'TEXT' },
     { name: 'email', type: 'TEXT' },
     { name: 'direccion', type: 'TEXT' },
@@ -411,6 +564,7 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'impuesto_incluido', type: 'INTEGER' },
     { name: 'moneda', type: 'TEXT' },
     { name: 'tipo_documento_defecto', type: 'TEXT' },
+    { name: 'almacen_id', type: 'INTEGER' },
     { name: 'created_at', type: 'DATETIME' },
     { name: 'updated_at', type: 'DATETIME' },
   ],

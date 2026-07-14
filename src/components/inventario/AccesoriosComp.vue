@@ -17,6 +17,7 @@ import JsBarcode from 'jsbarcode'
 
 import { envioElectron } from '@/funciones/funciones.js'
 import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
+import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
@@ -600,6 +601,14 @@ async function subirImagen() {
   try {
     const uid = await uploadImage(file, 'accesorios')
     form.value.imagen = uid
+    if (isEditing.value && selectedAccesorio.value?.id) {
+      const actualizado = await window.db.update('accesorios', selectedAccesorio.value.id, { imagen: uid })
+      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
+      selectedAccesorio.value.imagen = uid
+      const local = accesorios.value.find((accesorio: any) => accesorio.id === selectedAccesorio.value.id)
+      if (local) local.imagen = uid
+      if (isOnline()) await pushLocalRowToCloud('accesorios', selectedAccesorio.value.id)
+    }
     toast.add({ severity: 'success', summary: 'Imagen subida', life: 2000 })
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo subir la imagen', life: 4000 })
@@ -615,6 +624,10 @@ async function eliminarImagen() {
     await deleteImage(form.value.imagen)
   } catch {}
   form.value.imagen = ''
+  if (isEditing.value && selectedAccesorio.value?.id) {
+    await window.db.update('accesorios', selectedAccesorio.value.id, { imagen: '' })
+    if (isOnline()) await pushLocalRowToCloud('accesorios', selectedAccesorio.value.id)
+  }
 }
 
 function imagenUrl(uid: string | null | undefined): string | null {
@@ -796,7 +809,7 @@ onMounted(async () => {
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
         <div v-else-if="accesoriosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay accesorios registrados.</div>
-        <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
           <div
             v-for="acc in accesoriosFiltrados"
             :key="acc.id"

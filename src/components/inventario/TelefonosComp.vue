@@ -343,6 +343,14 @@ async function subirImagen() {
   try {
     const uid = await uploadImage(file, 'telefonos')
     form.value.imagen = uid
+    if (isEditing.value && selectedTelefono.value?.id) {
+      const actualizado = await window.db.update('telefonos', selectedTelefono.value.id, { imagen: uid })
+      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
+      selectedTelefono.value.imagen = uid
+      const local = telefonos.value.find((telefono: any) => telefono.id === selectedTelefono.value.id)
+      if (local) local.imagen = uid
+      if (isOnline()) await pushLocalRowToCloud('telefonos', selectedTelefono.value.id)
+    }
     toast.add({ severity: 'success', summary: 'Imagen subida', life: 2000 })
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo subir la imagen', life: 4000 })
@@ -358,6 +366,10 @@ async function eliminarImagen() {
     await deleteImage(form.value.imagen)
   } catch {}
   form.value.imagen = ''
+  if (isEditing.value && selectedTelefono.value?.id) {
+    await window.db.update('telefonos', selectedTelefono.value.id, { imagen: '' })
+    if (isOnline()) await pushLocalRowToCloud('telefonos', selectedTelefono.value.id)
+  }
 }
 
 function imagenUrl(uid: string | null | undefined): string | null {
@@ -468,7 +480,7 @@ onMounted(async () => {
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
         <div v-else-if="telefonosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay telefonos registrados.</div>
-        <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
           <div
             v-for="tel in telefonosFiltrados"
             :key="tel.id"
@@ -547,6 +559,18 @@ onMounted(async () => {
       :style="{ width: '28rem' }"
     >
       <div class="flex flex-col gap-3">
+        <div class="flex items-center gap-3 rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3">
+          <div v-if="imagenUrl(selectedTelefono?.imagen)" class="w-16 h-16 rounded-lg overflow-hidden shrink-0 border border-surface-200 dark:border-surface-700">
+            <img :src="imagenUrl(selectedTelefono?.imagen)" class="w-full h-full object-cover" :alt="`Imagen de ${selectedTelefono?.nombre || 'teléfono'}`" />
+          </div>
+          <div v-else class="w-16 h-16 rounded-lg bg-primary-100 dark:bg-primary-900 flex items-center justify-center shrink-0">
+            <i class="pi pi-mobile text-primary-600 dark:text-primary-300 text-2xl"></i>
+          </div>
+          <div class="min-w-0">
+            <p class="font-semibold truncate">{{ selectedTelefono?.nombre }}</p>
+            <p class="text-xs text-surface-500">{{ imeisDelTelefonoFiltrados.length }} IMEI(s) disponibles</p>
+          </div>
+        </div>
         <Button
           label="Editar"
           icon="pi pi-pencil"
@@ -657,6 +681,13 @@ onMounted(async () => {
       modal
       :style="{ width: '34rem' }"
     >
+      <div class="flex items-center gap-3 mb-3 rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3">
+        <div v-if="imagenUrl(selectedTelefono?.imagen)" class="w-12 h-12 rounded-lg overflow-hidden shrink-0 border border-surface-200 dark:border-surface-700">
+          <img :src="imagenUrl(selectedTelefono?.imagen)" class="w-full h-full object-cover" :alt="`Imagen de ${selectedTelefono?.nombre || 'teléfono'}`" />
+        </div>
+        <div v-else class="w-12 h-12 rounded-lg bg-primary-100 dark:bg-primary-900 flex items-center justify-center shrink-0"><i class="pi pi-mobile text-primary-600 dark:text-primary-300 text-lg"></i></div>
+        <div><p class="font-semibold text-sm">{{ selectedTelefono?.nombre }}</p><p class="text-xs text-surface-500">Equipo para el nuevo IMEI</p></div>
+      </div>
       <SelectButton v-model="modoImei" :options="modosImei" optionLabel="label" optionValue="value" :allowEmpty="false" class="w-full mb-3" fluid />
 
       <div v-if="modoImei === 'individual'" class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">

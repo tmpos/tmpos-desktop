@@ -371,18 +371,21 @@ onUnmounted(() => {
   background: var(--topbar-bg, rgba(255, 255, 255, 0.85));
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  border-bottom: 1px solid rgba(203, 213, 225, 0.9);
+  box-shadow:
+    0 14px 34px -28px rgba(15, 23, 42, 0.58),
+    0 3px 12px -9px rgba(15, 23, 42, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
   position: relative;
   z-index: 100;
-  transition: background 0.3s ease;
+  transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .app-topbar-inner {
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 0.5rem 1rem;
+  padding: 0.55rem 1rem;
   max-width: 100%;
   margin: 0 auto;
 }
@@ -407,7 +410,7 @@ onUnmounted(() => {
     flex-direction: row;
     align-items: center;
     gap: 0;
-    padding: 0.75rem 1rem;
+    padding: 0.65rem 1.25rem;
   }
 
   .topbar-row {
@@ -468,13 +471,14 @@ onUnmounted(() => {
 .logo {
   width: 2.5rem;
   height: 2.5rem;
-  border-radius: 0.75rem;
-  background: #ffffff;
+  border-radius: 0.65rem;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  background: rgba(255, 255, 255, 0.94);
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--p-primary-500);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 8px 18px -14px rgba(15, 23, 42, 0.65);
 }
 
 .brand-text {
@@ -487,7 +491,7 @@ onUnmounted(() => {
   font-size: 1.125rem;
   font-weight: 700;
   color: var(--p-slate-800);
-  letter-spacing: -0.025em;
+  letter-spacing: 0;
 }
 
 .brand-divider {
@@ -499,7 +503,7 @@ onUnmounted(() => {
 .nav-menu {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.25rem;
   flex: 1;
   justify-content: center;
   flex-wrap: nowrap;
@@ -514,32 +518,36 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  border-radius: 9999px;
-  border: 2px solid transparent;
-  transition: all 0.2s ease-out;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.8rem;
+  border-radius: 0.6rem;
+  border: 1px solid transparent;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
   color: var(--p-slate-600);
   background: transparent;
 }
 
 .nav-item:hover {
-  background: var(--p-slate-100);
-  border-color: var(--p-slate-200);
+  background: rgba(248, 250, 252, 0.84);
+  border-color: rgba(203, 213, 225, 0.88);
   color: var(--p-slate-700);
+  box-shadow: 0 8px 18px -18px rgba(15, 23, 42, 0.5);
 }
 
 
 
 .nav-item-active {
-  background: var(--p-blue-50);
-  border-color: var(--p-blue-200);
-  color: var(--p-blue-600);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  background: rgba(239, 246, 255, 0.95);
+  border-color: rgba(147, 197, 253, 0.75);
+  color: var(--p-blue-700);
+  box-shadow:
+    0 10px 22px -18px rgba(37, 99, 235, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
 }
 
 .nav-item-active:hover {
-  background: var(--p-blue-100);
-  border-color: var(--p-blue-300);
+  background: rgba(219, 234, 254, 0.95);
+  border-color: rgba(96, 165, 250, 0.8);
 }
 
 .nav-icon {
@@ -568,7 +576,7 @@ onUnmounted(() => {
 .topbar-end {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.35rem;
   flex-shrink: 0;
 }
 
@@ -576,18 +584,20 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 9999px;
-  border: 2px solid transparent;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.6rem;
+  border: 1px solid transparent;
   color: var(--p-slate-500);
   background: transparent;
-  transition: all 0.2s;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .action-btn:hover {
-  background: var(--p-slate-100);
-  border-color: var(--p-slate-200);
+  background: rgba(248, 250, 252, 0.84);
+  border-color: rgba(203, 213, 225, 0.88);
   color: var(--p-slate-700);
+  box-shadow: 0 8px 18px -18px rgba(15, 23, 42, 0.5);
 }
 
 
@@ -597,8 +607,8 @@ onUnmounted(() => {
 }
 
 .action-btn-exit:hover {
-  background: var(--p-red-50);
-  border-color: var(--p-red-200);
+  background: rgba(254, 242, 242, 0.92);
+  border-color: rgba(252, 165, 165, 0.8);
   color: var(--p-red-600);
 }
 
@@ -615,17 +625,21 @@ onUnmounted(() => {
 
 <style>
 .dark .app-topbar {
-  background: rgba(30, 41, 59, 0.95) !important;
-  border-bottom-color: rgba(51, 65, 85, 0.8) !important;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2) !important;
+  background: rgba(15, 23, 42, 0.94) !important;
+  border-bottom-color: rgba(51, 65, 85, 0.95) !important;
+  box-shadow:
+    0 16px 38px -26px rgba(0, 0, 0, 0.82),
+    0 4px 14px -10px rgba(0, 0, 0, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
 }
 .dark .app-topbar .brand-name { color: #ffffff !important; }
+.dark .app-topbar .logo { background: rgba(15, 23, 42, 0.72) !important; border-color: rgba(71, 85, 105, 0.85) !important; box-shadow: 0 10px 22px -16px rgba(0, 0, 0, 0.85) !important; }
 .dark .app-topbar .nav-item { color: rgba(255, 255, 255, 0.65) !important; }
-.dark .app-topbar .nav-item:hover { color: #ffffff !important; background: rgba(255, 255, 255, 0.08) !important; border-color: rgba(255, 255, 255, 0.15) !important; }
-.dark .app-topbar .nav-item-active { color: #ffffff !important; background: rgba(59, 130, 246, 0.25) !important; border-color: rgba(59, 130, 246, 0.5) !important; }
+.dark .app-topbar .nav-item:hover { color: #ffffff !important; background: rgba(255, 255, 255, 0.07) !important; border-color: rgba(148, 163, 184, 0.2) !important; box-shadow: 0 10px 22px -18px rgba(0, 0, 0, 0.85) !important; }
+.dark .app-topbar .nav-item-active { color: #ffffff !important; background: rgba(37, 99, 235, 0.34) !important; border-color: rgba(96, 165, 250, 0.52) !important; box-shadow: 0 10px 22px -18px rgba(37, 99, 235, 0.78) !important; }
 .dark .app-topbar .nav-item-active:hover { background: rgba(59, 130, 246, 0.35) !important; }
 .dark .app-topbar .action-btn { color: rgba(255, 255, 255, 0.6) !important; }
-.dark .app-topbar .action-btn:hover { color: #ffffff !important; background: rgba(255, 255, 255, 0.08) !important; border-color: rgba(255, 255, 255, 0.15) !important; }
+.dark .app-topbar .action-btn:hover { color: #ffffff !important; background: rgba(255, 255, 255, 0.07) !important; border-color: rgba(148, 163, 184, 0.2) !important; box-shadow: 0 10px 22px -18px rgba(0, 0, 0, 0.85) !important; }
 .dark .app-topbar .action-btn-exit { color: rgba(248, 113, 113, 0.7) !important; }
 .dark .app-topbar .action-btn-exit:hover { color: #fca5a5 !important; background: rgba(127, 29, 29, 0.3) !important; border-color: rgba(239, 68, 68, 0.5) !important; }
 </style>

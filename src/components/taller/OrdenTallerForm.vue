@@ -15,25 +15,45 @@ import TabPanel from 'primevue/tabpanel'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
 import { encryptarPassword } from '@/funciones/funciones.js'
+import { getImageUrl, uploadImageSource, deleteImage } from '@/services/tmCloudClient'
+import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 
-const props = defineProps<{ orderId?: number | null; visible: boolean }>()
-const emit = defineEmits<{ close: []; saved: [] }>()
+const props = defineProps<{ orderId?: number | null; visible: boolean; initialData?: Record<string, any> | null }>()
+const emit = defineEmits<{ close: []; saved: [payload?: any] }>()
 
 const toast = useToast()
 const isEditing = computed(() => !!props.orderId)
 const guardando = ref(false)
 const activeTab = ref('0')
+const estadoOriginal = ref('')
+const fileInput = ref<HTMLInputElement | null>(null)
+const imagenPreview = ref('')
+const dialogImagenVisible = ref(false)
+const subiendoImagenes = ref(false)
 
 const tecnicos = ref<{ nombre: string; porcentaje: number }[]>([])
 
 const piezasDisponibles = ref<any[]>([])
 const dialogPiezasVisible = ref(false)
 const buscarPieza = ref('')
+const buscandoClienteCedula = ref(false)
+const dialogClientesVisible = ref(false)
+const clientes = ref<any[]>([])
+const busquedaCliente = ref('')
 
 const piezasFiltradas = computed(() => {
   const q = buscarPieza.value.toLowerCase().trim()
   if (!q) return piezasDisponibles.value
   return piezasDisponibles.value.filter((p: any) => (p.nombre || '').toLowerCase().includes(q))
+})
+
+const clientesFiltrados = computed(() => {
+  const texto = busquedaCliente.value.toLowerCase().trim()
+  if (!texto) return clientes.value
+  return clientes.value.filter((cliente: any) =>
+    [cliente.nombre, cliente.telefono, cliente.whatsapp, cliente.cedula, cliente.rnc]
+      .some(valor => String(valor || '').toLowerCase().includes(texto))
+  )
 })
 
 async function cargarPiezas() {
@@ -45,11 +65,106 @@ async function cargarPiezas() {
   } catch {}
 }
 
+async function buscarClientePorCedula() {
+  const cedula = String(form.value.cedula || '').replace(/\D/g, '')
+  if (!cedula) {
+    toast.add({ severity: 'warn', summary: 'Cédula requerida', detail: 'Ingresa una cédula para buscar el cliente', life: 2500 })
+    return
+  }
+  buscandoClienteCedula.value = true
+  try {
+    const res = await window.db.getAll('clientes')
+    const cliente = (res.success ? res.data || [] : []).find((item: any) => {
+      const documento = String(item.cedula || item.rnc || '').replace(/\D/g, '')
+      return documento === cedula
+    })
+    if (!cliente) {
+      toast.add({ severity: 'info', summary: 'No encontrado', detail: 'No hay un cliente registrado con esa cédula', life: 2500 })
+      return
+    }
+    form.value.nombre = String(cliente.nombre || '').toUpperCase()
+    form.value.cedula = String(cliente.cedula || cliente.rnc || cedula)
+    form.value.telefono = String(cliente.telefono || cliente.whatsapp || '')
+    form.value.email = String(cliente.email || '')
+    toast.add({ severity: 'success', summary: 'Cliente cargado', detail: cliente.nombre, life: 2500 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo buscar el cliente', life: 3000 })
+  } finally {
+    buscandoClienteCedula.value = false
+  }
+}
+
+function abrirSeleccionarCliente() {
+  busquedaCliente.value = ''
+  dialogClientesVisible.value = true
+}
+
+function seleccionarCliente(cliente: any) {
+  form.value.nombre = String(cliente.nombre || '').toUpperCase()
+  form.value.cedula = String(cliente.cedula || cliente.rnc || '')
+  form.value.telefono = String(cliente.telefono || cliente.whatsapp || '')
+  form.value.email = String(cliente.email || '')
+  dialogClientesVisible.value = false
+  toast.add({ severity: 'success', summary: 'Cliente seleccionado', detail: cliente.nombre, life: 2000 })
+}
+
 function seleccionarPieza(pieza: any) {
   const texto = pieza.nombre || ''
   form.value.piezas = form.value.piezas ? form.value.piezas + '\n' + texto : texto
   form.value.precio_pieza = (form.value.precio_pieza || 0) + (Number(pieza.precio_venta) || 0)
   dialogPiezasVisible.value = false
+}
+
+const dialogPatron = ref(false)
+const patronDots = ref<number[]>([])
+const patronDrawing = ref(false)
+const patronGridRef = ref<HTMLDivElement | null>(null)
+
+const patronPreview = computed(() => {
+  if (!form.value.clave) return ''
+  if (form.value.clave.startsWith('PATRON:')) {
+    const nums = form.value.clave.replace('PATRON:', '').trim().split('-').map(Number).filter(n => !isNaN(n))
+    return nums.map(n => n + 1).join(' → ')
+  }
+  return form.value.clave
+})
+
+function abrirPatron() {
+  patronDots.value = []
+  patronDrawing.value = false
+  if (form.value.clave.startsWith('PATRON:')) {
+    const nums = form.value.clave.replace('PATRON:', '').trim().split('-').map(Number).filter(n => !isNaN(n))
+    patronDots.value = nums
+  }
+  dialogPatron.value = true
+}
+
+function patronPointerDown(num: number) {
+  patronDrawing.value = true
+  patronDots.value = [num]
+}
+
+function patronPointerEnter(num: number) {
+  if (!patronDrawing.value) return
+  if (!patronDots.value.includes(num)) patronDots.value.push(num)
+}
+
+function patronPointerUp() {
+  patronDrawing.value = false
+}
+
+function patronPointerLeaveGrid() {
+  patronDrawing.value = false
+}
+
+function limpiarPatron() {
+  patronDots.value = []
+}
+
+function guardarPatron() {
+  const pattern = patronDots.value.join('-')
+  form.value.clave = pattern ? `PATRON: ${pattern}` : ''
+  dialogPatron.value = false
 }
 
 const fallasComunes = [
@@ -65,8 +180,9 @@ const form = ref({
   fallas: '', piezas: '', tecnico: '', metodo_pago: 'EFECTIVO',
   fecha_entrada: new Date(), fecha_entrega: null as Date | null,
   estado: 'RECIBIDO', precio_pieza: 0, mano_obra: 0, abono: 0,
-  pagos: '', beneficio_empresa: 0, beneficio_tecnico: 0,
+  pendiente: 0, total: 0, pagos: '', beneficio_empresa: 0, beneficio_tecnico: 0,
   porcentaje_tecnico: 0, estado_pago_tecnico: 'PENDIENTE',
+  imagen: '',
 })
 
 const totalCalculado = computed(() => (form.value.precio_pieza || 0) + (form.value.mano_obra || 0))
@@ -79,8 +195,118 @@ function formDefault() {
     fallas: '', piezas: '', tecnico: '', metodo_pago: 'EFECTIVO',
     fecha_entrada: new Date(), fecha_entrega: null as Date | null,
     estado: 'RECIBIDO', precio_pieza: 0, mano_obra: 0, abono: 0,
-    pagos: '', beneficio_empresa: 0, beneficio_tecnico: 0,
+    pendiente: 0, total: 0, pagos: '', beneficio_empresa: 0, beneficio_tecnico: 0,
     porcentaje_tecnico: 0, estado_pago_tecnico: 'PENDIENTE',
+    imagen: '',
+  }
+}
+
+function parseImagenes(valor: any): string[] {
+  if (!valor) return []
+  if (Array.isArray(valor)) return valor.filter(Boolean)
+  const texto = String(valor).trim()
+  if (!texto) return []
+  try {
+    const parsed = JSON.parse(texto)
+    if (Array.isArray(parsed)) return parsed.filter(Boolean)
+  } catch {}
+  return [texto]
+}
+
+const imagenesOrden = computed(() => parseImagenes(form.value.imagen))
+
+async function guardarImagenes(imagenes: string[]) {
+  form.value.imagen = JSON.stringify(imagenes.filter(Boolean))
+  if (!props.orderId) return
+  const resultado = await window.db.update('ordenes_taller', props.orderId, { imagen: form.value.imagen })
+  if (!resultado.success) throw new Error(resultado.error || 'No se pudo guardar las imagenes de la orden')
+  if (isOnline()) await pushLocalRowToCloud('ordenes_taller', props.orderId)
+}
+
+function abrirImagen(src: string) {
+  imagenPreview.value = src
+  dialogImagenVisible.value = true
+}
+
+function imagenOrdenUrl(valor: string): string {
+  return getImageUrl(valor) || valor
+}
+
+async function quitarImagen(index: number) {
+  const imagenes = [...imagenesOrden.value]
+  const eliminada = imagenes.splice(index, 1)[0]
+  try { await deleteImage(eliminada) } catch {}
+  try {
+    await guardarImagenes(imagenes)
+    toast.add({ severity: 'success', summary: 'Imagen actualizada', detail: 'El cambio se guardo inmediatamente', life: 2000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error.message || 'No se pudo actualizar la imagen', life: 3000 })
+  }
+}
+
+function imagenDesdeArchivo(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const img = new Image()
+      img.onload = () => {
+        const maxSide = 1400
+        const ratio = Math.min(1, maxSide / Math.max(img.width, img.height))
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.max(1, Math.round(img.width * ratio))
+        canvas.height = Math.max(1, Math.round(img.height * ratio))
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          reject(new Error('No se pudo procesar la imagen'))
+          return
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        resolve(canvas.toDataURL('image/jpeg', 0.78))
+      }
+      img.onerror = () => reject(new Error('Imagen invalida'))
+      img.src = String(reader.result || '')
+    }
+    reader.onerror = () => reject(new Error('No se pudo leer la imagen'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function agregarImagenes(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  if (!files.length) return
+
+  const actuales = [...imagenesOrden.value]
+  const disponibles = Math.max(0, 8 - actuales.length)
+  const seleccionadas = files.slice(0, disponibles)
+
+  if (files.length > disponibles) {
+    toast.add({ severity: 'warn', summary: 'Limite de imagenes', detail: 'Puedes guardar hasta 8 imagenes por orden', life: 3000 })
+  }
+
+  subiendoImagenes.value = true
+  try {
+    for (const file of seleccionadas) {
+      if (!file.type.startsWith('image/')) continue
+      if (file.size > 8 * 1024 * 1024) {
+        toast.add({ severity: 'warn', summary: 'Imagen omitida', detail: `${file.name} supera 8MB`, life: 3000 })
+        continue
+      }
+      const localImage = await imagenDesdeArchivo(file)
+      try {
+        actuales.push(await uploadImageSource(localImage, 'ordenes_taller', `orden-${Date.now()}-${actuales.length + 1}.jpg`))
+      } catch (uploadError: any) {
+        actuales.push(localImage)
+        toast.add({ severity: 'warn', summary: 'Imagen local', detail: uploadError?.message || 'No se pudo subir a TM Cloud', life: 3500 })
+      }
+    }
+    await guardarImagenes(actuales)
+    if (props.orderId) toast.add({ severity: 'success', summary: 'Imagenes actualizadas', detail: 'Los cambios se guardaron inmediatamente', life: 2000 })
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo agregar la imagen', life: 3000 })
+  } finally {
+    subiendoImagenes.value = false
+    input.value = ''
   }
 }
 
@@ -94,13 +320,34 @@ async function generarNoOrden(): Promise<string> {
 
 function resetForm() {
   form.value = formDefault()
+  estadoOriginal.value = ''
   activeTab.value = '0'
+}
+
+function aplicarDatosIniciales() {
+  if (!props.initialData) return
+
+  const data = props.initialData
+  form.value = {
+    ...form.value,
+    nombre: data.nombre ?? form.value.nombre,
+    cedula: data.cedula ?? form.value.cedula,
+    telefono: data.telefono ?? form.value.telefono,
+    email: data.email ?? form.value.email,
+    equipo: data.equipo ?? form.value.equipo,
+    imei: data.imei ?? form.value.imei,
+    serial: data.serial ?? form.value.serial,
+    marca_modelo: data.marca_modelo ?? form.value.marca_modelo,
+    fallas: data.fallas ?? form.value.fallas,
+    accesorios: data.accesorios ?? form.value.accesorios,
+  }
 }
 
 watch(() => props.orderId, async (newId) => {
   if (newId == null) {
     resetForm()
     form.value.no_orden = await generarNoOrden()
+    aplicarDatosIniciales()
   } else {
     await cargarDatos()
   }
@@ -111,6 +358,7 @@ watch(() => props.visible, async (v) => {
     if (!props.orderId) {
       resetForm()
       form.value.no_orden = await generarNoOrden()
+      aplicarDatosIniciales()
     } else {
       await cargarDatos()
     }
@@ -137,11 +385,13 @@ watch([() => form.value.porcentaje_tecnico, () => form.value.mano_obra], () => {
 })
 
 async function cargarDatos() {
-  const [tecnicosRes, ordenRes] = await Promise.all([
+  const [tecnicosRes, ordenRes, clientesRes] = await Promise.all([
     window.db.getAll('tecnicos'),
     props.orderId ? window.db.getAll('ordenes_taller') : Promise.resolve(null),
+    window.db.getAll('clientes'),
   ])
   cargarPiezas()
+  if (clientesRes.success) clientes.value = clientesRes.data || []
   if (tecnicosRes.success) {
     tecnicos.value = (tecnicosRes.data || []).map((t: any) => ({
       nombre: (t.nombre || '').toUpperCase(), porcentaje: t.porcentaje || 0
@@ -162,10 +412,13 @@ async function cargarDatos() {
         fecha_entrada: orden.fecha_entrada ? new Date(orden.fecha_entrada) : new Date(),
         fecha_entrega: orden.fecha_entrega ? new Date(orden.fecha_entrega) : null,
         estado: orden.estado || 'RECIBIDO', precio_pieza: orden.precio_pieza || 0,
-        mano_obra: orden.mano_obra || 0, abono: orden.abono || 0, pagos: orden.pagos || '',
+        mano_obra: orden.mano_obra || 0, abono: orden.abono || 0,
+        pendiente: orden.pendiente || 0, total: orden.total || 0, pagos: orden.pagos || '',
         beneficio_empresa: orden.beneficio_empresa || 0, beneficio_tecnico: orden.beneficio_tecnico || 0,
         porcentaje_tecnico: orden.porcentaje_tecnico || 0, estado_pago_tecnico: orden.estado_pago_tecnico || 'PENDIENTE',
+        imagen: orden.imagen || '',
       }
+      estadoOriginal.value = orden.estado || 'RECIBIDO'
     }
   }
 }
@@ -195,6 +448,7 @@ async function guardar() {
       abono: form.value.abono || 0, pendiente, total, pagos: form.value.pagos.trim(),
       beneficio_empresa: form.value.beneficio_empresa || 0, beneficio_tecnico: form.value.beneficio_tecnico || 0,
       porcentaje_tecnico: form.value.porcentaje_tecnico || 0, estado_pago_tecnico: form.value.estado_pago_tecnico,
+      imagen: form.value.imagen,
     }
     let res
     if (isEditing.value && props.orderId) {
@@ -205,7 +459,12 @@ async function guardar() {
     if (res.success) {
       toast.add({ severity: 'success', summary: 'Exito', detail: isEditing.value ? 'Orden actualizada' : 'Orden creada', life: 3000 })
       await sincronizarServidor(data)
-      emit('saved')
+      emit('saved', {
+        orden: { ...data, id: props.orderId || res.data?.id },
+        estadoAnterior: estadoOriginal.value,
+        estadoNuevo: data.estado,
+        cambioEstado: isEditing.value && estadoOriginal.value && estadoOriginal.value !== data.estado,
+      })
     }
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 3000 })
@@ -318,12 +577,15 @@ onMounted(async () => {
                   <InputText v-model="form.no_orden" placeholder="No. de orden" fluid readonly />
                 </div>
                 <div class="flex flex-col gap-1 md:col-span-2">
-                  <label class="font-semibold text-sm">Nombre <span class="text-red-500">*</span></label>
+                  <div class="flex items-center justify-between gap-2"><label class="font-semibold text-sm">Nombre <span class="text-red-500">*</span></label><Button label="Seleccionar cliente" icon="pi pi-users" size="small" text @click="abrirSeleccionarCliente" /></div>
                   <InputText v-model="form.nombre" placeholder="Nombre del cliente" fluid class="uppercase" style="text-transform: uppercase;" />
                 </div>
                 <div class="flex flex-col gap-1">
                   <label class="font-semibold text-sm">Cedula</label>
-                  <InputText v-model="form.cedula" placeholder="Cedula" fluid />
+                  <div class="flex gap-2">
+                    <InputText v-model="form.cedula" placeholder="Cedula" fluid @keyup.enter="buscarClientePorCedula" />
+                    <Button icon="pi pi-search" severity="info" :loading="buscandoClienteCedula" @click="buscarClientePorCedula" v-tooltip="'Buscar cliente por cédula'" />
+                  </div>
                 </div>
                 <div class="flex flex-col gap-1">
                   <label class="font-semibold text-sm">Telefono</label>
@@ -358,11 +620,68 @@ onMounted(async () => {
                 </div>
                 <div class="flex flex-col gap-1 md:col-span-2">
                   <label class="font-semibold text-sm">Clave / Patron</label>
-                  <InputText v-model="form.clave" placeholder="Clave o patron de desbloqueo" fluid />
+                  <div class="flex gap-2">
+                    <InputText v-model="form.clave" placeholder="Clave o patron de desbloqueo" fluid class="flex-1" />
+                    <Button
+                      icon="pi pi-th-large"
+                      severity="info"
+                      text
+                      rounded
+                      size="small"
+                      v-tooltip="'Dibujar patron'"
+                      @click="abrirPatron"
+                    />
+                    <Button
+                      v-if="form.clave.startsWith('PATRON:')"
+                      icon="pi pi-eye"
+                      severity="secondary"
+                      text
+                      rounded
+                      size="small"
+                      v-tooltip="'Ver patron'"
+                      @click="abrirPatron"
+                    />
+                  </div>
+                  <span v-if="patronPreview && patronPreview !== form.clave" class="text-xs text-surface-400">{{ patronPreview }}</span>
                 </div>
                 <div class="flex flex-col gap-1 md:col-span-2">
                   <label class="font-semibold text-sm">Accesorios</label>
                   <InputText v-model="form.accesorios" placeholder="Accesorios recibidos" fluid class="uppercase" style="text-transform: uppercase;" />
+                </div>
+                <div class="flex flex-col gap-2 md:col-span-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <label class="font-semibold text-sm">Imagenes del equipo</label>
+                    <span class="text-xs text-surface-400">{{ imagenesOrden.length }}/8</span>
+                  </div>
+                  <input ref="fileInput" type="file" accept="image/*" multiple class="hidden" @change="agregarImagenes" />
+                  <div class="rounded-xl border border-dashed border-surface-300 dark:border-surface-600 bg-surface-50/70 dark:bg-surface-800/40 p-3">
+                    <div v-if="imagenesOrden.length" class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                      <div
+                        v-for="(img, index) in imagenesOrden"
+                        :key="`${index}-${img.slice(0, 24)}`"
+                        class="relative aspect-square rounded-lg overflow-hidden border border-surface-200 dark:border-surface-700 bg-surface-100 dark:bg-surface-800 group"
+                      >
+                        <img :src="imagenOrdenUrl(img)" class="w-full h-full object-cover cursor-zoom-in" alt="Imagen de la orden" @click="abrirImagen(imagenOrdenUrl(img))" />
+                        <button
+                          type="button"
+                          class="absolute top-1 right-1 w-7 h-7 rounded-md bg-red-500 text-white shadow-md opacity-95 hover:bg-red-600"
+                          title="Quitar imagen"
+                          @click.stop="quitarImagen(index)"
+                        >
+                          <i class="pi pi-times text-xs"></i>
+                        </button>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      class="w-full min-h-24 rounded-lg border border-surface-200 dark:border-surface-700 bg-white/80 dark:bg-surface-900/60 hover:border-primary-300 dark:hover:border-primary-600 transition-colors flex flex-col items-center justify-center gap-2 text-surface-500 dark:text-surface-300"
+                      @click="fileInput?.click()"
+                    >
+                      <i class="pi pi-images text-2xl text-primary"></i>
+                      <span class="text-sm font-semibold">{{ imagenesOrden.length ? 'Agregar mas imagenes' : 'Agregar imagenes' }}</span>
+                      <span class="text-xs text-surface-400">{{ subiendoImagenes ? 'Subiendo a TM Cloud...' : 'JPG, PNG o fotos de camara. Maximo 8 imagenes.' }}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -475,6 +794,20 @@ onMounted(async () => {
     </div>
   </Dialog>
 
+  <Dialog v-model:visible="dialogClientesVisible" header="Seleccionar cliente" modal :style="{ width: 'min(38rem, 95vw)' }">
+    <div class="flex flex-col gap-3">
+      <InputText v-model="busquedaCliente" placeholder="Buscar por nombre, teléfono, cédula o RNC..." fluid autofocus />
+      <div class="max-h-80 overflow-y-auto flex flex-col gap-1">
+        <button v-for="cliente in clientesFiltrados" :key="cliente.id" type="button" class="flex items-center justify-between text-left px-3 py-2.5 rounded-lg border border-transparent hover:bg-surface-100 dark:hover:bg-surface-700 hover:border-surface-200 dark:hover:border-surface-600" @click="seleccionarCliente(cliente)">
+          <div><p class="font-medium text-sm">{{ cliente.nombre }}</p><p class="text-xs text-surface-500">{{ cliente.cedula || cliente.rnc || 'Sin documento' }} · {{ cliente.telefono || cliente.whatsapp || 'Sin teléfono' }}</p></div>
+          <i class="pi pi-chevron-right text-surface-400"></i>
+        </button>
+        <div v-if="clientesFiltrados.length === 0" class="text-center py-8 text-surface-400 text-sm">No se encontraron clientes.</div>
+      </div>
+    </div>
+    <template #footer><Button label="Cancelar" severity="secondary" text @click="dialogClientesVisible = false" /></template>
+  </Dialog>
+
   <Dialog v-model:visible="dialogPiezasVisible" header="Seleccionar Pieza" :modal="true" :style="{ width: 'min(40rem, 95vw)' }">
     <div class="flex flex-col gap-3">
       <InputText v-model="buscarPieza" placeholder="Buscar pieza..." fluid class="w-full" />
@@ -494,6 +827,40 @@ onMounted(async () => {
         <div v-if="piezasFiltradas.length === 0" class="text-center py-6 text-surface-400 text-sm">
           No se encontraron piezas.
         </div>
+      </div>
+    </div>
+  </Dialog>
+
+  <Dialog v-model:visible="dialogImagenVisible" header="Imagen de la orden" modal :style="{ width: 'min(48rem, 96vw)' }">
+    <div class="flex items-center justify-center bg-surface-100 dark:bg-surface-900 rounded-xl overflow-hidden">
+      <img v-if="imagenPreview" :src="imagenPreview" class="max-w-full max-h-[72vh] object-contain" alt="Imagen de la orden" />
+    </div>
+  </Dialog>
+
+  <Dialog v-model:visible="dialogPatron" header="Dibujar patron de desbloqueo" modal :style="{ width: '22rem' }" :dismissableMask="false">
+    <div class="flex flex-col items-center gap-4 py-4">
+      <div
+        ref="patronGridRef"
+        class="grid grid-cols-3 gap-6 p-6 rounded-xl select-none"
+        style="background:#f3f4f6;touch-action:none;"
+        @pointerup="patronPointerUp"
+        @pointerleave="patronPointerLeaveGrid"
+        @pointercancel="patronPointerUp"
+      >
+        <div
+          v-for="num in 9" :key="num"
+          class="w-10 h-10 rounded-full flex items-center justify-center cursor-pointer transition-all duration-100 select-none text-xs font-bold"
+          style="background:#fff;border:2px solid #d1d5db;"
+          :style="patronDots.includes(num - 1) ? 'background:#3b82f6;border-color:#3b82f6;color:#fff;scale:1.15;' : ''"
+          @pointerdown.prevent="patronPointerDown(num - 1)"
+          @pointerenter="patronPointerEnter(num - 1)"
+        >{{ patronDots.includes(num - 1) ? patronDots.indexOf(num - 1) + 1 : '' }}</div>
+      </div>
+      <p class="text-xs text-surface-400">Conecta los puntos para crear el patron</p>
+      <div class="flex gap-2">
+        <Button label="Limpiar" icon="pi pi-refresh" severity="secondary" text @click="limpiarPatron" />
+        <Button label="Cancelar" severity="secondary" @click="dialogPatron = false" />
+        <Button label="Guardar Patron" icon="pi pi-check" @click="guardarPatron" />
       </div>
     </div>
   </Dialog>

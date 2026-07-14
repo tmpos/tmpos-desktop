@@ -17,15 +17,17 @@ import HistorialPreciosComp from '@/components/inventario/HistorialPreciosComp.v
 import EtiquetasComp from '@/components/inventario/EtiquetasComp.vue'
 import TransferenciasComp from '@/components/transferencias/TransferenciasComp.vue'
 import OrdenesCompraComp from '@/components/compras/OrdenesCompraComp.vue'
+import PerdidasComp from '@/components/inventario/PerdidasComp.vue'
 
 const auth = useAuthStore()
 
 const allItems: SubMenuItem[] = [
   { label: 'Telefonos', icon: 'pi pi-mobile', key: 'telefonos' },
+  { label: 'IMEI', icon: 'pi pi-barcode', key: 'imei' },
   { label: 'Accesorios', icon: 'pi pi-headphones', key: 'accesorios' },
   { label: 'Electrodomesticos', icon: 'pi pi-sitemap', key: 'electrodomesticos' },
-  { label: 'IMEI', icon: 'pi pi-barcode', key: 'imei' },
   { label: 'Serial', icon: 'pi pi-qrcode', key: 'serial' },
+  { label: 'Perdidas', icon: 'pi pi-times-circle', key: 'perdidas' },
   { label: 'Categorias', icon: 'pi pi-tags', key: 'categorias' },
   { label: 'Marcas', icon: 'pi pi-bookmark', key: 'marcas' },
   { label: 'Etiquetas', icon: 'pi pi-qrcode', key: 'etiquetas' },
@@ -54,6 +56,7 @@ const components: Record<string, any> = {
   ajustes: AjustesComp,
   'historial-precios': HistorialPreciosComp,
   reporte: ReporteInventarioComp,
+  perdidas: PerdidasComp,
 }
 
 const active = shallowRef('')

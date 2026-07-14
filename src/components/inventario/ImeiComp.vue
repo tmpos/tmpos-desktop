@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -11,6 +12,7 @@ import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Calendar from 'primevue/calendar'
 import Fieldset from 'primevue/fieldset'
+import Menu from 'primevue/menu'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
@@ -21,9 +23,11 @@ import TicketFacturaPrint from '@/components/ventas/TicketFacturaPrint.vue'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
+const router = useRouter()
 const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
 const imeis = ref<any[]>([])
 const telefonos = ref<any[]>([])
+const clientes = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('table')
 const dialogVisible = ref(false)
@@ -31,8 +35,32 @@ const deleteDialogVisible = ref(false)
 const isEditing = ref(false)
 const selectedImei = ref<any>(null)
 const selectedImeis = ref<any[]>([])
+const imeiActionMenu = ref()
+const imeiAccion = ref<any>(null)
 const busqueda = ref('')
 const estadoFiltro = ref('DISPONIBLE')
+const dialogAccionVenta = ref(false)
+const dialogClienteExpress = ref(false)
+const dialogNuevoClienteExpress = ref(false)
+const imeiParaVenta = ref<any>(null)
+const imeisParaVenta = ref<any[]>([])
+const preciosImeiVenta = ref<Record<number, number>>({})
+const clienteExpressSeleccionado = ref<any>({ id: null, nombre: 'AL CONTADO', telefono: '' })
+const busquedaClienteExpress = ref('')
+const nuevoClienteExpress = ref({ nombre: '', telefono: '', direccion: '', rnc: '' })
+
+const imeiActionItems = computed(() => [
+  { label: 'Vender o agregar al carrito', icon: 'pi pi-shopping-cart', command: () => imeiAccion.value && abrirAccionVenta(imeiAccion.value) },
+  { label: 'Imprimir etiqueta', icon: 'pi pi-print', command: () => imeiAccion.value && abrirImprimirEtiquetaIndividual(imeiAccion.value) },
+  { label: 'Editar IMEI', icon: 'pi pi-pencil', command: () => imeiAccion.value && abrirEditar(imeiAccion.value) },
+  { separator: true },
+  { label: 'Eliminar', icon: 'pi pi-trash', class: 'text-red-500', command: () => imeiAccion.value && confirmarBorrar(imeiAccion.value) },
+])
+
+function abrirMenuAccionesImei(event: Event, imei: any) {
+  imeiAccion.value = imei
+  imeiActionMenu.value?.toggle(event)
+}
 
 const ticketPrintRef = ref<any>(null)
 const reimprimiendo = ref(false)
@@ -153,6 +181,16 @@ const imeisFiltrados = computed(() => {
   })
 })
 
+const clientesExpressFiltrados = computed(() => {
+  const texto = busquedaClienteExpress.value.toLowerCase().trim()
+  if (!texto) return clientes.value
+  return clientes.value.filter((cliente: any) =>
+    String(cliente.nombre || '').toLowerCase().includes(texto) ||
+    String(cliente.telefono || '').toLowerCase().includes(texto) ||
+    String(cliente.rnc || '').toLowerCase().includes(texto)
+  )
+})
+
 async function cargarTelefonos() {
   try {
     const res = await window.db.getAll('telefonos')
@@ -183,14 +221,16 @@ async function crearProveedorImei() {
 async function cargarImeis() {
   loading.value = true
   try {
-    const [resImei, resTel, resProv] = await Promise.all([
+    const [resImei, resTel, resProv, resClientes] = await Promise.all([
       window.db.getAll('imei'),
       window.db.getAll('telefonos'),
       window.db.getAll('proveedores'),
+      window.db.getAll('clientes'),
     ])
 
     if (resTel.success) telefonos.value = resTel.data || []
     if (resProv.success) proveedores.value = resProv.data || []
+    if (resClientes.success) clientes.value = resClientes.data || []
     if (resImei.success) {
       const telMap = new Map((resTel.data || []).map((t: any) => [t.id, t.nombre]))
       imeis.value = filterByAlmacen(resImei.data || []).map((i: any) => ({
@@ -203,6 +243,136 @@ async function cargarImeis() {
   } finally {
     loading.value = false
   }
+}
+
+function abrirAccionVenta(imei: any) {
+  abrirAccionVentaLista([imei])
+}
+
+function abrirAccionVentaMultiple() {
+  abrirAccionVentaLista(selectedImeis.value)
+}
+
+function abrirAccionVentaLista(lista: any[]) {
+  if (!lista.length) return
+  const noDisponibles = lista.filter((imei: any) => String(imei.estado || '').toUpperCase() !== 'DISPONIBLE')
+  if (noDisponibles.length) {
+    toast.add({ severity: 'warn', summary: 'No disponible', detail: 'Solo puedes vender IMEIs disponibles', life: 3000 })
+    return
+  }
+  const sinEquipo = lista.find((imei: any) => !imei.id_equi || !imei.telefono_nombre)
+  if (sinEquipo) {
+    toast.add({ severity: 'warn', summary: 'Equipo requerido', detail: 'Asigna un teléfono a este IMEI antes de venderlo', life: 3000 })
+    return
+  }
+  imeisParaVenta.value = [...lista]
+  imeiParaVenta.value = imeisParaVenta.value[0]
+  preciosImeiVenta.value = Object.fromEntries(imeisParaVenta.value.map((imei: any) => [Number(imei.id), Number(imei.precio_venta || 0)]))
+  dialogAccionVenta.value = true
+}
+
+function obtenerImeisParaVenta() {
+  return imeisParaVenta.value.length ? imeisParaVenta.value : (imeiParaVenta.value ? [imeiParaVenta.value] : [])
+}
+
+function precioSeleccionadoImei(imei: any) {
+  return Number(preciosImeiVenta.value[Number(imei.id)] ?? imei.precio_venta ?? 0)
+}
+
+function usarPrecioImei(imei: any, precio: any) {
+  preciosImeiVenta.value[Number(imei.id)] = Number(precio || 0)
+}
+
+function validarPreciosVenta(imeisVenta: any[]) {
+  if (imeisVenta.some((imei: any) => precioSeleccionadoImei(imei) <= 0)) {
+    toast.add({ severity: 'warn', summary: 'Precio requerido', detail: 'Cada IMEI debe tener un precio mayor que cero', life: 3000 })
+    return false
+  }
+  return true
+}
+
+function itemPosDesdeImei(imei: any, precio = Number(imei.precio_venta || 0)) {
+  return {
+    tipo: 'imei', imei_id: imei.id, imei_ids: [imei.id], imei: imei.nombre, imeis: [imei.nombre],
+    codigo: imei.nombre || '', nombre: imei.telefono_nombre || '', telefono_id: imei.id_equi,
+    color: imei.color || '', colores: imei.color ? [imei.color] : [],
+    capacidad: imei.capacidad || '', capacidades: imei.capacidad ? [imei.capacidad] : [],
+    precio: Number(precio || 0), precio_normal: Number(imei.precio_venta || precio || 0),
+    costo: Number(imei.costo || 0), cantidad: 1,
+  }
+}
+
+function agregarAlCarritoPos() {
+  const imeisVenta = obtenerImeisParaVenta()
+  if (!imeisVenta.length) return
+  if (!validarPreciosVenta(imeisVenta)) return
+  try {
+    const data = JSON.parse(localStorage.getItem('pos_cart_data') || '{}')
+    const cart = Array.isArray(data.cart) ? data.cart : []
+    const repetidos = imeisVenta.filter((imei: any) => cart.some((i: any) => i.tipo === 'imei' && (Number(i.imei_id) === Number(imei.id) || (i.imei_ids || []).map(Number).includes(Number(imei.id)))))
+    if (repetidos.length) {
+      toast.add({ severity: 'warn', summary: 'Ya agregado', detail: `${repetidos.length} IMEI(s) ya están en el carrito del POS`, life: 3000 })
+      return
+    }
+    data.cart = [...cart, ...imeisVenta.map((imei: any) => itemPosDesdeImei(imei, precioSeleccionadoImei(imei)))]
+    localStorage.setItem('pos_cart_data', JSON.stringify(data))
+    dialogAccionVenta.value = false
+    router.push('/vender')
+  } catch (error) {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo agregar el IMEI al carrito', life: 3000 })
+  }
+}
+
+function abrirClienteVentaExpress() {
+  clienteExpressSeleccionado.value = { id: null, nombre: 'AL CONTADO', telefono: '' }
+  busquedaClienteExpress.value = ''
+  dialogAccionVenta.value = false
+  dialogClienteExpress.value = true
+}
+
+function seleccionarClienteExpress(cliente: any) {
+  clienteExpressSeleccionado.value = cliente
+}
+
+function abrirNuevoClienteExpress() {
+  nuevoClienteExpress.value = { nombre: '', telefono: '', direccion: '', rnc: '' }
+  dialogNuevoClienteExpress.value = true
+}
+
+async function guardarNuevoClienteExpress() {
+  if (!nuevoClienteExpress.value.nombre.trim()) {
+    toast.add({ severity: 'warn', summary: 'Atención', detail: 'El nombre del cliente es requerido', life: 3000 })
+    return
+  }
+  const data = {
+    nombre: nuevoClienteExpress.value.nombre.trim().toUpperCase(), telefono: nuevoClienteExpress.value.telefono.trim(),
+    direccion: nuevoClienteExpress.value.direccion.trim().toUpperCase(), rnc: nuevoClienteExpress.value.rnc.trim(), email: '',
+  }
+  const res = await window.db.insert('clientes', data)
+  if (!res.success) {
+    toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo crear el cliente', life: 3000 })
+    return
+  }
+  const cliente = { id: res.data.id, ...data }
+  clientes.value.unshift(cliente)
+  clienteExpressSeleccionado.value = cliente
+  dialogNuevoClienteExpress.value = false
+  toast.add({ severity: 'success', summary: 'Cliente creado', detail: data.nombre, life: 2000 })
+}
+
+function completarVentaExpress() {
+  const imeisVenta = obtenerImeisParaVenta()
+  if (!imeisVenta.length) return
+  if (!validarPreciosVenta(imeisVenta)) return
+  const cliente = clienteExpressSeleccionado.value || { id: null, nombre: 'AL CONTADO', telefono: '' }
+  const data = {
+    cart: imeisVenta.map((imei: any) => itemPosDesdeImei(imei, precioSeleccionadoImei(imei))), cliente, clienteExpress: '', metodoPago: 'EFECTIVO',
+    descuento_fijo: 0, descuento_porc: 0, descuento_tipo: 'fijo', descuento_valor: 0,
+    nota: '', es_cotizacion: false, venta_express_pendiente: true,
+  }
+  localStorage.setItem('pos_cart_data', JSON.stringify(data))
+  dialogClienteExpress.value = false
+  router.push('/vender')
 }
 
 async function subirImeis() {
@@ -929,6 +1099,7 @@ onMounted(async () => {
         <Button label="Capacidad" icon="pi pi-database" severity="info" size="small" @click="abrirCambiarCapacidadMultiple" />
         <Button label="Prov." icon="pi pi-truck" severity="info" size="small" @click="abrirCambiarProveedorMultiple" />
         <Button label="Almacen" icon="pi pi-warehouse" severity="success" size="small" @click="abrirCambiarAlmacenMultiple" />
+        <Button label="Vender / Carrito" icon="pi pi-shopping-cart" severity="success" size="small" @click="abrirAccionVentaMultiple" />
         <Button label="Imprimir Etiqueta" icon="pi pi-print" severity="warn" size="small" @click="abrirImprimirEtiqueta" />
         <Button label="Eliminar" icon="pi pi-trash" severity="danger" size="small" @click="confirmarBorrarMultiple" />
         <Button icon="pi pi-times" severity="secondary" text rounded size="small" @click="selectedImeis = []" v-tooltip="'Limpiar seleccion'" />
@@ -948,13 +1119,9 @@ onMounted(async () => {
         @row-click="abrirEditar($event.data)"
       >
         <Column selectionMode="multiple" headerStyle="width: 3rem" />
-        <Column header="Acciones" style="width: 10rem">
+        <Column header="Acciones" style="width: 5rem">
           <template #body="{ data }">
-            <div class="flex gap-1">
-              <Button icon="pi pi-print" severity="warn" text rounded size="small" @click.stop="abrirImprimirEtiquetaIndividual(data)" v-tooltip="'Imprimir etiqueta'" />
-              <Button icon="pi pi-pencil" severity="info" text rounded size="small" @click.stop="abrirEditar(data)" v-tooltip="'Editar'" />
-              <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click.stop="confirmarBorrar(data)" v-tooltip="'Eliminar'" />
-            </div>
+            <Button icon="pi pi-ellipsis-v" severity="secondary" text rounded size="small" @click.stop="abrirMenuAccionesImei($event, data)" v-tooltip="'Acciones'" />
           </template>
         </Column>
         <Column field="nombre" header="IMEI" sortable style="width: 10rem" />
@@ -982,6 +1149,13 @@ onMounted(async () => {
         <Column field="costo" header="Costo" sortable style="width: 7rem">
           <template #body="{ data }">
             {{ data.costo ? `$${data.costo.toFixed(2)}` : '$0.00' }}
+          </template>
+        </Column>
+        <Column header="Ganancia" style="width: 7rem">
+          <template #body="{ data }">
+            <span :class="Number(data.precio_venta || 0) - Number(data.costo || 0) >= 0 ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : 'text-red-600 dark:text-red-400 font-semibold'">
+              ${{ (Number(data.precio_venta || 0) - Number(data.costo || 0)).toFixed(2) }}
+            </span>
           </template>
         </Column>
 
@@ -1012,6 +1186,15 @@ onMounted(async () => {
             </div>
             <div class="font-bold text-primary text-xs">${{ (imei.precio_venta || 0).toFixed(2) }}</div>
             <div class="flex gap-1 mt-auto pt-1 border-t border-surface-100 dark:border-surface-700">
+              <Button
+                icon="pi pi-shopping-cart"
+                severity="success"
+                text
+                rounded
+                size="small"
+                @click="abrirAccionVenta(imei)"
+                v-tooltip="'Vender o agregar al carrito'"
+              />
               <Button
                 icon="pi pi-print"
                 severity="warn"
@@ -1044,6 +1227,77 @@ onMounted(async () => {
         </div>
       </div>
     </Fieldset>
+    <Menu ref="imeiActionMenu" :model="imeiActionItems" popup appendTo="body" />
+
+    <Dialog v-model:visible="dialogAccionVenta" header="Vender IMEI" modal :style="{ width: 'min(28rem, 95vw)' }">
+      <div class="space-y-4 pt-1">
+        <div class="rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3">
+          <template v-if="imeisParaVenta.length === 1">
+            <p class="font-semibold">{{ imeiParaVenta?.telefono_nombre }}</p>
+            <p class="text-xs text-surface-500 font-mono">IMEI: {{ imeiParaVenta?.nombre }}</p>
+          </template>
+          <template v-else>
+            <p class="font-semibold">{{ imeisParaVenta.length }} IMEIs seleccionados</p>
+            <p class="text-xs text-surface-500">Se venderan o agregaran juntos al carrito.</p>
+          </template>
+        </div>
+        <div class="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1">
+          <div v-for="imei in imeisParaVenta" :key="imei.id" class="rounded-lg border border-surface-200 dark:border-surface-700 p-2.5">
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <div class="min-w-0"><p class="font-medium text-sm truncate">{{ imei.telefono_nombre }}</p><p class="text-xs text-surface-400 font-mono truncate">{{ imei.nombre }}</p></div>
+              <span class="font-semibold text-primary text-sm">${{ precioSeleccionadoImei(imei).toFixed(2) }}</span>
+            </div>
+            <InputNumber v-model="preciosImeiVenta[imei.id]" mode="currency" currency="USD" locale="en-US" fluid inputClass="text-sm" />
+            <div class="flex gap-1 mt-2">
+              <Button label="Venta" size="small" text @click="usarPrecioImei(imei, imei.precio_venta)" />
+              <Button label="Min." size="small" text severity="warn" @click="usarPrecioImei(imei, imei.precio_min)" />
+              <Button label="Mayor" size="small" text severity="success" @click="usarPrecioImei(imei, imei.precio_xmayor)" />
+            </div>
+          </div>
+        </div>
+        <div class="flex justify-between font-bold border-t border-surface-200 dark:border-surface-700 pt-2">
+          <span>Total</span>
+          <span class="text-primary">${{ imeisParaVenta.reduce((total, imei) => total + precioSeleccionadoImei(imei), 0).toFixed(2) }}</span>
+        </div>
+        <p class="text-sm text-surface-500">Elige cómo deseas continuar con este equipo.</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Button label="Vender express" icon="pi pi-bolt" severity="success" class="!justify-start !py-4" @click="abrirClienteVentaExpress" />
+          <Button label="Agregar al carrito" icon="pi pi-cart-plus" outlined class="!justify-start !py-4" @click="agregarAlCarritoPos" />
+        </div>
+      </div>
+      <template #footer><Button label="Cancelar" severity="secondary" text @click="dialogAccionVenta = false" /></template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogClienteExpress" header="Cliente para venta express" modal :style="{ width: 'min(30rem, 95vw)' }">
+      <div class="space-y-3 pt-1">
+        <div class="flex items-center justify-between p-3 rounded-lg border border-primary-200 bg-primary-50 dark:bg-primary-900/20">
+          <div><p class="font-semibold text-sm">{{ clienteExpressSeleccionado?.nombre }}</p><p class="text-xs text-surface-500">Cliente seleccionado</p></div>
+          <Button label="Al contado" size="small" text @click="seleccionarClienteExpress({ id: null, nombre: 'AL CONTADO', telefono: '' })" />
+        </div>
+        <InputText v-model="busquedaClienteExpress" placeholder="Buscar por nombre, teléfono o RNC..." fluid />
+        <div class="max-h-56 overflow-y-auto flex flex-col gap-1">
+          <button v-for="cliente in clientesExpressFiltrados" :key="cliente.id" type="button" class="text-left p-2.5 rounded-lg border transition-colors" :class="clienteExpressSeleccionado?.id === cliente.id ? 'border-primary bg-primary-50 dark:bg-primary-900/20' : 'border-surface-200 dark:border-surface-700 hover:border-primary-300'" @click="seleccionarClienteExpress(cliente)">
+            <p class="font-medium text-sm">{{ cliente.nombre }}</p><p class="text-xs text-surface-400">{{ cliente.telefono || 'Sin teléfono' }}</p>
+          </button>
+          <p v-if="clientesExpressFiltrados.length === 0" class="text-center py-4 text-sm text-surface-400">No se encontraron clientes.</p>
+        </div>
+        <Button label="Nuevo cliente" icon="pi pi-user-plus" severity="info" text class="w-full" @click="abrirNuevoClienteExpress" />
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogClienteExpress = false" />
+        <Button label="Completar venta express" icon="pi pi-check" @click="completarVentaExpress" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogNuevoClienteExpress" header="Nuevo cliente" modal :style="{ width: 'min(26rem, 95vw)' }">
+      <div class="flex flex-col gap-3 pt-1">
+        <div><label class="text-sm font-semibold">Nombre *</label><InputText v-model="nuevoClienteExpress.nombre" fluid class="uppercase" /></div>
+        <div><label class="text-sm font-semibold">Teléfono</label><InputText v-model="nuevoClienteExpress.telefono" fluid /></div>
+        <div><label class="text-sm font-semibold">RNC / Cédula</label><InputText v-model="nuevoClienteExpress.rnc" fluid /></div>
+        <div><label class="text-sm font-semibold">Dirección</label><InputText v-model="nuevoClienteExpress.direccion" fluid class="uppercase" /></div>
+      </div>
+      <template #footer><Button label="Cancelar" severity="secondary" text @click="dialogNuevoClienteExpress = false" /><Button label="Guardar y seleccionar" icon="pi pi-check" @click="guardarNuevoClienteExpress" /></template>
+    </Dialog>
 
     <Dialog
       v-model:visible="dialogVisible"

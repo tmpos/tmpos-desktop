@@ -147,6 +147,7 @@ function createTables() {
     rnc TEXT DEFAULT '',
     activo TEXT DEFAULT 'ACTIVO',
     nota TEXT DEFAULT '',
+    imagen TEXT DEFAULT '',
     uid TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -200,6 +201,41 @@ function createTables() {
     categoria INTEGER,
     proveedor_id INTEGER DEFAULT 0,
     uid TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS catalogo_cuentas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    codigo TEXT NOT NULL UNIQUE,
+    nombre TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    subtipo TEXT DEFAULT '',
+    naturaleza TEXT DEFAULT 'DEUDORA',
+    saldo_inicial REAL DEFAULT 0,
+    estado TEXT DEFAULT 'ACTIVA',
+    descripcion TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+  db.run(`INSERT OR IGNORE INTO catalogo_cuentas (codigo,nombre,tipo,subtipo,naturaleza) VALUES
+    ('1101','Caja General','ACTIVO','CORRIENTE','DEUDORA'),('1102','Bancos','ACTIVO','CORRIENTE','DEUDORA'),('1103','Cuentas por Cobrar','ACTIVO','CORRIENTE','DEUDORA'),('1201','Inventario','ACTIVO','CORRIENTE','DEUDORA'),
+    ('2101','Cuentas por Pagar','PASIVO','CORRIENTE','ACREEDORA'),('3101','Capital','PATRIMONIO','CAPITAL','ACREEDORA'),
+    ('4101','Ventas','INGRESOS','OPERACIONALES','ACREEDORA'),('5101','Costo de Ventas','GASTOS','OPERACIONALES','DEUDORA'),('5201','Gastos Operativos','GASTOS','OPERACIONALES','DEUDORA')`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS perdidas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipo TEXT NOT NULL,
+    referencia_id INTEGER NOT NULL,
+    nombre TEXT DEFAULT '',
+    codigo TEXT DEFAULT '',
+    cantidad INTEGER DEFAULT 1,
+    costo REAL DEFAULT 0,
+    motivo TEXT DEFAULT '',
+    fecha TEXT DEFAULT '',
+    almacen_id INTEGER DEFAULT 0,
+    estado TEXT DEFAULT 'ACTIVA',
+    detalle TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`)
@@ -292,6 +328,7 @@ function createTables() {
     impuesto REAL DEFAULT 0,
     descuento REAL DEFAULT 0,
     subtotal REAL DEFAULT 0,
+    costo REAL DEFAULT 0,
     total REAL DEFAULT 0,
     ganancia REAL DEFAULT 0,
     financiera TEXT DEFAULT '',
@@ -574,6 +611,13 @@ function migrateTables() {
   )
   if (!empresaColumns.has('encargado')) {
     db.run(`ALTER TABLE empresa ADD COLUMN encargado TEXT DEFAULT ''`)
+  }
+  const facturasInfo = db.exec('PRAGMA table_info("facturas")')
+  const facturasColumns = new Set(
+    (facturasInfo[0]?.values || []).map((row: any[]) => String(row[1]))
+  )
+  if (!facturasColumns.has('costo')) {
+    db.run('ALTER TABLE facturas ADD COLUMN costo REAL DEFAULT 0')
   }
 }
 

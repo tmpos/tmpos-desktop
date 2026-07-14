@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth.store'
 import OrdenesComp from '@/components/taller/OrdenesComp.vue'
 import TecnicosComp from '@/components/taller/TecnicosComp.vue'
 import PiezasComp from '@/components/taller/PiezasComp.vue'
+import GarantiasComp from '@/components/ventas/GarantiasComp.vue'
 import ReporteTallerComp from '@/components/taller/ReporteTallerComp.vue'
 import Toast from 'primevue/toast'
 import InputText from 'primevue/inputtext'
@@ -27,6 +28,7 @@ const allItems: SubMenuItem[] = [
   { label: 'Orden Express', icon: 'pi pi-bolt', key: 'orden-express' },
   { label: 'Piezas', icon: 'pi pi-objects-column', key: 'piezas' },
   { label: 'Tecnicos', icon: 'pi pi-users', key: 'tecnicos' },
+  { label: 'Garantias', icon: 'pi pi-shield', key: 'garantias' },
   { label: 'Reporte de Taller', icon: 'pi pi-file-export', key: 'reporte' },
 ]
 
@@ -36,6 +38,7 @@ const components: Record<string, any> = {
   ordenes: OrdenesComp,
   piezas: PiezasComp,
   tecnicos: TecnicosComp,
+  garantias: GarantiasComp,
   reporte: ReporteTallerComp,
 }
 

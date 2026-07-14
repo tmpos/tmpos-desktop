@@ -144,7 +144,7 @@ const form = ref({
   no_factura: '', nombre_cliente: '', telefono_cliente: '', cod_cliente: '',
   tipo_factura: 'FACTURA_VENTA', comprobante: '', metodo_pago: 'EFECTIVO',
   efectivo: 0, tarjeta: 0, transferencia: 0, cheque: 0,
-  total: 0, subtotal: 0, impuesto: 0, descuento: 0, ganancia: 0,
+  total: 0, subtotal: 0, costo: 0, impuesto: 0, descuento: 0, ganancia: 0,
   estado_factura: 'PENDIENTE', fecha_emision: new Date(), fecha_estado: new Date(),
   hora: '', vendedor: '', cajero: '', usuario: '', canal_venta: 'LOCAL',
   nota: '', productos: '', otro: '', token: '', financiera: '',
@@ -218,7 +218,7 @@ async function cargarDatos() {
           metodo_pago: f.metodo_pago || 'EFECTIVO', tarjeta: f.tarjeta || 0,
           transferencia: f.transferencia || 0, efectivo: f.efectivo || 0,
           canal_venta: f.canal_venta || 'LOCAL', fecha_emision: parseDate(f.fecha_emision),
-          impuesto: f.impuesto || 0, descuento: f.descuento || 0, subtotal: f.subtotal || 0,
+          impuesto: f.impuesto || 0, descuento: f.descuento || 0, subtotal: f.subtotal || 0, costo: f.costo || 0,
           total: f.total || 0, ganancia: f.ganancia || 0, financiera: f.financiera || '',
           estado_factura: f.estado_factura || 'PENDIENTE',
           fecha_estado: parseDate(f.fecha_estado), mes: f.mes || '', year: f.year || '',
@@ -269,7 +269,7 @@ async function guardar() {
       tarjeta: form.value.tarjeta || 0, transferencia: form.value.transferencia || 0,
       efectivo: form.value.efectivo || 0, canal_venta: form.value.canal_venta,
       fecha_emision: dateToStr(form.value.fecha_emision), impuesto: form.value.impuesto || 0,
-      descuento: form.value.descuento || 0, subtotal: form.value.subtotal || 0,
+      descuento: form.value.descuento || 0, subtotal: form.value.subtotal || 0, costo: form.value.costo || 0,
       total: form.value.total || 0, ganancia: form.value.ganancia || 0,
       financiera: form.value.financiera, estado_factura: form.value.estado_factura,
       fecha_estado: dateToStr(form.value.fecha_estado), mes: form.value.mes, year: form.value.year,
@@ -297,28 +297,46 @@ onMounted(cargarDatos)
 </script>
 
 <template>
-  <div class="p-4 sm:p-6 max-w-4xl mx-auto">
+  <div class="p-4 sm:p-6 max-w-6xl mx-auto space-y-5">
     <Toast />
-    <div class="flex items-center justify-between mb-4">
-      <div class="flex items-center gap-3">
-        <Button icon="pi pi-arrow-left" severity="secondary" text @click="router.push('/ventas')" />
-        <h1 class="text-xl font-bold">Editar Factura</h1>
+    <section class="rounded-2xl border border-surface-200 dark:border-surface-700 bg-gradient-to-br from-primary-50 via-surface-0 to-surface-0 dark:from-primary-950/30 dark:via-surface-900 dark:to-surface-900 p-4 sm:p-5 shadow-sm">
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div class="flex items-center gap-3">
+          <Button icon="pi pi-arrow-left" severity="secondary" text rounded @click="router.push('/ventas')" v-tooltip="'Volver a ventas'" />
+          <div>
+            <div class="flex items-center gap-2">
+              <h1 class="text-xl font-bold text-surface-900 dark:text-surface-0">Editar factura</h1>
+              <span class="rounded-full bg-primary-100 px-2 py-0.5 text-[11px] font-bold text-primary-700 dark:bg-primary-900/50 dark:text-primary-200">{{ form.no_factura || 'SIN NUMERO' }}</span>
+            </div>
+            <p class="mt-1 text-sm text-surface-500">Consulta, actualiza e imprime la informacion de la venta.</p>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-1.5">
+          <div class="mr-1 flex items-center rounded-lg border border-surface-200 bg-surface-0 p-0.5 dark:border-surface-700 dark:bg-surface-800">
+            <Button icon="pi pi-angle-double-left" severity="secondary" text rounded size="small" :disabled="indiceActual <= 0" @click="navegar(todosIds[0])" v-tooltip="'Primera'" />
+            <Button icon="pi pi-angle-left" severity="secondary" text rounded size="small" :disabled="indiceActual <= 0" @click="navegar(todosIds[indiceActual - 1])" v-tooltip="'Anterior'" />
+            <span class="min-w-14 px-1 text-center text-xs font-medium text-surface-500">{{ indiceActual + 1 }} / {{ todosIds.length }}</span>
+            <Button icon="pi pi-angle-right" severity="secondary" text rounded size="small" :disabled="indiceActual >= todosIds.length - 1" @click="navegar(todosIds[indiceActual + 1])" v-tooltip="'Siguiente'" />
+            <Button icon="pi pi-angle-double-right" severity="secondary" text rounded size="small" :disabled="indiceActual >= todosIds.length - 1" @click="navegar(todosIds[todosIds.length - 1])" v-tooltip="'Ultima'" />
+          </div>
+          <Button icon="pi pi-print" severity="secondary" outlined rounded @click="imprimirTicket" v-tooltip="'Imprimir ticket'" />
+          <Button icon="pi pi-file-pdf" severity="danger" outlined rounded @click="imprimirPdf" v-tooltip="'Generar PDF'" />
+          <Button label="Guardar cambios" icon="pi pi-check" :loading="guardando" :disabled="facturaBloqueadaFiscal" @click="guardar" />
+        </div>
       </div>
-      <div class="flex items-center gap-1">
-        <Button icon="pi pi-angle-double-left" severity="secondary" text rounded size="small" :disabled="indiceActual <= 0" @click="navegar(todosIds[0])" v-tooltip="'Primera'" />
-        <Button icon="pi pi-angle-left" severity="secondary" text rounded size="small" :disabled="indiceActual <= 0" @click="navegar(todosIds[indiceActual - 1])" v-tooltip="'Anterior'" />
-        <span class="text-xs text-surface-500 mx-1">{{ indiceActual + 1 }} / {{ todosIds.length }}</span>
-        <Button icon="pi pi-angle-right" severity="secondary" text rounded size="small" :disabled="indiceActual >= todosIds.length - 1" @click="navegar(todosIds[indiceActual + 1])" v-tooltip="'Siguiente'" />
-        <Button icon="pi pi-angle-double-right" severity="secondary" text rounded size="small" :disabled="indiceActual >= todosIds.length - 1" @click="navegar(todosIds[todosIds.length - 1])" v-tooltip="'Ultima'" />
-        <Button icon="pi pi-print" severity="info" text rounded size="small" @click="imprimirTicket" v-tooltip="'Imprimir ticket'" />
-        <Button icon="pi pi-file-pdf" severity="danger" text rounded size="small" @click="imprimirPdf" v-tooltip="'Ver PDF'" />
-        <Button label="Actualizar" icon="pi pi-check" :loading="guardando" :disabled="facturaBloqueadaFiscal" @click="guardar" class="ml-2" />
+    </section>
+
+    <div v-if="facturaBloqueadaFiscal" class="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+      <i class="pi pi-lock mt-0.5"></i>
+      <span>Esta factura electronica fue aceptada por DGII. Solo puede reimprimirse o corregirse con una nota de credito.</span>
+    </div>
+
+    <section class="rounded-2xl border border-surface-200 bg-surface-0 p-4 shadow-sm dark:border-surface-700 dark:bg-surface-900 sm:p-5">
+      <div class="mb-4 flex items-center gap-2">
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-950/50 dark:text-blue-300"><i class="pi pi-file-edit"></i></span>
+        <div><h2 class="font-semibold">Datos de la factura</h2><p class="text-xs text-surface-500">Identificacion, cliente y estado de la venta.</p></div>
       </div>
-    </div>
-    <div v-if="facturaBloqueadaFiscal" class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
-      Esta factura electronica fue aceptada por DGII. Solo puede reimprimirse o corregirse con nota de credito.
-    </div>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">No. Factura</label>
         <InputText v-model="form.no_factura" placeholder="No. factura" :disabled="facturaBloqueadaFiscal" fluid />
@@ -355,47 +373,75 @@ onMounted(cargarDatos)
         <label class="font-semibold text-sm">Estado</label>
         <Select v-model="form.estado_factura" :options="estadosFactura" optionLabel="label" optionValue="value" :disabled="facturaBloqueadaFiscal" fluid />
       </div>
+      </div>
+    </section>
+
+    <div class="grid grid-cols-1 gap-5 lg:grid-cols-5">
+      <section class="rounded-2xl border border-surface-200 bg-surface-0 p-4 shadow-sm dark:border-surface-700 dark:bg-surface-900 sm:p-5 lg:col-span-3">
+        <div class="mb-4 flex items-center gap-2">
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-100 text-violet-600 dark:bg-violet-950/50 dark:text-violet-300"><i class="pi pi-credit-card"></i></span>
+          <div><h2 class="font-semibold">Distribucion del pago</h2><p class="text-xs text-surface-500">Registra los montos recibidos por cada metodo.</p></div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Efectivo</label>
-        <InputNumber v-model="form.efectivo" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.efectivo" :disabled="facturaBloqueadaFiscal" mode="currency" currency="DOP" locale="es-DO" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Tarjeta</label>
-        <InputNumber v-model="form.tarjeta" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.tarjeta" :disabled="facturaBloqueadaFiscal" mode="currency" currency="DOP" locale="es-DO" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Transferencia</label>
-        <InputNumber v-model="form.transferencia" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.transferencia" :disabled="facturaBloqueadaFiscal" mode="currency" currency="DOP" locale="es-DO" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Cheque</label>
-        <InputNumber v-model="form.cheque" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.cheque" :disabled="facturaBloqueadaFiscal" mode="currency" currency="DOP" locale="es-DO" fluid @focus="(e: any) => e.target.select()" />
       </div>
+        </div>
+      </section>
+
+      <section class="rounded-2xl border border-surface-200 bg-surface-0 p-4 shadow-sm dark:border-surface-700 dark:bg-surface-900 sm:p-5 lg:col-span-2">
+        <div class="mb-4 flex items-center gap-2">
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-300"><i class="pi pi-chart-line"></i></span>
+          <div><h2 class="font-semibold">Resumen financiero</h2><p class="text-xs text-surface-500">Totales y rentabilidad de la factura.</p></div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-1">
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Subtotal</label>
-        <InputNumber v-model="form.subtotal" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.subtotal" :disabled="facturaBloqueadaFiscal" mode="currency" currency="DOP" locale="es-DO" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Total</label>
-        <InputNumber v-model="form.total" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.total" :disabled="facturaBloqueadaFiscal" mode="currency" currency="DOP" locale="es-DO" fluid @focus="(e: any) => e.target.select()" />
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="font-semibold text-sm">Costo</label>
+        <InputNumber v-model="form.costo" :disabled="facturaBloqueadaFiscal" mode="currency" currency="DOP" locale="es-DO" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Impuesto</label>
-        <InputNumber v-model="form.impuesto" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.impuesto" :disabled="facturaBloqueadaFiscal" mode="currency" currency="DOP" locale="es-DO" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Descuento</label>
-        <InputNumber v-model="form.descuento" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.descuento" :disabled="facturaBloqueadaFiscal" mode="currency" currency="DOP" locale="es-DO" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Ganancia</label>
-        <InputNumber v-model="form.ganancia" :disabled="facturaBloqueadaFiscal" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.ganancia" :disabled="facturaBloqueadaFiscal" mode="currency" currency="DOP" locale="es-DO" fluid @focus="(e: any) => e.target.select()" />
       </div>
+        </div>
+      </section>
     </div>
 
-    <div v-if="productosParsed.length" class="mt-4">
-      <h3 class="font-bold text-sm mb-2">Productos ({{ productosParsed.length }})</h3>
-      <DataTable :value="productosParsed" stripedRows size="small" responsiveLayout="scroll">
+    <section v-if="productosParsed.length" class="overflow-hidden rounded-2xl border border-surface-200 bg-surface-0 shadow-sm dark:border-surface-700 dark:bg-surface-900">
+      <div class="flex items-center justify-between border-b border-surface-200 px-4 py-4 dark:border-surface-700 sm:px-5">
+        <div class="flex items-center gap-2"><span class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-950/50 dark:text-amber-300"><i class="pi pi-shopping-bag"></i></span><div><h2 class="font-semibold">Productos</h2><p class="text-xs text-surface-500">Detalle de los articulos facturados.</p></div></div>
+        <span class="rounded-full bg-surface-100 px-2.5 py-1 text-xs font-semibold text-surface-600 dark:bg-surface-800 dark:text-surface-300">{{ productosParsed.length }} items</span>
+      </div>
+      <DataTable :value="productosParsed" stripedRows size="small" responsiveLayout="scroll" class="text-sm">
         <Column field="nombre" header="Producto">
           <template #body="{ data }">{{ data.nombre || data.descripcion || data.producto || '—' }}</template>
         </Column>
@@ -407,15 +453,19 @@ onMounted(cargarDatos)
           <template #body="{ data }">${{ Number(data.total || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 }) }}</template>
         </Column>
       </DataTable>
-    </div>
+    </section>
 
-      <div class="flex flex-col gap-1 md:col-span-2">
+    <section class="rounded-2xl border border-surface-200 bg-surface-0 p-4 shadow-sm dark:border-surface-700 dark:bg-surface-900 sm:p-5">
+      <div class="mb-3 flex items-center gap-2"><span class="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-100 text-surface-600 dark:bg-surface-800 dark:text-surface-300"><i class="pi pi-comment"></i></span><h2 class="font-semibold">Notas internas</h2></div>
+      <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Nota</label>
         <textarea v-model="form.nota" :disabled="facturaBloqueadaFiscal" class="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm outline-none focus:ring-2 focus:ring-primary-500 resize-none disabled:opacity-60" rows="2" />
       </div>
+    </section>
 
-    <div class="flex justify-end gap-2 pt-4">
+    <div class="flex justify-end gap-2 pb-2">
       <Button label="Cancelar" severity="secondary" text @click="router.push('/ventas')" />
+      <Button label="Guardar cambios" icon="pi pi-check" :loading="guardando" :disabled="facturaBloqueadaFiscal" @click="guardar" />
     </div>
 
     <TicketFacturaPrint ref="ticketPrintRef" />

@@ -19,6 +19,7 @@ import Toast from 'primevue/toast'
 
 import { envioElectron } from '@/funciones/funciones.js'
 import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
+import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 
 const toast = useToast()
 const ordenes = ref<any[]>([])
@@ -325,6 +326,14 @@ async function subirImagen() {
   try {
     const uid = await uploadImage(file, 'ordenes_taller')
     form.value.imagen = uid
+    if (isEditing.value && selectedOrden.value?.id) {
+      const actualizado = await window.db.update('ordenes_taller', selectedOrden.value.id, { imagen: uid })
+      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
+      selectedOrden.value.imagen = uid
+      const local = ordenes.value.find((orden: any) => orden.id === selectedOrden.value.id)
+      if (local) local.imagen = uid
+      if (isOnline()) await pushLocalRowToCloud('ordenes_taller', selectedOrden.value.id)
+    }
     toast.add({ severity: 'success', summary: 'Imagen subida', life: 2000 })
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo subir la imagen', life: 4000 })
@@ -340,6 +349,10 @@ async function eliminarImagen() {
     await deleteImage(form.value.imagen)
   } catch {}
   form.value.imagen = ''
+  if (isEditing.value && selectedOrden.value?.id) {
+    await window.db.update('ordenes_taller', selectedOrden.value.id, { imagen: '' })
+    if (isOnline()) await pushLocalRowToCloud('ordenes_taller', selectedOrden.value.id)
+  }
 }
 
 function imagenUrl(uid: string | null | undefined): string | null {

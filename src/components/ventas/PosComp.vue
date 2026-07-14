@@ -40,7 +40,7 @@ import { useSpotlight } from '@/composables/useSpotlight'
 import { useStockAlertas } from '@/composables/useStockAlertas'
 import { useMiniDashboard } from '@/composables/useMiniDashboard'
 import { useLockScreen } from '@/composables/useLockScreen'
-import { useDevoluciones } from '@/composables/useDevoluciones'
+import { useDevoluciones, reintegrarInventarioFactura } from '@/composables/useDevoluciones'
 import { useBarcodeEntry } from '@/composables/useBarcodeEntry'
 import { useCausaDescuento } from '@/composables/useCausaDescuento'
 import { useCustomerDisplay } from '@/composables/useCustomerDisplay'
@@ -167,6 +167,7 @@ const modosAgregarProductoFactCoti = [
 const busquedaProductoDbFactCoti = ref('')
 const productoDbFactCotiSeleccionado = ref<any>(null)
 const confirmPago = ref(false)
+const ventaExpressPendiente = ref(false)
 const bancosPos = ref<any[]>([])
 const bancoPosSeleccionado = ref<any>(null)
 const cargandoBancosPos = ref(false)
@@ -503,6 +504,7 @@ function guardarEstado() {
     es_cotizacion: esCotizacion.value,
     factura_editando: facturaEditandoPos.value,
     productos_originales_editando: productosOriginalesEditandoPos.value,
+    venta_express_pendiente: ventaExpressPendiente.value,
   }
   localStorage.setItem(POS_STORAGE_KEY, JSON.stringify(data))
 }
@@ -524,6 +526,7 @@ async function cargarEstado() {
     if (data.es_cotizacion != null) esCotizacion.value = data.es_cotizacion
     if (data.factura_editando) facturaEditandoPos.value = data.factura_editando
     if (Array.isArray(data.productos_originales_editando)) productosOriginalesEditandoPos.value = data.productos_originales_editando
+    if (data.venta_express_pendiente) ventaExpressPendiente.value = true
   } catch (e) {
     console.error('Error loading POS state:', e)
   }
@@ -547,6 +550,16 @@ const comisionPorcentaje = computed(() => {
   if (metodoPago.value === 'CREDITO' || metodoPago.value === 'MIXTO') return 0
   return Number(metodoPagoSelected.value?.porcentaje || 0)
 })
+const comisionMixtaPorcentaje = computed(() => {
+  if (String(metodoPago.value).toUpperCase() !== 'MIXTO') return 0
+  const tarjeta = metodosPagoDB.value.find((m: any) => String(m.nombre || '').toUpperCase() === 'TARJETA')
+  return Number(tarjeta?.porcentaje || 0)
+})
+const comisionMixtaMonto = computed(() => Number(mixtoTarjeta.value || 0) * (comisionMixtaPorcentaje.value / 100))
+const montoTarjetaMixtoTotal = computed(() => Number(mixtoTarjeta.value || 0) + comisionMixtaMonto.value)
+const totalDistribuidoMixto = computed(() =>
+  Number(mixtoEfectivo.value || 0) + montoTarjetaMixtoTotal.value + totalTransferenciasMixto() + Number(mixtoCheque.value || 0)
+)
 const cartConComision = computed(() => {
   const pct = comisionPorcentaje.value
   if (pct <= 0) return cart.value
@@ -671,9 +684,9 @@ const total = computed(() => {
     : descuentoFijo.value
   const base = Math.max(0, subtotal.value - Math.min(desc, subtotal.value))
   if (impuestoIncluido.value === 0) {
-    return base + (base * (impuestoPorcentaje.value / 100))
+    return base + (base * (impuestoPorcentaje.value / 100)) + comisionMixtaMonto.value
   }
-  return base
+  return base + comisionMixtaMonto.value
 })
 
 const impuestoMonto = computed(() => {
@@ -708,6 +721,12 @@ const gananciaTotal = computed(() => {
   return cartConComision.value.reduce((sum, item) => {
     const costo = item.costo || 0
     return sum + ((item.precio - costo) * item.cantidad)
+  }, 0) + comisionMixtaMonto.value
+})
+
+const costoTotal = computed(() => {
+  return cart.value.reduce((sum, item) => {
+    return sum + (Number(item.costo || 0) * Number(item.cantidad || 1))
   }, 0)
 })
 
@@ -1779,6 +1798,7 @@ function recalcularTotalesProductosFactCoti(productos: any[]) {
   return {
     subtotal: subtotalNuevo,
     total: subtotalNuevo,
+    costo: costoTotal,
     ganancia: subtotalNuevo - costoTotal,
   }
 }
@@ -1795,6 +1815,7 @@ async function guardarProductosFactCoti(productos: any[]) {
       productos: JSON.stringify(productos),
       subtotal: totales.subtotal,
       total: totales.total,
+      costo: totales.costo,
       ganancia: totales.ganancia,
     })
 
@@ -2278,6 +2299,9 @@ async function eliminarFactCotiSeleccionada() {
       return
     }
 
+    if (tipoRegistroFactCoti(factura) === 'factura') {
+      await reintegrarInventarioFactura(factura.productos)
+    }
     const res = await window.db.delete('facturas', factura.id)
     if (!res.success) {
       factCotiOtpError.value = res.error || `No se pudo eliminar ${factura.no_factura || factura.id}`
@@ -3573,8 +3597,8 @@ async function confirmarVenta() {
     toast.add({ severity: 'warn', summary: 'Carrito vacio', detail: 'Agrega productos al carrito', life: 3000 })
     return
   }
-  if (total.value <= 0) {
-    toast.add({ severity: 'warn', summary: 'Total invalido', detail: 'El total debe ser mayor a 0', life: 3000 })
+  if (total.value < 0) {
+    toast.add({ severity: 'warn', summary: 'Total invalido', detail: 'El total no puede ser negativo', life: 3000 })
     return
   }
   if (!esCotizacion.value && facturacionElectronicaActiva.value && !facturaEditandoPos.value?.id) {
@@ -3638,11 +3662,7 @@ watch(confirmPago, async (val) => {
 
 function autoCalcularMixto() {
   if (!dialogMixto.value) return
-  const ef = Number(mixtoEfectivo.value) || 0
-  const tj = Number(mixtoTarjeta.value) || 0
-  const tr = totalTransferenciasMixto()
-  const ch = Number(mixtoCheque.value) || 0
-  const suma = ef + tj + tr + ch
+  const suma = totalDistribuidoMixto.value
   if (suma >= total.value) return
   const restante = total.value - suma
   const orden = ['efectivo', 'tarjeta', 'transferencia', 'cheque']
@@ -3655,7 +3675,7 @@ function autoCalcularMixto() {
       break
     }
     if (metodosMixto.value[key] && campos[key] && Number(campos[key].value) === 0) {
-      campos[key].value = restante
+      campos[key].value = key === 'tarjeta' ? restante / (1 + (comisionMixtaPorcentaje.value / 100)) : restante
       break
     }
   }
@@ -3679,17 +3699,13 @@ function bancoNombrePos(id: any): string {
   return bancosPos.value.find((b: any) => Number(b.id) === Number(id))?.nombre || ''
 }
 
-watch([mixtoEfectivo, mixtoTarjeta, mixtoTransferencia, mixtoCheque, transferenciasMixto], () => {
+watch([mixtoEfectivo, mixtoTarjeta, mixtoTransferencia, mixtoCheque, transferenciasMixto, metodosMixto], () => {
   mixtoTransferencia.value = totalTransferenciasMixto()
   autoCalcularMixto()
 }, { deep: true })
 
 function confirmarMixto() {
-  const ef = Number(mixtoEfectivo.value) || 0
-  const tj = Number(mixtoTarjeta.value) || 0
-  const tr = totalTransferenciasMixto()
-  const ch = Number(mixtoCheque.value) || 0
-  const suma = ef + tj + tr + ch
+  const suma = totalDistribuidoMixto.value
   if (suma <= 0) {
     mixtoError.value = 'Debes ingresar al menos un metodo de pago'
     return
@@ -4032,7 +4048,7 @@ async function completarVenta() {
       productos: productosJson,
       metodo_pago: metodoPago.value,
       efectivo: metodoPago.value === 'EFECTIVO' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoEfectivo.value) || 0 : 0,
-      tarjeta: metodoPago.value === 'TARJETA' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoTarjeta.value) || 0 : 0,
+      tarjeta: metodoPago.value === 'TARJETA' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? montoTarjetaMixtoTotal.value : 0,
       transferencia: metodoPago.value === 'TRANSFERENCIA' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? totalTransferenciasMixto() : 0,
       cheque: String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoCheque.value) || 0 : 0,
       canal_venta: 'LOCAL',
@@ -4040,8 +4056,9 @@ async function completarVenta() {
       hora: horaStr,
       impuesto: impuestoMonto.value,
       descuento: descuento.value,
-      financiera: comisionPorcentaje.value ? JSON.stringify({ comision_porcentaje: comisionPorcentaje.value, metodo: metodoPago.value }) : '',
+      financiera: (comisionPorcentaje.value || comisionMixtaPorcentaje.value) ? JSON.stringify({ comision_porcentaje: comisionPorcentaje.value || comisionMixtaPorcentaje.value, monto_comision: comisionMixtaMonto.value, metodo: metodoPago.value }) : '',
       subtotal: subtotal.value,
+      costo: costoTotal.value,
       total: total.value,
       ganancia: gananciaTotal.value,
       estado_factura: 'PAGADA',
@@ -4266,7 +4283,7 @@ async function completarVenta() {
       nota: (nota.value.trim() + (notaCreditoUsada.value ? ' | ' + notaCreditoUsada.value : '')).toUpperCase(),
       metodo_pago: metodoPago.value,
       efectivo: String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoEfectivo.value) || 0 : metodoPago.value === 'EFECTIVO' ? total.value : 0,
-      tarjeta: String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoTarjeta.value) || 0 : metodoPago.value === 'TARJETA' ? total.value : 0,
+      tarjeta: String(metodoPago.value).toLowerCase() === 'mixto' ? montoTarjetaMixtoTotal.value : metodoPago.value === 'TARJETA' ? total.value : 0,
       transferencia: String(metodoPago.value).toLowerCase() === 'mixto' ? totalTransferenciasMixto() : metodoPago.value === 'TRANSFERENCIA' ? total.value : 0,
       cheque: String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoCheque.value) || 0 : metodoPago.value === 'CHEQUE' ? total.value : 0,
       banco_nombre: needsBankSelection.value ? bancosPos.value.find((b: any) => b.id === bancoPosSeleccionado.value)?.nombre : '',
@@ -4535,12 +4552,12 @@ onMounted(async () => {
     'ctrl+n': () => { abrirProductoPersonalizado(); sonidos.playClick() },
     'ctrl+l': () => { if (cart.value.length > 0) { limpiarCarrito(); sonidos.playClick() } },
     'ctrl+d': () => { abrirDialogDescuento(); sonidos.playClick() },
-    'ctrl+s': () => { if (cart.value.length > 0 && total.value > 0) { confirmarVenta(); sonidos.playClick() } },
+    'ctrl+s': () => { if (cart.value.length > 0) { confirmarVenta(); sonidos.playClick() } },
     'ctrl+p': () => { if (cart.value.length > 0) { abrirCambiarPrecio(cart.value[0], 0); sonidos.playClick() } },
     'ctrl+h': () => { holdearVenta() },
     'f2': () => { document.querySelector<HTMLInputElement>('input[placeholder*="Buscar producto"]')?.focus() },
     'f3': () => { dialogCliente.value = true; sonidos.playClick() },
-    'f4': () => { if (cart.value.length > 0 && total.value > 0) { confirmarVenta(); sonidos.playClick() } },
+    'f4': () => { if (cart.value.length > 0) { confirmarVenta(); sonidos.playClick() } },
     'f5': () => { sonidos.playClick() },
     'f6': () => { abrirDialogDescuento(); sonidos.playClick() },
     'f7': () => { abrirProductoPersonalizado(); sonidos.playClick() },
@@ -4657,6 +4674,13 @@ onMounted(async () => {
   loading.value = false
 
   if (!noFactura.value) noFactura.value = generarNoFactura()
+
+  if (ventaExpressPendiente.value) {
+    ventaExpressPendiente.value = false
+    metodoPago.value = 'EFECTIVO'
+    montoRecibido.value = total.value
+    await completarVenta()
+  }
 
   try { await caja.verificarTurno() } catch {}
   try { await miniDashboard.cargarDashboard() } catch {}
@@ -5381,7 +5405,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
               <div class="flex items-center gap-1">
                 <Button v-if="cart.length > 0" icon="pi pi-pause-circle" severity="info" text rounded size="small" class="!w-7 !h-7" @click="holdearVenta()" v-tooltip="'Hold (Ctrl+H)'" />
                 <Button icon="pi pi-desktop" severity="secondary" text rounded size="small" class="!w-7 !h-7 hidden lg:inline-flex" @click="customerDisplay.abrirPantallaCliente(cart, total, metodoPago, clienteSeleccionado?.nombre || 'CONSUMIDOR FINAL', montoRecibido, cambio)" v-tooltip="'Pantalla cliente'" />
-                <Button label="Completar" icon="pi pi-check-circle" class="!py-1.5 !text-xs lg:!py-2.5 lg:!text-sm shadow-md" :disabled="cart.length === 0 || total <= 0" @click="confirmarVenta" />
+                <Button label="Completar" icon="pi pi-check-circle" class="!py-1.5 !text-xs lg:!py-2.5 lg:!text-sm shadow-md" :disabled="cart.length === 0" @click="confirmarVenta" />
               </div>
             </div>
             <div class="lg:hidden flex items-center gap-2 px-3 py-1.5">
@@ -5709,6 +5733,10 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
             <span class="text-sm font-medium w-20 shrink-0">Tarjeta</span>
             <InputNumber v-if="metodosMixto.tarjeta" v-model="mixtoTarjeta" :min="0" fluid @focus="(e: any) => e.target.select()" />
           </div>
+          <div v-if="metodosMixto.tarjeta && comisionMixtaPorcentaje > 0" class="flex justify-between text-xs text-amber-700 dark:text-amber-300 px-3 -mt-2">
+            <span>Recargo tarjeta ({{ comisionMixtaPorcentaje }}%)</span>
+            <span class="font-semibold">+${{ formatCurrency(comisionMixtaMonto) }}</span>
+          </div>
           <div class="p-3 rounded-lg border border-surface-200 dark:border-surface-700 space-y-2" :class="metodosMixto.transferencia ? 'border-purple-300 dark:border-purple-700' : ''">
             <div class="flex items-center gap-3">
               <input type="checkbox" v-model="metodosMixto.transferencia" class="w-4 h-4 shrink-0" />
@@ -5757,8 +5785,8 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
 
         <div class="flex justify-between text-sm font-bold border-t border-surface-200 dark:border-surface-700 pt-3">
           <span>Total distribuido</span>
-          <span :class="(Number(mixtoEfectivo) + Number(mixtoTarjeta) + totalTransferenciasMixto() + Number(mixtoCheque)) === total.value ? 'text-green-600' : 'text-red-600'">
-            ${{ formatCurrency((Number(mixtoEfectivo) || 0) + (Number(mixtoTarjeta) || 0) + totalTransferenciasMixto() + (Number(mixtoCheque) || 0)) }}
+          <span :class="Math.abs(totalDistribuidoMixto - total) < 0.01 ? 'text-green-600' : 'text-red-600'">
+            ${{ formatCurrency(totalDistribuidoMixto) }}
           </span>
         </div>
       </div>
@@ -5798,6 +5826,14 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
         <div v-else class="flex justify-between text-xs text-surface-400">
           <span>ITBIS</span>
           <span>Sin impuesto</span>
+        </div>
+        <div class="flex justify-between text-sm pt-1">
+          <span>Costo</span>
+          <span class="text-orange-600 dark:text-orange-400">${{ formatCurrency(costoTotal) }}</span>
+        </div>
+        <div class="flex justify-between text-sm">
+          <span>Ganancia</span>
+          <span class="text-emerald-600 dark:text-emerald-400">${{ formatCurrency(gananciaTotal) }}</span>
         </div>
         <div v-if="comisionPorcentaje > 0" class="flex justify-between text-xs text-amber-600 dark:text-amber-400 pt-1">
           <span>Recargo {{ metodoPago }} ({{ comisionPorcentaje }}%)</span>

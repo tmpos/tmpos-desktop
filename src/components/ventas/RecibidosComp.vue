@@ -13,10 +13,11 @@ import Textarea from 'primevue/textarea'
 import Fieldset from 'primevue/fieldset'
 import TabView from 'primevue/tabview'
 import TabPanel from 'primevue/tabpanel'
+import InputOtp from 'primevue/inputotp'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
-import { envioElectron } from '@/funciones/funciones.js'
+import { envioElectron, encryptarPassword, peticionesFetch } from '@/funciones/funciones.js'
 
 const toast = useToast()
 const recibidos = ref<any[]>([])
@@ -24,8 +25,17 @@ const telefonos = ref<any[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
 const deleteDialogVisible = ref(false)
+const deleteMultipleDialogVisible = ref(false)
 const selectedRecibido = ref<any>(null)
+const recibidosSeleccionados = ref<any[]>([])
+const deleteOtpEnviado = ref(false)
+const deleteOtpEmail = ref('')
+const deleteOtp = ref('')
+const deleteOtpError = ref('')
+const deleteOtpLoading = ref(false)
+const deleteOtpConfirmando = ref(false)
 const busqueda = ref('')
+const estadoFiltro = ref('RECIBIDO')
 const viewMode = ref<'table' | 'cards'>('table')
 const dialogNuevoTelefono = ref(false)
 const nuevoTelefonoForm = ref({ nombre: '' })
@@ -35,7 +45,8 @@ const enviandoTaller = ref(false)
 const publicandoImei = ref(false)
 
 const clientesLista = ref<any[]>([])
-const busquedaCliente = ref('')
+const clienteSeleccionadoBusqueda = ref<any | null>(null)
+const buscandoDocumento = ref(false)
 
 const dialogGenerarNC = ref(false)
 const dialogEnviarTaller = ref(false)
@@ -59,9 +70,11 @@ const formDefault = () => ({
   telefono_modelo: '',
   color: '',
   capacidad: '',
+  precio_venta: 0,
   nota_json: JSON.stringify({
     customer_name: '',
     customer_phone: '',
+    customer_cedula: '',
     credit_note_value: 0,
     credit_note_id: null,
     credit_note_no: null,
@@ -77,17 +90,27 @@ const notaData = computed(() => {
     return {
       customer_name: parsed.customer_name || '',
       customer_phone: parsed.customer_phone || '',
+      customer_cedula: parsed.customer_cedula || '',
       credit_note_value: parsed.credit_note_value || 0,
       credit_note_id: parsed.credit_note_id || null,
       credit_note_no: parsed.credit_note_no || null,
       credit_note_date: parsed.credit_note_date || null,
     }
   } catch {
-    return { customer_name: '', customer_phone: '', credit_note_value: 0, credit_note_id: null, credit_note_no: null, credit_note_date: null }
+    return { customer_name: '', customer_phone: '', customer_cedula: '', credit_note_value: 0, credit_note_id: null, credit_note_no: null, credit_note_date: null }
   }
 })
 
 const busquedaTelefono = ref('')
+
+const estadoOptions = computed(() => {
+  const base = ['RECIBIDO', 'DISPONIBLE', 'EN_GARANTIA']
+  const estados = Array.from(new Set([...base, ...recibidos.value.map((r: any) => estadoRecibido(r)).filter(Boolean)]))
+  return [
+    { label: 'Todos los estados', value: 'TODOS' },
+    ...estados.map((estado: string) => ({ label: estado, value: estado })),
+  ]
+})
 
 function getNotaDataFromImei(imei: any) {
   try {
@@ -95,14 +118,41 @@ function getNotaDataFromImei(imei: any) {
     return {
       customer_name: parsed.customer_name || '',
       customer_phone: parsed.customer_phone || '',
+      customer_cedula: parsed.customer_cedula || '',
       credit_note_value: parsed.credit_note_value || 0,
       credit_note_id: parsed.credit_note_id || null,
       credit_note_no: parsed.credit_note_no || null,
       credit_note_date: parsed.credit_note_date || null,
     }
   } catch {
-    return { customer_name: '', customer_phone: '', credit_note_value: 0, credit_note_id: null, credit_note_no: null, credit_note_date: null }
+    return { customer_name: '', customer_phone: '', customer_cedula: '', credit_note_value: 0, credit_note_id: null, credit_note_no: null, credit_note_date: null }
   }
+}
+
+function tieneNotaRecibido(imei: any): boolean {
+  try {
+    const parsed = JSON.parse(imei.nota || '{}')
+    return Object.prototype.hasOwnProperty.call(parsed, 'customer_name') ||
+      Object.prototype.hasOwnProperty.call(parsed, 'customer_phone') ||
+      Object.prototype.hasOwnProperty.call(parsed, 'credit_note_value') ||
+      Object.prototype.hasOwnProperty.call(parsed, 'credit_note_id') ||
+      Object.prototype.hasOwnProperty.call(parsed, 'credit_note_no') ||
+      Object.prototype.hasOwnProperty.call(parsed, 'cliente_id')
+  } catch {
+    return false
+  }
+}
+
+function esEquipoRecibido(imei: any): boolean {
+  const estado = String(imei.estado || '').toUpperCase()
+  if (['RECIBIDO', 'EN_GARANTIA'].includes(estado)) return true
+  return tieneNotaRecibido(imei)
+}
+
+function estadoRecibido(imei: any): string {
+  const estado = String(imei.estado || '').toUpperCase()
+  if (estado === 'APARTADO' && tieneNotaRecibido(imei)) return 'RECIBIDO'
+  return estado || 'RECIBIDO'
 }
 
 function getNombreTelefono(id_equi: number | null): string {
@@ -113,13 +163,16 @@ function getNombreTelefono(id_equi: number | null): string {
 
 const recibidosFiltrados = computed(() => {
   const texto = busqueda.value.toLowerCase().trim()
-  if (!texto) return recibidos.value
+  const estado = estadoFiltro.value
   return recibidos.value.filter(a => {
+    if (estado !== 'TODOS' && estadoRecibido(a) !== estado) return false
+    if (!texto) return true
     const nd = getNotaDataFromImei(a)
     return (
       a.nombre?.toLowerCase().includes(texto) ||
       nd.customer_name?.toLowerCase().includes(texto) ||
       nd.customer_phone?.toLowerCase().includes(texto) ||
+      nd.customer_cedula?.toLowerCase().includes(texto) ||
       getNombreTelefono(a.id_equi)?.toLowerCase().includes(texto) ||
       a.color?.toLowerCase().includes(texto) ||
       a.capacidad?.toLowerCase().includes(texto)
@@ -144,7 +197,9 @@ async function cargarRecibidos() {
   try {
     const res = await window.db.getAll('imei')
     if (res.success) {
-      recibidos.value = (res.data || []).filter((i: any) => i.estado === 'APARTADO')
+      recibidos.value = (res.data || []).filter(esEquipoRecibido)
+      const ids = new Set(recibidos.value.map((item: any) => item.id))
+      recibidosSeleccionados.value = recibidosSeleccionados.value.filter((item: any) => ids.has(item.id))
     }
   } catch (_) {}
   loading.value = false
@@ -160,6 +215,7 @@ async function cargarTelefonos() {
 function abrirRecibir() {
   form.value = formDefault()
   busquedaTelefono.value = ''
+  clienteSeleccionadoBusqueda.value = null
   selectedRecibido.value = null
   dialogVisible.value = true
 }
@@ -172,8 +228,10 @@ function abrirEditar(recibido: any) {
     telefono_modelo: getNombreTelefono(recibido.id_equi),
     color: recibido.color || '',
     capacidad: recibido.capacidad || '',
+    precio_venta: recibido.precio_venta || 0,
     nota_json: JSON.stringify(nd),
   }
+  clienteSeleccionadoBusqueda.value = null
   dialogVisible.value = true
   selectedRecibido.value = recibido
 }
@@ -200,6 +258,56 @@ function setCustomerPhone(val: string) {
     parsed.customer_phone = val
     form.value.nota_json = JSON.stringify(parsed)
   } catch {}
+}
+
+function setCustomerCedula(val: string) {
+  try {
+    const parsed = JSON.parse(form.value.nota_json || '{}')
+    parsed.customer_cedula = String(val || '').replace(/-/g, '')
+    form.value.nota_json = JSON.stringify(parsed)
+  } catch {}
+}
+
+function setImei(val: string) {
+  form.value.nombre = String(val || '').replace(/\D/g, '').slice(0, 15)
+}
+
+async function buscarClientePorDocumento() {
+  const valor = String(notaData.value.customer_cedula || '').trim().replace(/-/g, '')
+  if (!valor) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Ingresa una cedula o RNC', life: 3000 })
+    return
+  }
+
+  setCustomerCedula(valor)
+  buscandoDocumento.value = true
+  try {
+    const tokenCifrado = await encryptarPassword('1234567890abc', 10)
+    const esRnc = valor.length === 9
+    const resultado = esRnc
+      ? await peticionesFetch('https://demo.tmposrd.com/api2', `consultarrnc/${valor}`, {}, tokenCifrado, 'GET')
+      : await peticionesFetch('https://demo.tmposrd.com/api2', 'buscarcedula', { cedula: valor }, tokenCifrado, 'POST')
+
+    if (resultado?.error) {
+      toast.add({ severity: 'error', summary: 'Error', detail: resultado.error, life: 4000 })
+      return
+    }
+
+    let info = resultado?.datos || resultado?.data || resultado
+    if (Array.isArray(info)) info = info[0]
+    if (!info || (typeof info === 'object' && Object.keys(info).length === 0)) {
+      toast.add({ severity: 'info', summary: 'No encontrado', detail: 'No se encontraron datos para ese documento', life: 3000 })
+      return
+    }
+
+    const nombre = (info.name || info.nombre || info.razon_social || info.RazonSocial || '').toUpperCase()
+    if (nombre) setCustomerName(nombre)
+    toast.add({ severity: 'success', summary: 'Encontrado', detail: nombre ? `Datos cargados: ${nombre}` : 'Datos encontrados', life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error.message || 'Error al consultar API', life: 4000 })
+  } finally {
+    buscandoDocumento.value = false
+  }
 }
 
 function seleccionarTelefono(telefono: any) {
@@ -283,15 +391,6 @@ async function crearNotaCreditoInterna(recibido: any) {
   } catch {}
 }
 
-const clientesFiltrados = computed(() => {
-  const q = busquedaCliente.value.toLowerCase().trim()
-  if (!q) return clientesLista.value.slice(0, 20)
-  return clientesLista.value.filter((c: any) =>
-    (c.nombre || '').toLowerCase().includes(q) ||
-    (c.telefono || '').includes(q)
-  )
-})
-
 async function cargarClientes() {
   try {
     const res = await window.db.getAll('clientes')
@@ -300,16 +399,21 @@ async function cargarClientes() {
 }
 
 function seleccionarCliente(cliente: any) {
+  if (!cliente) return
   const parsed = JSON.parse(form.value.nota_json || '{}')
   parsed.customer_name = (cliente.nombre || '').toUpperCase()
   parsed.customer_phone = cliente.telefono || cliente.whatsapp || ''
+  parsed.customer_cedula = cliente.cedula || cliente.rnc || ''
   form.value.nota_json = JSON.stringify(parsed)
-  busquedaCliente.value = ''
 }
 
 async function guardarRecibir() {
   if (!form.value.nombre.trim() && !form.value.id_equi) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El IMEI o modelo del telefono es requerido', life: 3000 })
+    return
+  }
+  if (form.value.nombre.trim() && form.value.nombre.trim().length !== 15) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El IMEI debe tener 15 digitos', life: 3000 })
     return
   }
 
@@ -328,6 +432,8 @@ async function guardarRecibir() {
             const resNuevo = await window.db.insert('clientes', {
               nombre: nombreCliente,
               telefono: nd.customer_phone || '',
+              cedula: nd.customer_cedula || '',
+              rnc: nd.customer_cedula || '',
             })
             if (resNuevo.success) clienteId = String(resNuevo.data.id)
           }
@@ -339,7 +445,8 @@ async function guardarRecibir() {
       id_equi: form.value.id_equi,
       color: form.value.color.trim().toUpperCase(),
       capacidad: form.value.capacidad.trim().toUpperCase(),
-      estado: 'APARTADO',
+      precio_venta: form.value.precio_venta || 0,
+      estado: 'RECIBIDO',
       nota: JSON.stringify({ ...nd, cliente_id: clienteId }),
     }
 
@@ -376,16 +483,140 @@ async function guardarRecibir() {
 
 function confirmarBorrar(recibido: any) {
   selectedRecibido.value = recibido
+  resetDeleteOtp()
   deleteDialogVisible.value = true
 }
 
+function resetDeleteOtp() {
+  deleteOtpEnviado.value = false
+  deleteOtpEmail.value = ''
+  deleteOtp.value = ''
+  deleteOtpError.value = ''
+  deleteOtpLoading.value = false
+  deleteOtpConfirmando.value = false
+}
+
+function estaSeleccionado(recibido: any): boolean {
+  return recibidosSeleccionados.value.some((item: any) => item.id === recibido.id)
+}
+
+function toggleSeleccionRecibido(recibido: any) {
+  if (estaSeleccionado(recibido)) {
+    recibidosSeleccionados.value = recibidosSeleccionados.value.filter((item: any) => item.id !== recibido.id)
+  } else {
+    recibidosSeleccionados.value = [...recibidosSeleccionados.value, recibido]
+  }
+}
+
+function confirmarBorrarSeleccionados() {
+  if (!recibidosSeleccionados.value.length) {
+    toast.add({ severity: 'warn', summary: 'Seleccion', detail: 'Selecciona al menos un recibido', life: 2500 })
+    return
+  }
+  resetDeleteOtp()
+  deleteMultipleDialogVisible.value = true
+}
+
+function recibidosParaOtp(): any[] {
+  if (deleteMultipleDialogVisible.value) return recibidosSeleccionados.value
+  return selectedRecibido.value ? [selectedRecibido.value] : []
+}
+
+async function solicitarOtpEliminarRecibidos() {
+  const registros = recibidosParaOtp()
+  if (!registros.length) return
+
+  deleteOtpError.value = ''
+  deleteOtp.value = ''
+  deleteOtpLoading.value = true
+
+  try {
+    const total = registros.reduce((sum: number, recibido: any) => sum + Number(getNotaDataFromImei(recibido).credit_note_value || 0), 0)
+    const res = await window.electron.invoke('facturas:solicitarOtpEliminar', {
+      id: registros[0]?.id,
+      facturaIds: registros.map((recibido: any) => recibido.id),
+      no_factura: registros.length === 1 ? `RECIBIDO-${registros[0].id}` : 'RECIBIDOS',
+      nombre_cliente: registros.length === 1 ? (getNotaDataFromImei(registros[0]).customer_name || '') : `${registros.length} recibidos`,
+      cantidad: registros.length,
+      total,
+    }) as any
+
+    if (res.success) {
+      deleteOtpEmail.value = res.data?.email || ''
+      deleteOtpEnviado.value = true
+      toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
+    } else {
+      deleteOtpError.value = res.error || 'No se pudo enviar el codigo'
+    }
+  } catch (error: any) {
+    deleteOtpError.value = error?.message || 'Error solicitando codigo'
+  } finally {
+    deleteOtpLoading.value = false
+  }
+}
+
+async function confirmarOtpEliminarRecibidos(): Promise<boolean> {
+  const registros = recibidosParaOtp()
+  const codigo = String(deleteOtp.value || '').replace(/\D/g, '')
+  if (!registros.length) return false
+  if (!/^\d{4}$/.test(codigo)) {
+    deleteOtpError.value = 'Introduce el codigo de 4 digitos'
+    return false
+  }
+
+  deleteOtpConfirmando.value = true
+  deleteOtpError.value = ''
+
+  try {
+    const otpRes = await window.electron.invoke('facturas:confirmarOtpEliminar', {
+      facturaId: registros[0]?.id,
+      facturaIds: registros.map((recibido: any) => recibido.id),
+      codigo,
+    }) as any
+
+    if (!otpRes.success) {
+      deleteOtpError.value = otpRes.error || 'Codigo no valido'
+      return false
+    }
+    return true
+  } catch (error: any) {
+    deleteOtpError.value = error?.message || 'Error al confirmar codigo'
+    return false
+  } finally {
+    deleteOtpConfirmando.value = false
+  }
+}
+
 async function borrar() {
+  if (!await confirmarOtpEliminarRecibidos()) return
   try {
     const res = await window.db.delete('imei', selectedRecibido.value.id)
     if (res.success) {
       toast.add({ severity: 'success', summary: 'Eliminado', detail: 'Registro eliminado', life: 3000 })
     }
     deleteDialogVisible.value = false
+    resetDeleteOtp()
+    recibidosSeleccionados.value = recibidosSeleccionados.value.filter((item: any) => item.id !== selectedRecibido.value?.id)
+    await cargarRecibidos()
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 3000 })
+  }
+}
+
+async function borrarSeleccionados() {
+  const seleccion = [...recibidosSeleccionados.value]
+  if (!seleccion.length) return
+  if (!await confirmarOtpEliminarRecibidos()) return
+  try {
+    let eliminados = 0
+    for (const recibido of seleccion) {
+      const res = await window.db.delete('imei', recibido.id)
+      if (res.success) eliminados++
+    }
+    toast.add({ severity: 'success', summary: 'Eliminados', detail: `${eliminados} registro(s) eliminado(s)`, life: 3000 })
+    deleteMultipleDialogVisible.value = false
+    resetDeleteOtp()
+    recibidosSeleccionados.value = []
     await cargarRecibidos()
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 3000 })
@@ -508,8 +739,9 @@ function abrirPublicarImei(recibido: any) {
   selectedRecibido.value = recibido
   const nd = getNotaDataFromImei(recibido)
   const ndVal = nd.credit_note_value || 0
+  const precioVenta = Number(recibido.precio_venta || 0)
   imeiPublishForm.value = {
-    precio_venta: ndVal > 0 ? ndVal * 1.3 : 0,
+    precio_venta: precioVenta > 0 ? precioVenta : (ndVal > 0 ? ndVal * 1.3 : 0),
     precio_min: ndVal > 0 ? ndVal * 1.15 : 0,
     precio_xmayor: ndVal > 0 ? ndVal * 1.2 : 0,
   }
@@ -574,12 +806,30 @@ onMounted(async () => {
 
     <Fieldset legend="Equipos Recibidos (Trade-in)">
       <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
-        <IconField>
-          <InputIcon class="pi pi-search" />
-          <InputText v-model="busqueda" placeholder="Buscar por IMEI, cliente, modelo..." />
-        </IconField>
+        <div class="flex items-center gap-2 flex-wrap">
+          <IconField>
+            <InputIcon class="pi pi-search" />
+            <InputText v-model="busqueda" placeholder="Buscar por IMEI, cliente, modelo..." />
+          </IconField>
+          <Select
+            v-model="estadoFiltro"
+            :options="estadoOptions"
+            optionLabel="label"
+            optionValue="value"
+            placeholder="Estado"
+            class="w-48"
+          />
+        </div>
 
         <div class="flex items-center gap-2">
+          <Button
+            v-if="recibidosSeleccionados.length"
+            :label="`Eliminar (${recibidosSeleccionados.length})`"
+            icon="pi pi-trash"
+            severity="danger"
+            outlined
+            @click="confirmarBorrarSeleccionados"
+          />
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
             <button
               class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"
@@ -613,8 +863,10 @@ onMounted(async () => {
         :rows="10"
         :rowsPerPageOptions="[10, 25, 50]"
         dataKey="id"
+        v-model:selection="recibidosSeleccionados"
         responsiveLayout="scroll"
       >
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column field="id" header="ID" style="width: 4rem" />
         <Column header="Modelo" sortable style="width: 10rem">
           <template #body="{ data }">
@@ -627,9 +879,19 @@ onMounted(async () => {
             {{ getNotaDataFromImei(data).customer_name || '—' }}
           </template>
         </Column>
+        <Column header="Cedula" sortable style="width: 9rem">
+          <template #body="{ data }">
+            {{ getNotaDataFromImei(data).customer_cedula || '-' }}
+          </template>
+        </Column>
         <Column header="Valor NC" sortable style="width: 8rem">
           <template #body="{ data }">
             ${{ formatCurrency(getNotaDataFromImei(data).credit_note_value) }}
+          </template>
+        </Column>
+        <Column header="Precio Venta" sortable style="width: 8rem">
+          <template #body="{ data }">
+            ${{ formatCurrency(data.precio_venta || 0) }}
           </template>
         </Column>
         <Column header="Estado NC" style="width: 8rem">
@@ -648,7 +910,7 @@ onMounted(async () => {
         <Column field="estado" header="Estado" sortable style="width: 8rem">
           <template #body="{ data }">
             <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">
-              {{ data.estado }}
+              {{ estadoRecibido(data) }}
             </span>
           </template>
         </Column>
@@ -676,23 +938,35 @@ onMounted(async () => {
           <div
             v-for="recibido in recibidosFiltrados"
             :key="recibido.id"
-            class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-3 transition-shadow hover:shadow-md hover:border-primary-300 dark:hover:border-primary-600"
+            class="rounded-xl border bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-3 transition-shadow hover:shadow-md hover:border-primary-300 dark:hover:border-primary-600"
+            :class="estaSeleccionado(recibido) ? 'border-primary-400 ring-2 ring-primary-100 dark:ring-primary-900/40' : 'border-surface-200 dark:border-surface-700'"
           >
             <div class="flex items-center justify-between">
-              <span class="text-xs font-mono text-surface-400">#{{ recibido.id }}</span>
-              <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">
-                {{ recibido.estado }}
-              </span>
+              <div class="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  class="w-4 h-4 accent-primary-500 cursor-pointer"
+                  :checked="estaSeleccionado(recibido)"
+                  @change.stop="toggleSeleccionRecibido(recibido)"
+                />
+                <span class="text-xs font-mono text-surface-400">#{{ recibido.id }}</span>
+              </div>
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">{{ estadoRecibido(recibido) }}</span>
             </div>
             <div class="min-w-0">
               <h4 class="font-bold text-base leading-tight truncate">{{ getNombreTelefono(recibido.id_equi) || 'SIN MODELO' }}</h4>
               <p class="text-sm text-surface-500 dark:text-surface-400 truncate">IMEI: {{ recibido.nombre || '—' }}</p>
               <p class="text-sm text-surface-500 dark:text-surface-400 truncate">{{ getNotaDataFromImei(recibido).customer_name || 'Sin cliente' }}</p>
+              <p class="text-sm text-surface-500 dark:text-surface-400 truncate">Cedula: {{ getNotaDataFromImei(recibido).customer_cedula || '-' }}</p>
             </div>
             <div class="grid grid-cols-1 gap-1 text-sm">
               <div class="flex items-center gap-2">
                 <i class="pi pi-dollar text-surface-400"></i>
                 <span class="font-semibold">${{ formatCurrency(getNotaDataFromImei(recibido).credit_note_value) }}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i class="pi pi-shopping-cart text-surface-400"></i>
+                <span class="font-semibold">${{ formatCurrency(recibido.precio_venta || 0) }}</span>
               </div>
               <div class="flex items-center gap-2">
                 <i class="pi pi-tag text-surface-400"></i>
@@ -720,7 +994,7 @@ onMounted(async () => {
       v-model:visible="dialogVisible"
       :header="selectedRecibido ? 'Editar Equipo Recibido' : 'Recibir Equipo'"
       modal
-      :style="{ width: '90%', maxWidth: '600px' }"
+      :style="{ width: 'min(48rem, 95vw)' }"
     >
       <TabView>
         <TabPanel header="Equipo">
@@ -733,8 +1007,8 @@ onMounted(async () => {
               </div>
             </div>
             <div class="flex flex-col gap-1">
-              <label class="text-sm font-semibold">IMEI / Serial</label>
-              <InputText v-model="form.nombre" placeholder="Numero IMEI del equipo" class="uppercase" style="text-transform: uppercase;" />
+              <label class="text-sm font-semibold">IMEI</label>
+              <InputText :value="form.nombre" placeholder="IMEI de 15 digitos" inputmode="numeric" maxlength="15" @input="setImei(($event.target as HTMLInputElement).value)" />
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div class="flex flex-col gap-1">
@@ -752,17 +1026,37 @@ onMounted(async () => {
           <div class="flex flex-col gap-3 pt-2">
             <div class="flex flex-col gap-1">
               <label class="text-sm font-semibold">Buscar Cliente Existente</label>
-              <InputText v-model="busquedaCliente" placeholder="Escribe nombre o telefono..." @focus="cargarClientes" fluid />
-              <div v-if="clientesFiltrados.length > 0 && busquedaCliente" class="max-h-40 overflow-y-auto border border-surface-200 dark:border-surface-700 rounded-lg mt-1">
-                <div
-                  v-for="c in clientesFiltrados"
-                  :key="c.id"
-                  class="px-3 py-2 cursor-pointer hover:bg-surface-100 dark:hover:bg-surface-700 text-sm border-b border-surface-100 dark:border-surface-700 last:border-0"
-                  @click="seleccionarCliente(c)"
-                >
-                  <span class="font-medium">{{ c.nombre }}</span>
-                  <span class="text-surface-500 ml-2">{{ c.telefono || '' }}</span>
-                </div>
+              <Select
+                v-model="clienteSeleccionadoBusqueda"
+                :options="clientesLista"
+                optionLabel="nombre"
+                placeholder="Seleccionar cliente"
+                filter
+                showClear
+                fluid
+                @show="cargarClientes"
+                @update:modelValue="seleccionarCliente"
+              >
+                <template #value="{ value, placeholder }">
+                  <div v-if="value" class="flex flex-col leading-tight">
+                    <span class="font-semibold text-sm truncate">{{ value.nombre }}</span>
+                    <span class="text-xs text-surface-500 truncate">{{ value.telefono || value.whatsapp || value.cedula || value.rnc || 'Sin datos' }}</span>
+                  </div>
+                  <span v-else class="text-surface-400">{{ placeholder }}</span>
+                </template>
+                <template #option="{ option }">
+                  <div class="flex flex-col leading-tight py-1">
+                    <span class="font-semibold text-sm">{{ option.nombre }}</span>
+                    <span class="text-xs text-surface-500">{{ option.telefono || option.whatsapp || 'Sin telefono' }} - {{ option.cedula || option.rnc || 'Sin cedula' }}</span>
+                  </div>
+                </template>
+              </Select>
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="text-sm font-semibold">Cedula</label>
+              <div class="flex gap-2">
+                <InputText :value="notaData.customer_cedula" @input="setCustomerCedula(($event.target as HTMLInputElement).value)" placeholder="Cedula o RNC" class="flex-1" @keydown.enter="buscarClientePorDocumento" />
+                <Button icon="pi pi-search" severity="info" :loading="buscandoDocumento" @click="buscarClientePorDocumento" v-tooltip="'Buscar en API'" />
               </div>
             </div>
             <div class="flex flex-col gap-1">
@@ -777,6 +1071,10 @@ onMounted(async () => {
               <label class="text-sm font-semibold">Valor de Nota de Credito (RD$)</label>
               <InputNumber :value="notaData.credit_note_value" @update:modelValue="setCreditNoteValue" mode="currency" currency="DOP" locale="es-DO" fluid />
               <p class="text-xs text-surface-400">Monto que se le ofrecera al cliente como nota de credito</p>
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="text-sm font-semibold">Precio de venta</label>
+              <InputNumber v-model="form.precio_venta" mode="currency" currency="DOP" locale="es-DO" fluid />
             </div>
           </div>
         </TabPanel>
@@ -874,13 +1172,74 @@ onMounted(async () => {
     </Dialog>
 
     <Dialog v-model:visible="deleteDialogVisible" header="Eliminar" modal :style="{ width: '24rem' }">
-      <div class="flex items-center gap-3">
-        <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span>Seguro que deseas eliminar este registro?</span>
+      <div class="space-y-4">
+        <div class="flex items-center gap-3">
+          <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
+          <span>Seguro que deseas eliminar este registro?</span>
+        </div>
+        <div class="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm text-amber-800 dark:text-amber-200">
+          Esta accion requiere codigo OTP enviado al correo de la empresa.
+        </div>
+        <div v-if="deleteOtpEnviado" class="space-y-2">
+          <p class="text-xs text-surface-500">Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la licencia' }}.</p>
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly />
+        </div>
+        <p v-if="deleteOtpError" class="text-sm text-red-500">{{ deleteOtpError }}</p>
       </div>
       <template #footer>
-        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
-        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="borrar" />
+        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false; resetDeleteOtp()" />
+        <Button
+          v-if="!deleteOtpEnviado"
+          label="Enviar OTP"
+          icon="pi pi-send"
+          severity="warning"
+          :loading="deleteOtpLoading"
+          @click="solicitarOtpEliminarRecibidos"
+        />
+        <Button
+          v-else
+          label="Eliminar"
+          icon="pi pi-trash"
+          severity="danger"
+          :loading="deleteOtpConfirmando"
+          @click="borrar"
+        />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="deleteMultipleDialogVisible" header="Eliminar seleccionados" modal :style="{ width: '26rem' }">
+      <div class="space-y-4">
+        <div class="flex items-center gap-3">
+          <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
+          <span>Seguro que deseas eliminar {{ recibidosSeleccionados.length }} registro(s)?</span>
+        </div>
+        <div class="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm text-amber-800 dark:text-amber-200">
+          Esta accion requiere codigo OTP enviado al correo de la empresa.
+        </div>
+        <div v-if="deleteOtpEnviado" class="space-y-2">
+          <p class="text-xs text-surface-500">Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la licencia' }}.</p>
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly />
+        </div>
+        <p v-if="deleteOtpError" class="text-sm text-red-500">{{ deleteOtpError }}</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="deleteMultipleDialogVisible = false; resetDeleteOtp()" />
+        <Button
+          v-if="!deleteOtpEnviado"
+          label="Enviar OTP"
+          icon="pi pi-send"
+          severity="warning"
+          :loading="deleteOtpLoading"
+          @click="solicitarOtpEliminarRecibidos"
+        />
+        <Button
+          v-else
+          label="Eliminar"
+          icon="pi pi-trash"
+          severity="danger"
+          :loading="deleteOtpConfirmando"
+          @click="borrarSeleccionados"
+        />
       </template>
     </Dialog>
   </div>

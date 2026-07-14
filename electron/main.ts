@@ -120,13 +120,13 @@ function initDatabase(): void {
   }
 
   function ensureClientesTable(): void {
-    const requiredColumns = ['cedula', 'telefono', 'whatsapp', 'email', 'direccion', 'apodo', 'precio_fijado', 'limite_credito', 'empresa', 'cargo', 'telefono_empresa', 'direccion_empresa', 'codigo', 'rnc', 'activo', 'nota', 'created_at', 'updated_at']
+    const requiredColumns = ['cedula', 'telefono', 'whatsapp', 'email', 'direccion', 'apodo', 'precio_fijado', 'limite_credito', 'empresa', 'cargo', 'telefono_empresa', 'direccion_empresa', 'codigo', 'rnc', 'activo', 'nota', 'imagen', 'created_at', 'updated_at']
     if (tableExists('clientes')) {
       const columns = tableColumns('clientes')
       if (!columns.includes('id')) {
         const copyColumns = ['nombre', ...requiredColumns].filter(column => columns.includes(column))
         db!.exec(`ALTER TABLE clientes RENAME TO clientes_old`)
-        db!.exec(`CREATE TABLE clientes (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,cedula TEXT DEFAULT '',telefono TEXT DEFAULT '',whatsapp TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',apodo TEXT DEFAULT '',precio_fijado TEXT DEFAULT '',limite_credito TEXT DEFAULT '',empresa TEXT DEFAULT '',cargo TEXT DEFAULT '',telefono_empresa TEXT DEFAULT '',direccion_empresa TEXT DEFAULT '',codigo TEXT DEFAULT '',rnc TEXT DEFAULT '',activo TEXT DEFAULT 'ACTIVO',nota TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+        db!.exec(`CREATE TABLE clientes (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,cedula TEXT DEFAULT '',telefono TEXT DEFAULT '',whatsapp TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',apodo TEXT DEFAULT '',precio_fijado TEXT DEFAULT '',limite_credito TEXT DEFAULT '',empresa TEXT DEFAULT '',cargo TEXT DEFAULT '',telefono_empresa TEXT DEFAULT '',direccion_empresa TEXT DEFAULT '',codigo TEXT DEFAULT '',rnc TEXT DEFAULT '',activo TEXT DEFAULT 'ACTIVO',nota TEXT DEFAULT '',imagen TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
         if (copyColumns.length > 0) {
           const columnsSql = copyColumns.map(column => `"${column}"`).join(', ')
           db!.exec(`INSERT INTO clientes (${columnsSql}) SELECT ${columnsSql} FROM clientes_old`)
@@ -139,7 +139,7 @@ function initDatabase(): void {
       }
       return
     }
-    db!.exec(`CREATE TABLE clientes (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,cedula TEXT DEFAULT '',telefono TEXT DEFAULT '',whatsapp TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',apodo TEXT DEFAULT '',precio_fijado TEXT DEFAULT '',limite_credito TEXT DEFAULT '',empresa TEXT DEFAULT '',cargo TEXT DEFAULT '',telefono_empresa TEXT DEFAULT '',direccion_empresa TEXT DEFAULT '',codigo TEXT DEFAULT '',rnc TEXT DEFAULT '',activo TEXT DEFAULT 'ACTIVO',nota TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+    db!.exec(`CREATE TABLE clientes (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,cedula TEXT DEFAULT '',telefono TEXT DEFAULT '',whatsapp TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',apodo TEXT DEFAULT '',precio_fijado TEXT DEFAULT '',limite_credito TEXT DEFAULT '',empresa TEXT DEFAULT '',cargo TEXT DEFAULT '',telefono_empresa TEXT DEFAULT '',direccion_empresa TEXT DEFAULT '',codigo TEXT DEFAULT '',rnc TEXT DEFAULT '',activo TEXT DEFAULT 'ACTIVO',nota TEXT DEFAULT '',imagen TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   }
 
   function ensureUsuariosTable(): void {
@@ -260,12 +260,12 @@ function initDatabase(): void {
   }
 
   function ensureFacturasTable(): void {
-    const requiredColumns = ['cheque', 'token', 'cajero', 'no_factura', 'tipo_factura', 'comprobante', 'cod_cliente', 'nombre_cliente', 'telefono_cliente', 'productos', 'vendedor', 'metodo_pago', 'tarjeta', 'transferencia', 'efectivo', 'canal_venta', 'fecha_emision', 'impuesto', 'descuento', 'subtotal', 'total', 'ganancia', 'financiera', 'estado_factura', 'fecha_estado', 'mes', 'year', 'hora', 'otro', 'nota', 'usuario', 'identificadordb', 'total_institucion', 'total_cliente', 'ncf', 'tipo_comprobante', 'comprobante_id', 'turno_id', 'created_at', 'updated_at']
+    const requiredColumns = ['cheque', 'token', 'cajero', 'no_factura', 'tipo_factura', 'comprobante', 'cod_cliente', 'nombre_cliente', 'telefono_cliente', 'productos', 'vendedor', 'metodo_pago', 'tarjeta', 'transferencia', 'efectivo', 'canal_venta', 'fecha_emision', 'impuesto', 'descuento', 'subtotal', 'costo', 'total', 'ganancia', 'financiera', 'estado_factura', 'fecha_estado', 'mes', 'year', 'hora', 'otro', 'nota', 'usuario', 'identificadordb', 'total_institucion', 'total_cliente', 'ncf', 'tipo_comprobante', 'comprobante_id', 'turno_id', 'created_at', 'updated_at']
     if (tableExists('facturas')) {
       const columns = tableColumns('facturas')
       if (!columns.includes('id')) {
         db!.exec(`ALTER TABLE facturas RENAME TO facturas_old`)
-        db!.exec(`CREATE TABLE facturas (id INTEGER PRIMARY KEY AUTOINCREMENT,cheque TEXT DEFAULT '',token TEXT DEFAULT '',cajero TEXT DEFAULT '',no_factura TEXT DEFAULT '',tipo_factura TEXT DEFAULT '',comprobante TEXT DEFAULT '',cod_cliente TEXT DEFAULT '',nombre_cliente TEXT DEFAULT '',telefono_cliente TEXT DEFAULT '',productos TEXT DEFAULT '',vendedor TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',tarjeta REAL DEFAULT 0,transferencia REAL DEFAULT 0,efectivo REAL DEFAULT 0,canal_venta TEXT DEFAULT '',fecha_emision TEXT DEFAULT '',impuesto REAL DEFAULT 0,descuento REAL DEFAULT 0,subtotal REAL DEFAULT 0,total REAL DEFAULT 0,ganancia REAL DEFAULT 0,financiera TEXT DEFAULT '',estado_factura TEXT DEFAULT 'PENDIENTE',fecha_estado TEXT DEFAULT '',mes TEXT DEFAULT '',year TEXT DEFAULT '',hora TEXT DEFAULT '',otro TEXT DEFAULT '',nota TEXT DEFAULT '',usuario TEXT DEFAULT '',identificadordb TEXT DEFAULT '',total_institucion REAL DEFAULT 0,total_cliente REAL DEFAULT 0,ncf TEXT DEFAULT '',tipo_comprobante TEXT DEFAULT '',comprobante_id INTEGER DEFAULT 0,turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+        db!.exec(`CREATE TABLE facturas (id INTEGER PRIMARY KEY AUTOINCREMENT,cheque TEXT DEFAULT '',token TEXT DEFAULT '',cajero TEXT DEFAULT '',no_factura TEXT DEFAULT '',tipo_factura TEXT DEFAULT '',comprobante TEXT DEFAULT '',cod_cliente TEXT DEFAULT '',nombre_cliente TEXT DEFAULT '',telefono_cliente TEXT DEFAULT '',productos TEXT DEFAULT '',vendedor TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',tarjeta REAL DEFAULT 0,transferencia REAL DEFAULT 0,efectivo REAL DEFAULT 0,canal_venta TEXT DEFAULT '',fecha_emision TEXT DEFAULT '',impuesto REAL DEFAULT 0,descuento REAL DEFAULT 0,subtotal REAL DEFAULT 0,costo REAL DEFAULT 0,total REAL DEFAULT 0,ganancia REAL DEFAULT 0,financiera TEXT DEFAULT '',estado_factura TEXT DEFAULT 'PENDIENTE',fecha_estado TEXT DEFAULT '',mes TEXT DEFAULT '',year TEXT DEFAULT '',hora TEXT DEFAULT '',otro TEXT DEFAULT '',nota TEXT DEFAULT '',usuario TEXT DEFAULT '',identificadordb TEXT DEFAULT '',total_institucion REAL DEFAULT 0,total_cliente REAL DEFAULT 0,ncf TEXT DEFAULT '',tipo_comprobante TEXT DEFAULT '',comprobante_id INTEGER DEFAULT 0,turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
         const copyColumns = requiredColumns.filter(column => columns.includes(column))
         if (copyColumns.length > 0) {
           const columnsSql = copyColumns.map(column => `"${column}"`).join(', ')
@@ -276,7 +276,7 @@ function initDatabase(): void {
       }
       if (!columns.includes('turno_id')) db!.exec(`ALTER TABLE facturas ADD COLUMN turno_id INTEGER DEFAULT 0`)
       for (const column of requiredColumns) {
-        if (!columns.includes(column) && column !== 'turno_id') db!.exec(`ALTER TABLE facturas ADD COLUMN "${column}" TEXT DEFAULT ''`)
+        if (!columns.includes(column) && column !== 'turno_id') db!.exec(`ALTER TABLE facturas ADD COLUMN "${column}" ${column === 'costo' ? 'REAL DEFAULT 0' : "TEXT DEFAULT ''"}`)
       }
       return
     }
@@ -313,9 +313,11 @@ function initDatabase(): void {
   db.exec(`CREATE TABLE IF NOT EXISTS categorias (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,descripcion TEXT DEFAULT '',estado TEXT DEFAULT 'activo',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS marcas (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,descripcion TEXT DEFAULT '',estado TEXT DEFAULT 'activo',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS accesorios (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,codigo_barra TEXT DEFAULT '',costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,cantidad INTEGER DEFAULT 1,alerta INTEGER DEFAULT 10,marca INTEGER,categoria INTEGER,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (marca) REFERENCES marcas(id),FOREIGN KEY (categoria) REFERENCES categorias(id))`)
+  db.exec(`CREATE TABLE IF NOT EXISTS perdidas (id INTEGER PRIMARY KEY AUTOINCREMENT,tipo TEXT NOT NULL,referencia_id INTEGER NOT NULL,nombre TEXT DEFAULT '',codigo TEXT DEFAULT '',cantidad INTEGER DEFAULT 1,costo REAL DEFAULT 0,motivo TEXT DEFAULT '',fecha TEXT DEFAULT '',almacen_id INTEGER DEFAULT 0,estado TEXT DEFAULT 'ACTIVA',detalle TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   try { db!.exec(`ALTER TABLE accesorios ADD COLUMN codigo_barra TEXT DEFAULT ''`) } catch {}
   try { db!.exec(`ALTER TABLE accesorios ADD COLUMN proveedor_id INTEGER DEFAULT 0`) } catch {}
   try { db!.exec(`ALTER TABLE accesorios ADD COLUMN imagen TEXT DEFAULT ''`) } catch {}
+  try { db!.exec(`ALTER TABLE accesorios ADD COLUMN no_compra TEXT DEFAULT ''`) } catch {}
   db.exec(`CREATE TABLE IF NOT EXISTS telefonos (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   try { db!.exec(`ALTER TABLE telefonos ADD COLUMN imagen TEXT DEFAULT ''`) } catch {}
   ensureProveedoresTable()
@@ -349,6 +351,11 @@ function initDatabase(): void {
   try { db!.exec(`ALTER TABLE cuentas_cobrar ADD COLUMN estado TEXT DEFAULT 'ACTIVA'`) } catch {}
   try { db!.exec(`ALTER TABLE cuentas_cobrar ADD COLUMN almacen_id INTEGER DEFAULT 0`) } catch {}
   db.exec(`CREATE TABLE IF NOT EXISTS cuentas_pagar (id INTEGER PRIMARY KEY AUTOINCREMENT,no_factura TEXT DEFAULT '',cod_proveedor TEXT DEFAULT '',nombre_proveedor TEXT DEFAULT '',telefono_proveedor TEXT DEFAULT '',total REAL DEFAULT 0,abonado REAL DEFAULT 0,saldo REAL DEFAULT 0,fecha_compra TEXT DEFAULT '',fecha_vencimiento TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVA',notas TEXT DEFAULT '',pagos TEXT DEFAULT '[]',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.exec(`CREATE TABLE IF NOT EXISTS catalogo_cuentas (id INTEGER PRIMARY KEY AUTOINCREMENT,codigo TEXT NOT NULL UNIQUE,nombre TEXT NOT NULL,tipo TEXT NOT NULL,subtipo TEXT DEFAULT '',naturaleza TEXT DEFAULT 'DEUDORA',saldo_inicial REAL DEFAULT 0,estado TEXT DEFAULT 'ACTIVA',descripcion TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.exec(`INSERT OR IGNORE INTO catalogo_cuentas (codigo,nombre,tipo,subtipo,naturaleza) VALUES
+    ('1101','Caja General','ACTIVO','CORRIENTE','DEUDORA'),('1102','Bancos','ACTIVO','CORRIENTE','DEUDORA'),('1103','Cuentas por Cobrar','ACTIVO','CORRIENTE','DEUDORA'),('1201','Inventario','ACTIVO','CORRIENTE','DEUDORA'),
+    ('2101','Cuentas por Pagar','PASIVO','CORRIENTE','ACREEDORA'),('3101','Capital','PATRIMONIO','CAPITAL','ACREEDORA'),
+    ('4101','Ventas','INGRESOS','OPERACIONALES','ACREEDORA'),('5101','Costo de Ventas','GASTOS','OPERACIONALES','DEUDORA'),('5201','Gastos Operativos','GASTOS','OPERACIONALES','DEUDORA')`)
   db.exec(`CREATE TABLE IF NOT EXISTS bitacora (id INTEGER PRIMARY KEY AUTOINCREMENT,tabla TEXT DEFAULT '',registro_id INTEGER DEFAULT 0,accion TEXT DEFAULT '',usuario TEXT DEFAULT '',datos_nuevos TEXT DEFAULT '',datos_anteriores TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS auditoria_acciones (id INTEGER PRIMARY KEY AUTOINCREMENT,modulo TEXT DEFAULT '',accion TEXT DEFAULT '',entidad TEXT DEFAULT '',entidad_id INTEGER DEFAULT 0,referencia TEXT DEFAULT '',usuario TEXT DEFAULT '',detalle TEXT DEFAULT '',resultado TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS configuracion (id INTEGER PRIMARY KEY AUTOINCREMENT,clave TEXT UNIQUE NOT NULL,valor TEXT DEFAULT '',tipo TEXT DEFAULT 'string',categoria TEXT DEFAULT 'general',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)

@@ -18,6 +18,7 @@ import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import TicketFacturaPrint from './TicketFacturaPrint.vue'
 import FacturaPdfPrint from './FacturaPdfPrint.vue'
+import { reintegrarInventarioFactura } from '@/composables/useDevoluciones'
 
 import { envioElectron } from '@/funciones/funciones.js'
 
@@ -189,6 +190,7 @@ const formDefault = () => ({
   impuesto: 0,
   descuento: 0,
   subtotal: 0,
+  costo: 0,
   total: 0,
   ganancia: 0,
   financiera: '',
@@ -738,6 +740,7 @@ async function guardar() {
       impuesto: form.value.impuesto || 0,
       descuento: form.value.descuento || 0,
       subtotal: form.value.subtotal || 0,
+      costo: form.value.costo || 0,
       total: form.value.total || 0,
       ganancia: form.value.ganancia || 0,
       financiera: form.value.financiera,
@@ -802,6 +805,9 @@ async function borrar() {
 
     let eliminadas = 0
     for (const factura of facturas) {
+      if (String(factura.tipo_factura || '').toUpperCase() === 'FACTURA_VENTA') {
+        await reintegrarInventarioFactura(factura.productos)
+      }
       const res = await window.db.delete('facturas', factura.id)
       if (res.success) {
         eliminadas++

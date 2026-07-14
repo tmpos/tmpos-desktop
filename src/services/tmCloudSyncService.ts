@@ -693,7 +693,19 @@ export async function pushLocalRowToCloud(tabla: string, id: number): Promise<{ 
     const rows = await getLocalRows(tabla)
     const row = rows.find(item => Number(item.id) === Number(id))
     if (!row) return { success: false, error: 'Registro local no encontrado' }
-    const result = await upsertCloud(tabla, [row])
+    // Las tablas locales pueden tener columnas nuevas antes de que TM Cloud las tenga.
+    // En el envio inmediato filtramos por el esquema remoto para no rechazar todo el registro.
+    const schema = await fetchServerFullSchema()
+    const tablaRemota = schema.find(item => item.name === tabla)
+    const columnasRemotas = tablaRemota?.columns.map(columna => columna.name)
+    const fila = columnasRemotas
+      ? columnasRemotas.reduce((acumulado: any, columna: string) => {
+          if (row[columna] !== undefined) acumulado[columna] = row[columna]
+          return acumulado
+        }, {})
+      : row
+    if (row.uid && fila.uid === undefined) fila.uid = row.uid
+    const result = await upsertCloud(tabla, [fila])
     if (result.errors > 0) return { success: false, error: 'TMPBase rechazo el registro' }
     return { success: true }
   } catch (error: any) {

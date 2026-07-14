@@ -139,12 +139,23 @@ function buildProductosHTML(productos: any[], simbolo: string, mostrarDescuento:
     const totalProducto = getProductTotal(producto)
     const descuento = toNumber(producto.descuento)
     const nombre = producto.nombre || producto.descripcion || producto.producto || ''
-    const imei = producto.imei ? `<br><span style="font-size:8px;color:#555;">IMEI: ${producto.imei}</span>` : ''
+    const imeis = [producto.imeis, producto.imei]
+      .flatMap((valor: any) => Array.isArray(valor) ? valor : (valor ? String(valor).split(',') : []))
+      .map((valor: any) => String(valor || '').trim())
+      .filter(Boolean)
+      .filter((valor: string, index: number, lista: string[]) => lista.indexOf(valor) === index)
+    const seriales = [producto.seriales, producto.serial]
+      .flatMap((valor: any) => Array.isArray(valor) ? valor : (valor ? String(valor).split(',') : []))
+      .map((valor: any) => String(valor || '').trim())
+      .filter(Boolean)
+      .filter((valor: string, index: number, lista: string[]) => lista.indexOf(valor) === index)
+    const imei = imeis.length ? `<br><span style="font-size:8px;color:#555;">IMEI: ${imeis.join(', ')}</span>` : ''
+    const serial = seriales.length ? `<br><span style="font-size:8px;color:#555;">Serial: ${seriales.join(', ')}</span>` : ''
 
     return `
       <tr>
         <td colspan="${mostrarDescuento ? 5 : 4}" style="overflow-wrap: break-word; font-weight: bold; white-space: normal; word-break: break-word;">
-          ${nombre}${imei}
+          ${nombre}${imei}${serial}
         </td>
       </tr>
       <tr>

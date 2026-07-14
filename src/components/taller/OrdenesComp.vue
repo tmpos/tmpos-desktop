@@ -27,6 +27,7 @@ import TicketTallerPrint from './TicketTallerPrint.vue'
 import OrdenTallerForm from './OrdenTallerForm.vue'
 import QRCode from 'qrcode'
 import JsBarcode from 'jsbarcode'
+import { getImageUrl } from '@/services/tmCloudClient'
 
 import { envioElectron, encryptarPassword } from '@/funciones/funciones.js'
 
@@ -83,6 +84,12 @@ const ordenParaTotales = ref<any>(null)
 const dialogEntregar = ref(false)
 const entregaForm = ref({ estado: 'ENTREGADO', abono: 0 })
 const ordenParaEntrega = ref<any>(null)
+const dialogWhatsappEstado = ref(false)
+const ordenWhatsappEstado = ref<any>(null)
+const whatsappTelefono = ref('')
+const whatsappNota = ref('')
+const whatsappEstadoAnterior = ref('')
+const whatsappEstadoNuevo = ref('')
 
 watch(() => formaTotales.value.total, (val) => {
   const calc = Math.max(0, (val || 0) - (formaTotales.value.precio_pieza || 0))
@@ -510,9 +517,83 @@ async function confirmarEntrega() {
     })
     toast.add({ severity: 'success', summary: 'Entregada', detail: `Orden #${orden.no_orden} marcada como ${nuevoEstado}`, life: 3000 })
     dialogEntregar.value = false
+    prepararWhatsappEstado({ ...orden, estado: nuevoEstado, abono: nuevoAbono, pendiente: nuevoPendiente }, orden.estado || '', nuevoEstado)
     await cargarOrdenes()
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 3000 })
+  }
+}
+
+function normalizarTelefonoWhatsapp(valor: string) {
+  const digits = String(valor || '').replace(/\D/g, '')
+  if (!digits) return ''
+  if (digits.length === 10) return `1${digits}`
+  return digits
+}
+
+function etiquetaEstado(estado: string) {
+  return String(estado || '').replace(/_/g, ' ')
+}
+
+function generarMensajeWhatsappEstado(orden: any, estadoNuevo: string, nota: string) {
+  const lineas = [
+    `Hola ${orden?.nombre || ''}.`,
+    '',
+    `Le informamos que el estado de su equipo ha sido actualizado a: ${etiquetaEstado(estadoNuevo)}.`,
+    '',
+    `Orden: ${orden?.no_orden || orden?.id || '-'}`,
+    `Equipo: ${orden?.equipo || '-'}`,
+    `Marca/Modelo: ${orden?.marca_modelo || '-'}`,
+    orden?.imei ? `IMEI: ${orden.imei}` : '',
+    orden?.serial ? `Serial: ${orden.serial}` : '',
+    orden?.tecnico ? `Tecnico: ${orden.tecnico}` : '',
+    '',
+    nota ? `Nota: ${nota}` : '',
+    '',
+    'Gracias por confiar en nosotros.',
+  ]
+  return lineas.filter(line => line !== '').join('\n')
+}
+
+function prepararWhatsappEstado(orden: any, estadoAnterior: string, estadoNuevo: string) {
+  ordenWhatsappEstado.value = orden
+  whatsappEstadoAnterior.value = estadoAnterior || ''
+  whatsappEstadoNuevo.value = estadoNuevo || orden?.estado || ''
+  whatsappTelefono.value = orden?.telefono || ''
+  whatsappNota.value = mensajeNotaPorEstado(whatsappEstadoNuevo.value)
+  dialogWhatsappEstado.value = true
+}
+
+function mensajeNotaPorEstado(estado: string) {
+  switch (estado) {
+    case 'RECIBIDO': return 'Hemos recibido su equipo y sera revisado por nuestro equipo tecnico.'
+    case 'EN_PROCESO': return 'Su equipo ya esta en proceso de revision o reparacion.'
+    case 'COMPLETADO': return 'Su equipo ya fue completado. Puede pasar por tienda para retirarlo.'
+    case 'REPARADO': return 'Su equipo ya fue reparado. Puede pasar por tienda para retirarlo.'
+    case 'ENTREGADO': return 'Su equipo fue marcado como entregado. Gracias por su visita.'
+    case 'PARCIAL': return 'Su orden queda con balance pendiente. Puede contactarnos para mas detalles.'
+    case 'CANCELADO': return 'La orden fue cancelada. Puede contactarnos si necesita mas informacion.'
+    default: return 'Puede contactarnos si necesita mas informacion sobre su orden.'
+  }
+}
+
+function enviarWhatsappEstado() {
+  const telefono = normalizarTelefonoWhatsapp(whatsappTelefono.value)
+  if (!telefono) {
+    toast.add({ severity: 'warn', summary: 'Telefono requerido', detail: 'Agrega un telefono valido para WhatsApp', life: 3000 })
+    return
+  }
+  const mensaje = encodeURIComponent(generarMensajeWhatsappEstado(ordenWhatsappEstado.value, whatsappEstadoNuevo.value, whatsappNota.value))
+  window.open(`https://wa.me/${telefono}?text=${mensaje}`, '_blank')
+  dialogWhatsappEstado.value = false
+}
+
+async function onOrdenGuardada(payload?: any) {
+  dialogOrdenVisible.value = false
+  await cargarOrdenes()
+  await cargarTecnicos()
+  if (payload?.cambioEstado) {
+    prepararWhatsappEstado(payload.orden, payload.estadoAnterior, payload.estadoNuevo)
   }
 }
 
@@ -865,6 +946,31 @@ function formatCurrency(val: number) {
   return val != null ? `$${Number(val).toFixed(2)}` : '$0.00'
 }
 
+function imagenesOrden(orden: any): string[] {
+  const valor = orden?.imagen
+  if (!valor) return []
+  if (Array.isArray(valor)) return valor.filter(Boolean)
+  const texto = String(valor).trim()
+  if (!texto) return []
+  try {
+    const parsed = JSON.parse(texto)
+    if (Array.isArray(parsed)) return parsed.filter(Boolean)
+  } catch {}
+  return [texto]
+}
+
+function primeraImagen(orden: any): string {
+  return imagenesOrden(orden)[0] || ''
+}
+
+function cantidadImagenes(orden: any): number {
+  return imagenesOrden(orden).length
+}
+
+function imagenOrdenUrl(valor: string): string {
+  return getImageUrl(valor) || valor
+}
+
 // ─── Lifecycle ───
 onMounted(async () => {
   try {
@@ -990,6 +1096,19 @@ defineExpose({ cargarOrdenes })
           </Column>
           <Column field="id" header="#" style="width: 4rem" sortable />
           <Column field="no_orden" header="No. Orden" sortable style="width: 7rem" />
+          <Column header="Fotos" style="width: 5rem">
+            <template #body="{ data }">
+              <div v-if="cantidadImagenes(data)" class="flex items-center gap-2">
+                <img
+                  :src="imagenOrdenUrl(primeraImagen(data))"
+                  class="w-10 h-10 rounded-lg object-cover border border-surface-200 dark:border-surface-700"
+                  alt="Foto de orden"
+                />
+                <span class="text-xs font-semibold text-surface-500">{{ cantidadImagenes(data) }}</span>
+              </div>
+              <span v-else class="text-xs text-surface-400">-</span>
+            </template>
+          </Column>
           <Column field="nombre" header="Cliente" sortable />
           <Column field="telefono" header="Telefono" sortable style="width: 9rem" />
           <Column field="equipo" header="Equipo" sortable />
@@ -1037,9 +1156,24 @@ defineExpose({ cargarOrdenes })
                 <Tag :value="orden.estado" :severity="getEstadoSeverity(orden.estado)" />
               </div>
 
-              <div class="min-w-0">
-                <h4 class="font-bold text-lg leading-tight uppercase truncate">{{ orden.nombre }}</h4>
-                <p class="text-sm text-surface-500 dark:text-surface-400 truncate">{{ orden.equipo || 'Sin equipo' }}</p>
+              <div class="flex gap-3 min-w-0">
+                <div v-if="cantidadImagenes(orden)" class="relative w-16 h-16 shrink-0 rounded-xl overflow-hidden border border-surface-200 dark:border-surface-700 bg-surface-100 dark:bg-surface-800">
+                  <img
+                    :src="imagenOrdenUrl(primeraImagen(orden))"
+                    class="w-full h-full object-cover"
+                    alt="Foto de orden"
+                  />
+                  <span v-if="cantidadImagenes(orden) > 1" class="absolute bottom-1 right-1 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                    +{{ cantidadImagenes(orden) - 1 }}
+                  </span>
+                </div>
+                <div class="min-w-0">
+                  <h4 class="font-bold text-lg leading-tight uppercase truncate">{{ orden.nombre }}</h4>
+                  <p class="text-sm text-surface-500 dark:text-surface-400 truncate">{{ orden.equipo || 'Sin equipo' }}</p>
+                  <p v-if="cantidadImagenes(orden)" class="text-xs text-primary font-semibold mt-1">
+                    <i class="pi pi-images mr-1"></i>{{ cantidadImagenes(orden) }} imagen(es)
+                  </p>
+                </div>
               </div>
 
               <div class="grid grid-cols-2 gap-2 text-sm">
@@ -1094,6 +1228,15 @@ defineExpose({ cargarOrdenes })
                     size="small"
                     @click.stop="abrirAbonoModal(orden)"
                     v-tooltip="'Agregar Abono'"
+                  />
+                  <Button
+                    icon="pi pi-whatsapp"
+                    severity="success"
+                    text
+                    rounded
+                    size="small"
+                    @click.stop="prepararWhatsappEstado(orden, orden.estado || '', orden.estado || '')"
+                    v-tooltip="'Notificar cliente'"
                   />
                   <Button
                     icon="pi pi-cog"
@@ -1154,8 +1297,38 @@ defineExpose({ cargarOrdenes })
       :order-id="editingOrderId"
       :visible="dialogOrdenVisible"
       @close="dialogOrdenVisible = false"
-      @saved="dialogOrdenVisible = false; cargarOrdenes(); cargarTecnicos()"
+      @saved="onOrdenGuardada"
     />
+
+    <Dialog v-model:visible="dialogWhatsappEstado" header="Notificar por WhatsApp" modal :style="{ width: 'min(34rem, 95vw)' }">
+      <div v-if="ordenWhatsappEstado" class="space-y-4 pt-2">
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800/60 p-3 text-sm space-y-1">
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Cliente</span><strong class="text-right">{{ ordenWhatsappEstado.nombre || '-' }}</strong></div>
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Orden</span><strong class="text-right">{{ ordenWhatsappEstado.no_orden || ordenWhatsappEstado.id || '-' }}</strong></div>
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Equipo</span><strong class="text-right">{{ ordenWhatsappEstado.equipo || '-' }}</strong></div>
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Estado</span><strong class="text-right text-primary">{{ etiquetaEstado(whatsappEstadoNuevo) }}</strong></div>
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label class="text-sm font-semibold">Telefono WhatsApp</label>
+          <InputText v-model="whatsappTelefono" placeholder="8090000000" fluid />
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label class="text-sm font-semibold">Nota para el cliente</label>
+          <Textarea v-model="whatsappNota" rows="4" fluid placeholder="Escribe una nota para el cliente..." />
+        </div>
+
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-900 p-3">
+          <p class="text-xs font-semibold text-surface-400 mb-2">Vista previa</p>
+          <pre class="whitespace-pre-wrap text-xs leading-relaxed text-surface-700 dark:text-surface-200 font-sans">{{ generarMensajeWhatsappEstado(ordenWhatsappEstado, whatsappEstadoNuevo, whatsappNota) }}</pre>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="No enviar" severity="secondary" text @click="dialogWhatsappEstado = false" />
+        <Button label="Enviar WhatsApp" icon="pi pi-whatsapp" severity="success" @click="enviarWhatsappEstado" />
+      </template>
+    </Dialog>
 
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- Dialog Totales                                              -->

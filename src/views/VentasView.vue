@@ -10,7 +10,6 @@ import ApartadosComp from '@/components/ventas/ApartadosComp.vue'
 import RecibidosComp from '@/components/ventas/RecibidosComp.vue'
 import NotasCreditoComp from '@/components/ventas/NotasCreditoComp.vue'
 import NotasAdminComp from '@/components/ventas/NotasAdminComp.vue'
-import GarantiasComp from '@/components/ventas/GarantiasComp.vue'
 import ReclamacionesComp from '@/components/ReclamacionesComp.vue'
 
 const auth = useAuthStore()
@@ -23,7 +22,6 @@ const allItems: SubMenuItem[] = [
   { label: 'Recibidos', icon: 'pi pi-download', key: 'recibidos' },
   { label: 'Notas de Credito', icon: 'pi pi-file-minus', key: 'notas-credito' },
   { label: 'Notas', icon: 'pi pi-pencil', key: 'notas' },
-  { label: 'Garantias', icon: 'pi pi-shield', key: 'garantias' },
   { label: 'Reclamaciones', icon: 'pi pi-exclamation-triangle', key: 'reclamaciones' },
 ]
 
@@ -36,7 +34,6 @@ const components: Record<string, any> = {
   recibidos: RecibidosComp,
   'notas-credito': NotasCreditoComp,
   notas: NotasAdminComp,
-  garantias: GarantiasComp,
   reclamaciones: ReclamacionesComp,
 }
 

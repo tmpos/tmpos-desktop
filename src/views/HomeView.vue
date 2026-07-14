@@ -31,14 +31,15 @@ const imeiServicio = ref(55)
 const hoy = ref(new Date().toISOString().split('T')[0])
 const inicioMes = ref(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0])
 
-const ventasDia = ref(0)
-const cantidadDia = ref(0)
-const ventasMes = ref(0)
-const gananciaMes = ref(0)
+const periodoDashboard = ref<'dia' | 'mes'>('dia')
+const ventasPeriodo = ref(0)
+const cantidadPeriodo = ref(0)
+const gananciaPeriodo = ref(0)
 const stockBajo = ref<any[]>([])
 const productosTop = ref<any[]>([])
 const turnoActivo = ref<any>(null)
 const loadingDashboard = ref(true)
+const etiquetaPeriodo = computed(() => periodoDashboard.value === 'dia' ? 'Hoy' : 'Este Mes')
 
 function getFechaStr(d: Date) {
   return d.toISOString().replace('T', ' ').split('.')[0]
@@ -67,21 +68,15 @@ async function cargarDashboard() {
       f.estado_factura === 'PAGADA' && (!almacenId || Number(f.almacen_id) === almacenId)
     )
 
-    ventasDia.value = facturas
-      .filter((f: any) => new Date(f.created_at) >= inicioHoy)
-      .reduce((s: number, f: any) => s + Number(f.total || 0), 0)
-
-    cantidadDia.value = facturas
-      .filter((f: any) => new Date(f.created_at) >= inicioHoy)
-      .length
-
-    const mesFacturas = facturas.filter((f: any) => new Date(f.created_at) >= inicioMes)
-    ventasMes.value = mesFacturas.reduce((s: number, f: any) => s + Number(f.total || 0), 0)
-    gananciaMes.value = mesFacturas.reduce((s: number, f: any) => s + Number(f.ganancia || 0), 0)
+    const inicioPeriodo = periodoDashboard.value === 'dia' ? inicioHoy : inicioMes
+    const facturasPeriodo = facturas.filter((f: any) => new Date(f.created_at) >= inicioPeriodo)
+    ventasPeriodo.value = facturasPeriodo.reduce((s: number, f: any) => s + Number(f.total || 0), 0)
+    cantidadPeriodo.value = facturasPeriodo.length
+    gananciaPeriodo.value = facturasPeriodo.reduce((s: number, f: any) => s + Number(f.ganancia || 0), 0)
 
     const contarProducto = (items: any[], campoNombre: string, campoPrecio: string) => {
       const map = new Map<string, { nombre: string; total: number; cantidad: number }>()
-      for (const f of mesFacturas) {
+      for (const f of facturasPeriodo) {
         try {
           const prods = typeof f.productos === 'string' ? JSON.parse(f.productos) : (f.productos || [])
           if (Array.isArray(prods)) {
@@ -110,7 +105,7 @@ async function cargarDashboard() {
       return ''
     }
     const agrupados = new Map<string, { nombre: string; total: number; cantidad: number }>()
-    for (const f of mesFacturas) {
+    for (const f of facturasPeriodo) {
       try {
         const prods = typeof f.productos === 'string' ? JSON.parse(f.productos) : (f.productos || [])
         if (Array.isArray(prods)) {
@@ -209,6 +204,12 @@ function formatCurrency(n: number): string {
   return Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+function cambiarPeriodo(periodo: 'dia' | 'mes') {
+  if (periodoDashboard.value === periodo) return
+  periodoDashboard.value = periodo
+  cargarDashboard()
+}
+
 function irA(ruta: string) {
   router.push(ruta)
 }
@@ -232,7 +233,7 @@ onMounted(() => {
 
 <template>
   <Toast />
-  <div class="space-y-6">
+  <div class="dashboard-page space-y-6">
     <!-- Header -->
     <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
       <div>
@@ -262,22 +263,30 @@ onMounted(() => {
         <div class="text-sm"><span class="font-medium">Sin turno activo</span> &mdash; <button @click="irA('/contabilidad')" class="text-primary underline">Abrir turno en Caja</button></div>
       </div>
 
+      <div class="flex items-center justify-between gap-3">
+        <h2 class="text-base font-semibold">Resumen</h2>
+        <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 p-1 bg-surface-0 dark:bg-surface-800">
+          <button type="button" class="px-4 py-1.5 rounded-md text-sm font-semibold transition-all" :class="periodoDashboard === 'dia' ? 'bg-blue-600 text-white shadow-sm' : 'text-surface-500 hover:bg-surface-100 dark:hover:bg-surface-700'" @click="cambiarPeriodo('dia')">Día</button>
+          <button type="button" class="px-4 py-1.5 rounded-md text-sm font-semibold transition-all" :class="periodoDashboard === 'mes' ? 'bg-blue-600 text-white shadow-sm' : 'text-surface-500 hover:bg-surface-100 dark:hover:bg-surface-700'" @click="cambiarPeriodo('mes')">Mes</button>
+        </div>
+      </div>
+
       <!-- KPI Cards -->
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-1">
-          <span class="text-xs font-medium text-surface-400 uppercase tracking-wide">Ventas Hoy</span>
-          <span class="text-2xl font-bold text-primary">${{ formatCurrency(ventasDia) }}</span>
-          <span class="text-xs text-surface-500">{{ cantidadDia }} factura(s)</span>
+        <div class="dashboard-kpi rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-1">
+          <span class="text-xs font-medium text-surface-400 uppercase tracking-wide">Ventas · {{ etiquetaPeriodo }}</span>
+          <span class="text-2xl font-bold text-primary">${{ formatCurrency(ventasPeriodo) }}</span>
+          <span class="text-xs text-surface-500">{{ cantidadPeriodo }} factura(s)</span>
         </div>
-        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-1">
-          <span class="text-xs font-medium text-surface-400 uppercase tracking-wide">Ventas del Mes</span>
-          <span class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">${{ formatCurrency(ventasMes) }}</span>
+        <div class="dashboard-kpi rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-1">
+          <span class="text-xs font-medium text-surface-400 uppercase tracking-wide">Ganancia · {{ etiquetaPeriodo }}</span>
+          <span class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">${{ formatCurrency(gananciaPeriodo) }}</span>
         </div>
-        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-1">
-          <span class="text-xs font-medium text-surface-400 uppercase tracking-wide">Ganancia del Mes</span>
-          <span class="text-2xl font-bold text-violet-600 dark:text-violet-400">${{ formatCurrency(gananciaMes) }}</span>
+        <div class="dashboard-kpi rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-1">
+          <span class="text-xs font-medium text-surface-400 uppercase tracking-wide">Facturas · {{ etiquetaPeriodo }}</span>
+          <span class="text-2xl font-bold text-violet-600 dark:text-violet-400">{{ cantidadPeriodo }}</span>
         </div>
-        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-1">
+        <div class="dashboard-kpi rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-1">
           <span class="text-xs font-medium text-surface-400 uppercase tracking-wide">Stock Bajo</span>
           <span class="text-2xl font-bold" :class="stockBajo.length > 0 ? 'text-red-500' : 'text-green-500'">{{ stockBajo.length }}</span>
           <span class="text-xs text-surface-500">{{ stockBajo.length > 0 ? 'Productos por reabastecer' : 'Sin alertas' }}</span>
@@ -288,39 +297,39 @@ onMounted(() => {
       <div>
         <h2 class="text-lg font-semibold mb-3">Acceso Rapido</h2>
         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-          <button class="flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/vender')">
+          <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/vender')">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-shopping-cart text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Vender</span><span class="text-[10px] text-surface-400 -mt-1">Punto de venta</span>
           </button>
-          <button class="flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-emerald-300 dark:hover:border-emerald-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/inventario')">
+          <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-emerald-300 dark:hover:border-emerald-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/inventario')">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-box text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Inventario</span><span class="text-[10px] text-surface-400 -mt-1">Productos y stock</span>
           </button>
-          <button class="flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-violet-300 dark:hover:border-violet-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/taller')">
+          <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-violet-300 dark:hover:border-violet-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/taller')">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500 to-violet-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-wrench text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Taller</span><span class="text-[10px] text-surface-400 -mt-1">Reparaciones</span>
           </button>
-          <button class="flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-amber-300 dark:hover:border-amber-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/contactos')">
+          <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-amber-300 dark:hover:border-amber-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/contactos')">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-users text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Clientes</span><span class="text-[10px] text-surface-400 -mt-1">Contactos</span>
           </button>
-          <button class="flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-rose-300 dark:hover:border-rose-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/contabilidad')">
+          <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-rose-300 dark:hover:border-rose-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/contabilidad')">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-rose-500 to-rose-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-calculator text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Contabilidad</span><span class="text-[10px] text-surface-400 -mt-1">Finanzas</span>
           </button>
-          <button class="flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-sky-300 dark:hover:border-sky-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/ventas')">
+          <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-sky-300 dark:hover:border-sky-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/ventas')">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-sky-500 to-sky-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-file text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Facturas</span><span class="text-[10px] text-surface-400 -mt-1">Historial</span>
           </button>
-          <button v-if="serverUrl" class="flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all cursor-pointer group" @click="dialogRed = true">
+          <button v-if="serverUrl" class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all cursor-pointer group" @click="dialogRed = true">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-primary-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-globe text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Red Local</span><span class="text-[10px] text-surface-400 -mt-1">Acceso por QR</span>
           </button>
-          <button class="flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-md transition-all cursor-pointer group" @click="dialogImei = true">
+          <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-md transition-all cursor-pointer group" @click="dialogImei = true">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-search text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Consultar IMEI</span><span class="text-[10px] text-surface-400 -mt-1">Busqueda externa</span>
           </button>
-          <button class="flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-red-300 dark:hover:border-red-600 hover:shadow-md transition-all cursor-pointer group" @click="cerrarSesion">
+          <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-red-300 dark:hover:border-red-600 hover:shadow-md transition-all cursor-pointer group" @click="cerrarSesion">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-sign-out text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Salir</span><span class="text-[10px] text-surface-400 -mt-1">Cerrar sesion</span>
           </button>
@@ -330,12 +339,12 @@ onMounted(() => {
       <!-- Dos columnas: Productos mas vendidos + Stock bajo -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <!-- Productos mas vendidos -->
-        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 overflow-hidden">
+        <div class="dashboard-panel rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 overflow-hidden">
           <div class="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-700">
             <h3 class="font-semibold text-sm flex items-center gap-2"><i class="pi pi-chart-bar text-primary"></i> Productos mas vendidos</h3>
-            <span class="text-xs text-surface-400">Este mes</span>
+            <span class="text-xs text-surface-400">{{ etiquetaPeriodo }}</span>
           </div>
-          <div v-if="productosTop.length === 0" class="text-center py-8 text-surface-400 text-sm">Sin ventas este mes</div>
+          <div v-if="productosTop.length === 0" class="text-center py-8 text-surface-400 text-sm">Sin ventas {{ periodoDashboard === 'dia' ? 'hoy' : 'este mes' }}</div>
           <div v-else class="divide-y divide-surface-100 dark:divide-surface-700">
             <div v-for="(p, i) in productosTop" :key="i" class="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-50 dark:hover:bg-surface-800/50 transition-colors">
               <span class="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold text-white" :style="{ background: i < 3 ? ['#FFD700','#C0C0C0','#CD7F32'][i] : 'var(--p-primary-300)' }">
@@ -351,7 +360,7 @@ onMounted(() => {
         </div>
 
         <!-- Stock bajo -->
-        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 overflow-hidden">
+        <div class="dashboard-panel rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 overflow-hidden">
           <div class="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-700">
             <h3 class="font-semibold text-sm flex items-center gap-2"><i class="pi pi-exclamation-triangle text-red-500"></i> Alertas de Stock</h3>
             <button v-if="stockBajo.length > 0" @click="irA('/inventario')" class="text-xs text-primary hover:underline">Ver inventario</button>
@@ -414,3 +423,66 @@ onMounted(() => {
     </Dialog>
   </div>
 </template>
+
+<style scoped>
+.dashboard-page h1,
+.dashboard-page h2,
+.dashboard-page h3 {
+  letter-spacing: 0;
+}
+
+.dashboard-kpi,
+.dashboard-action,
+.dashboard-panel {
+  border-color: var(--app-border, rgba(203, 213, 225, 0.82)) !important;
+  background: var(--app-surface, rgba(255, 255, 255, 0.9)) !important;
+  box-shadow: var(--shadow-card, 0 10px 30px -24px rgba(15, 23, 42, 0.45));
+  backdrop-filter: blur(14px);
+}
+
+.dashboard-kpi {
+  min-height: 7rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.dashboard-kpi::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), transparent 48%);
+}
+
+.dashboard-action {
+  min-height: 8.25rem;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.dashboard-action:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover, 0 18px 42px -28px rgba(15, 23, 42, 0.62)) !important;
+}
+
+.dashboard-panel {
+  box-shadow: var(--shadow-card, 0 10px 30px -24px rgba(15, 23, 42, 0.45));
+}
+
+:global(.dark) .dashboard-kpi,
+:global(.dark) .dashboard-action,
+:global(.dark) .dashboard-panel {
+  background: var(--app-surface, rgba(15, 23, 42, 0.78)) !important;
+  border-color: var(--app-border, rgba(71, 85, 105, 0.78)) !important;
+}
+
+@media (max-width: 640px) {
+  .dashboard-kpi {
+    min-height: 6.4rem;
+  }
+
+  .dashboard-action {
+    min-height: 7.6rem;
+    padding: 0.85rem !important;
+  }
+}
+</style>

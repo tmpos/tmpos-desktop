@@ -184,7 +184,8 @@ const totales = computed(() => {
   const margen = total > 0 ? ((total - costo) / total) * 100 : 0
   const ticketPromedio = count > 0 ? total / count : 0
   const itemsPorFactura = count > 0 ? itemsCount / count : 0
-  return { total, ganancia, descuento, count, tallerIngresos, tallerGanancia, tallerOrdenes, totalGastos, costo, margen, ticketPromedio, itemsPorFactura, itemsCount }
+  const gananciaTotal = ganancia + tallerGanancia
+  return { total, ganancia, gananciaTotal, descuento, count, tallerIngresos, tallerGanancia, tallerOrdenes, totalGastos, costo, margen, ticketPromedio, itemsPorFactura, itemsCount }
 })
 
 function parseProductos(productos: any): any[] {
@@ -719,6 +720,7 @@ async function generarReportePDF() {
   // Summary cards
   const cards = [
     { label: 'Ventas', value: `RD$ ${formatCurrency(totales.value.total)}`, color: [37, 99, 235] as [number, number, number] },
+    { label: 'Ganancia Total', value: `RD$ ${formatCurrency(totales.value.gananciaTotal)}`, color: [20, 184, 166] as [number, number, number] },
     { label: 'Ganancia', value: `RD$ ${formatCurrency(totales.value.ganancia)}`, color: [5, 150, 105] as [number, number, number] },
     { label: 'Costo Ventas', value: `RD$ ${formatCurrency(totales.value.costo)}`, color: [251, 146, 60] as [number, number, number] },
     { label: 'Descuentos', value: `RD$ ${formatCurrency(totales.value.descuento)}`, color: [245, 158, 11] as [number, number, number] },
@@ -732,11 +734,16 @@ async function generarReportePDF() {
     { label: 'Items/Fact.', value: `${totales.value.itemsPorFactura.toFixed(1)}`, color: [190, 24, 93] as [number, number, number] },
   ]
 
-  const cardW = (pageW - margin * 2 - 22) / 12
+  const cardsPorFila = 6
+  const separacionCard = 3
+  const altoCard = 14
+  const cardW = (pageW - margin * 2 - separacionCard * (cardsPorFila - 1)) / cardsPorFila
   for (let i = 0; i < cards.length; i++) {
-    addCard(cards[i].label, cards[i].value, cards[i].color, margin + i * (cardW + 2), cardW)
+    const columna = i % cardsPorFila
+    if (columna === 0 && i > 0) y += altoCard + separacionCard
+    addCard(cards[i].label, cards[i].value, cards[i].color, margin + columna * (cardW + separacionCard), cardW)
   }
-  y += 20
+  y += altoCard + 6
 
   // Charts as images
   const chartCanvases = [
@@ -949,6 +956,11 @@ onMounted(() => cargarDatos())
         <div class="rounded-xl bg-gradient-to-br from-pink-500 to-pink-700 p-4 text-white shadow">
           <p class="text-pink-100 text-xs font-semibold">Items / Factura</p>
           <p class="text-xl font-bold">{{ totales.itemsPorFactura.toFixed(1) }}</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-teal-500 to-teal-700 p-4 text-white shadow">
+          <p class="text-teal-100 text-xs font-semibold">Ganancia Total</p>
+          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.gananciaTotal) }}</p>
+          <p class="text-[10px] text-teal-100 mt-1">Ventas + Taller</p>
         </div>
       </div>
 

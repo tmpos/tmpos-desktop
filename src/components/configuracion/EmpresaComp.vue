@@ -7,6 +7,8 @@ import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import { useEmpresa } from '@/composables/useEmpresa'
 import { useAlmacenStore } from '@/stores/almacen.store'
+import { uploadImage, getImageUrl, deleteImage } from '@/services/tmCloudClient'
+import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 
 const toast = useToast()
 const almacenStore = useAlmacenStore()
@@ -16,6 +18,7 @@ const guardando = ref(false)
 
 const logoInput = ref<HTMLInputElement | null>(null)
 const logoPreview = ref('')
+const subiendoLogo = ref(false)
 
 const form = ref({
   nombre: '',
@@ -41,7 +44,7 @@ async function cargar() {
         direccion: empresa.value.direccion || '',
         logo: empresa.value.logo || '',
       }
-      logoPreview.value = empresa.value.logo || ''
+      logoPreview.value = getImageUrl(empresa.value.logo || '') || empresa.value.logo || ''
     }
   } catch (error) {
     console.error(error)
@@ -54,7 +57,7 @@ function seleccionarLogo() {
   logoInput.value?.click()
 }
 
-function procesarLogo(e: Event) {
+async function procesarLogo(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
@@ -69,15 +72,25 @@ function procesarLogo(e: Event) {
     return
   }
 
-  const reader = new FileReader()
-  reader.onload = () => {
-    logoPreview.value = reader.result as string
-    form.value.logo = reader.result as string
+  subiendoLogo.value = true
+  try {
+    const uid = await uploadImage(file, 'company/logo')
+    form.value.logo = uid
+    logoPreview.value = getImageUrl(uid) || ''
+    toast.add({ severity: 'success', summary: 'Logo subido', detail: 'El logo se guardo en TM Cloud', life: 2500 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error al subir', detail: error?.message || 'Configura TM Cloud antes de subir el logo', life: 4000 })
+  } finally {
+    subiendoLogo.value = false
+    if (logoInput.value) logoInput.value.value = ''
   }
-  reader.readAsDataURL(file)
 }
 
-function quitarLogo() {
+async function quitarLogo() {
+  const logoAnterior = form.value.logo
+  if (logoAnterior) {
+    try { await deleteImage(logoAnterior) } catch {}
+  }
   logoPreview.value = ''
   form.value.logo = ''
   if (logoInput.value) logoInput.value.value = ''
@@ -103,6 +116,12 @@ async function guardar() {
     }
 
     await guardarEmpresa(data)
+    if (empresa.value?.id && isOnline()) {
+      const syncResult = await pushLocalRowToCloud('empresa', empresa.value.id)
+      if (!syncResult.success) {
+        toast.add({ severity: 'warn', summary: 'Guardado local', detail: syncResult.error || 'No se pudo sincronizar la empresa con TM Cloud', life: 5000 })
+      }
+    }
     toast.add({ severity: 'success', summary: 'Exito', detail: 'Empresa actualizada', life: 3000 })
   } catch (error) {
     toast.add({ severity: 'error', summary: 'Error', detail: 'Error al guardar', life: 3000 })
@@ -152,7 +171,7 @@ onMounted(async () => {
             </div>
           </div>
           <div class="flex items-center gap-2 mt-3">
-            <Button icon="pi pi-upload" size="small" severity="secondary" outlined @click="seleccionarLogo">Subir</Button>
+            <Button icon="pi pi-upload" size="small" severity="secondary" outlined :loading="subiendoLogo" @click="seleccionarLogo">Subir</Button>
             <Button v-if="logoPreview" icon="pi pi-trash" size="small" severity="danger" text @click="quitarLogo">Quitar</Button>
           </div>
           <p class="text-[11px] text-surface-400 mt-1.5">PNG, JPG. Max 2MB.</p>
