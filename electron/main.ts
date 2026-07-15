@@ -2911,6 +2911,9 @@ async function startLocalServer() {
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200, height: 800, minWidth: 800, minHeight: 600, show: false,
+    icon: app.isPackaged
+      ? join(process.resourcesPath, 'tmpos-windows.ico')
+      : join(__dirname, '../build/tmpos-windows.ico'),
     webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, webSecurity: false },
     titleBarStyle: 'default',
   })

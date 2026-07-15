@@ -1,6 +1,6 @@
 {
   "name": "TMPOS",
-  "version": "2.12.4",
+  "version": "2.12.7",
   "description": "TMPOS Desktop App",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -9,7 +9,7 @@
     "electron:dev": "vite --mode electron",
     "electron:start": "vite build --mode electron && esbuild electron/main.ts --bundle --platform=node --outfile=dist-electron/main.js --external:electron --external:better-sqlite3 --format=cjs && esbuild electron/preload.ts --bundle --platform=node --outfile=dist-electron/preload.js --external:electron --format=cjs && electron dist-electron/main.js",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
-    "electron:build": "npm run rebuild:native && vite build && electron-builder",
+    "electron:build": "npm run rebuild:native && vite build --mode electron && electron-builder",
     "preview": "vite preview",
     "cap:sync": "npx cap sync",
     "cap:android": "npx cap open android",

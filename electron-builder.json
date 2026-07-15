@@ -6,11 +6,18 @@
   },
   "files": [
     "dist/**/*",
-    "dist-electron/**/*"
+    "dist-electron/main.js",
+    "dist-electron/preload.js"
+  ],
+  "extraResources": [
+    {
+      "from": "build/tmpos-windows.ico",
+      "to": "tmpos-windows.ico"
+    }
   ],
   "win": {
     "target": "nsis",
-    "icon": "build/icon.ico",
+    "icon": "build/tmpos-valid.ico",
     "artifactName": "${productName}.Setup.${version}.${ext}"
   },
   "nsis": {
