@@ -277,13 +277,22 @@ async function upsertLocal(tabla: string, cloudRow: any): Promise<'inserted' | '
   const localRows = await getLocalRows(tabla)
   const existing = localRows.find((row: any) => row.uid === cloudRow.uid)
   const cleanRow = { ...cloudRow }
+  if (tabla === 'imei') {
+    const telefonoUid = String(cleanRow.id_equi || '').trim()
+    if (telefonoUid) {
+      cleanRow.telefono_uid = telefonoUid
+      const telefonos = await getLocalRows('telefonos')
+      const telefono = telefonos.find((item: any) => String(item.uid || '') === telefonoUid)
+      cleanRow.id_equi = telefono ? telefono.id : null
+    }
+  }
   delete cleanRow.id
   if (!existing) {
     const result = await (window as any).db.insert(tabla, cleanRow)
     if (!result.success) throw new Error(result.error || `No se pudo insertar en ${tabla}`)
     return 'inserted'
   }
-  if (sameData(existing, cloudRow) || timestamp(existing) >= timestamp(cloudRow)) return 'skipped'
+  if (sameData(existing, cleanRow) || timestamp(existing) >= timestamp(cleanRow)) return 'skipped'
   const result = await (window as any).db.update(tabla, existing.id, cleanRow)
   if (!result.success) throw new Error(result.error || `No se pudo actualizar ${tabla}`)
   return 'updated'
@@ -372,6 +381,10 @@ async function upsertCloud(tabla: string, rows: any[]): Promise<{ inserted: numb
     const batch = rows.slice(offset, offset + 500).map(row => {
       const record = tmc.cleanRecord(row)
       if (tabla === 'gastos') delete record.turno_id
+      if (tabla === 'imei') {
+        if (record.telefono_uid) record.id_equi = record.telefono_uid
+        delete record.telefono_uid
+      }
       return record
     })
     const res = await fetch(`${api.url}/${encodeURIComponent(tabla)}/upsert`, {
@@ -704,6 +717,10 @@ export async function pushLocalRowToCloud(tabla: string, id: number): Promise<{ 
           return acumulado
         }, {})
       : row
+    if (tabla === 'imei') {
+      if (row.telefono_uid) fila.id_equi = row.telefono_uid
+      delete fila.telefono_uid
+    }
     if (row.uid && fila.uid === undefined) fila.uid = row.uid
     const result = await upsertCloud(tabla, [fila])
     if (result.errors > 0) return { success: false, error: 'TMPBase rechazo el registro' }

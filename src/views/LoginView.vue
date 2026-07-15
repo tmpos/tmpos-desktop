@@ -598,7 +598,7 @@ onUnmounted(() => {
 
         <div class="text-sm text-gray-400 mb-4">
           <p>Contactenos para activar su licencia:</p>
-          <p class="text-orange-400 font-medium">soporte@tmposystem.com</p>
+          <p class="text-orange-400 font-medium">Contacta al administrador del sistema</p>
         </div>
 
         <div class="flex gap-2">

@@ -45,6 +45,13 @@ function getFechaStr(d: Date) {
   return d.toISOString().replace('T', ' ').split('.')[0]
 }
 
+function formatoInicioTurno(turno: any): string {
+  const valor = turno?.created_at || turno?.updated_at
+  if (!valor) return 'hora no disponible'
+  const fecha = new Date(valor)
+  return Number.isNaN(fecha.getTime()) ? 'hora no disponible' : fecha.toLocaleString('es-DO')
+}
+
 async function cargarDashboard() {
   loadingDashboard.value = true
   try {
@@ -256,11 +263,11 @@ onMounted(() => {
       <!-- Turno activo alerta -->
       <div v-if="turnoActivo" class="flex items-center gap-3 p-3 rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
         <i class="pi pi-check-circle text-green-500 text-lg"></i>
-        <div class="text-sm"><span class="font-medium">Turno activo</span> &mdash; Abierto por <strong>{{ turnoActivo.usuario_nombre }}</strong> desde {{ new Date(turnoActivo.created_at).toLocaleString('es-DO') }}</div>
+        <div class="text-sm text-green-800 dark:text-green-100"><span class="font-semibold">Turno activo</span> &mdash; Abierto por <strong class="text-green-950 dark:text-white">{{ turnoActivo.usuario_nombre || 'Usuario' }}</strong> desde {{ formatoInicioTurno(turnoActivo) }}</div>
       </div>
       <div v-else class="flex items-center gap-3 p-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
         <i class="pi pi-exclamation-triangle text-amber-500 text-lg"></i>
-        <div class="text-sm"><span class="font-medium">Sin turno activo</span> &mdash; <button @click="irA('/contabilidad')" class="text-primary underline">Abrir turno en Caja</button></div>
+        <div class="text-sm text-amber-800 dark:text-amber-100"><span class="font-semibold">Sin turno activo</span> &mdash; <button @click="irA('/contabilidad')" class="font-semibold text-amber-900 dark:text-amber-50 underline hover:text-primary">Abrir turno en Caja</button></div>
       </div>
 
       <div class="flex items-center justify-between gap-3">

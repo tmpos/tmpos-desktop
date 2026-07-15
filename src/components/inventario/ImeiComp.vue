@@ -9,6 +9,7 @@ import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
+import InputOtp from 'primevue/inputotp'
 import Select from 'primevue/select'
 import Calendar from 'primevue/calendar'
 import Fieldset from 'primevue/fieldset'
@@ -21,6 +22,7 @@ import JsBarcode from 'jsbarcode'
 import QRCode from 'qrcode'
 import TicketFacturaPrint from '@/components/ventas/TicketFacturaPrint.vue'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { getImageUrl } from '@/services/tmCloudClient'
 
 const toast = useToast()
 const router = useRouter()
@@ -32,6 +34,12 @@ const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('table')
 const dialogVisible = ref(false)
 const deleteDialogVisible = ref(false)
+const deleteOtpEnviado = ref(false)
+const deleteOtpLoading = ref(false)
+const deleteOtpConfirmando = ref(false)
+const deleteOtp = ref('')
+const deleteOtpEmail = ref('')
+const deleteOtpError = ref('')
 const isEditing = ref(false)
 const selectedImei = ref<any>(null)
 const selectedImeis = ref<any[]>([])
@@ -48,6 +56,17 @@ const preciosImeiVenta = ref<Record<number, number>>({})
 const clienteExpressSeleccionado = ref<any>({ id: null, nombre: 'AL CONTADO', telefono: '' })
 const busquedaClienteExpress = ref('')
 const nuevoClienteExpress = ref({ nombre: '', telefono: '', direccion: '', rnc: '' })
+
+const imeisParaEliminar = computed(() => selectedImei.value ? [selectedImei.value] : (selectedImeis.value || []))
+
+function reiniciarOtpEliminar() {
+  deleteOtpEnviado.value = false
+  deleteOtpLoading.value = false
+  deleteOtpConfirmando.value = false
+  deleteOtp.value = ''
+  deleteOtpEmail.value = ''
+  deleteOtpError.value = ''
+}
 
 const imeiActionItems = computed(() => [
   { label: 'Vender o agregar al carrito', icon: 'pi pi-shopping-cart', command: () => imeiAccion.value && abrirAccionVenta(imeiAccion.value) },
@@ -104,6 +123,7 @@ const estadosFiltro = [
 const camposArray = [
   'nombre',
   'id_equi',
+  'equipo',
   'costo',
   'precio_venta',
   'precio_min',
@@ -125,6 +145,7 @@ const camposArray = [
 const form = ref({
   nombre: '',
   id_equi: null as number | null,
+  equipo: '',
   costo: 0,
   precio_venta: 0,
   precio_min: 0,
@@ -141,6 +162,13 @@ const form = ref({
   hora_venta: '',
   no_factura: '',
   nota: '',
+})
+
+const formDefault = () => ({
+  nombre: '', id_equi: null as number | null, equipo: '', costo: 0, precio_venta: 0,
+  precio_min: 0, precio_xmayor: 0, color: '', capacidad: '', bateria: '', estado: 'DISPONIBLE',
+  fecha_venta: null as Date | null, comprador: '', proveedor: '', no_compra: '', precio_vendido: 0,
+  hora_venta: '', no_factura: '', nota: '',
 })
 
 const imeiDuplicado = ref(false)
@@ -232,10 +260,12 @@ async function cargarImeis() {
     if (resProv.success) proveedores.value = resProv.data || []
     if (resClientes.success) clientes.value = resClientes.data || []
     if (resImei.success) {
-      const telMap = new Map((resTel.data || []).map((t: any) => [t.id, t.nombre]))
+      const telMap = new Map((resTel.data || []).map((t: any) => [t.id, t]))
+      const telUidMap = new Map((resTel.data || []).map((t: any) => [t.uid, t]))
       imeis.value = filterByAlmacen(resImei.data || []).map((i: any) => ({
         ...i,
-        telefono_nombre: telMap.get(i.id_equi) || '',
+        telefono_nombre: telMap.get(i.id_equi)?.nombre || telUidMap.get(i.telefono_uid)?.nombre || '',
+        telefono_imagen: telMap.get(i.id_equi)?.imagen || telUidMap.get(i.telefono_uid)?.imagen || '',
       }))
     }
   } catch (error) {
@@ -393,8 +423,10 @@ async function subirImeis() {
     for (const imei of res.data) {
       const enviar: Record<string, any> = {
         almacen, imei: String(imei.nombre || ''), estado: String(imei.estado || 'DISPONIBLE'),
-        fecha: new Date().toLocaleDateString('es-DO'), equipo: '', proveedor: String(imei.proveedor || ''),
-        id_equi: String(imei.id_equi || ''), costo: String(imei.costo || '0'),
+        fecha: new Date().toLocaleDateString('es-DO'),
+        equipo: String(imei.equipo || telefonos.value.find((telefono: any) => Number(telefono.id) === Number(imei.id_equi))?.nombre || ''),
+        proveedor: String(imei.proveedor || ''),
+        id_equi: String(imei.telefono_uid || imei.id_equi || ''), costo: String(imei.costo || '0'),
         precio_venta: String(imei.precio_venta || '0'), factura: '', no_compra: String(imei.no_compra || ''),
         fecha_venta: String(imei.fecha_venta || ''), hora_venta: String(imei.hora_venta || ''),
         comprador: String(imei.comprador || ''), detalles: '', usuario: '', marca: '', modelo: '',
@@ -458,21 +490,25 @@ async function bajarImeis() {
       if (existe) { omitidos++; continue }
 
       let equipoId: number | null = null
+      let equipoUid = ''
       const nombreEquipo = String(si.equipo || '').trim().toUpperCase()
       if (nombreEquipo) {
         const existente = localEquipos.find((t: any) => t.nombre?.toUpperCase() === nombreEquipo)
         if (existente) {
           equipoId = existente.id
+          equipoUid = existente.uid || ''
         } else {
           const eqRes = await window.db.insert('telefonos', { nombre: nombreEquipo })
           if (eqRes.success) {
             equipoId = eqRes.data?.id || null
-            localEquipos.push({ id: equipoId, nombre: nombreEquipo })
+            const telefonoCreado = (await window.db.getById('telefonos', equipoId as number)).data
+            equipoUid = telefonoCreado?.uid || ''
+            localEquipos.push({ id: equipoId, nombre: nombreEquipo, uid: equipoUid })
           }
         }
       }
 
-      const r = await window.db.insert('imei', addAlmacenId({ nombre: imeiStr, id_equi: equipoId, estado: si.estado || 'DISPONIBLE',
+      const r = await window.db.insert('imei', addAlmacenId({ nombre: imeiStr, id_equi: equipoId, telefono_uid: equipoUid, equipo: nombreEquipo, estado: si.estado || 'DISPONIBLE',
         costo: Number(si.costo || si.precio_compra || 0), precio_venta: Number(si.precio_venta || si.precioventa || 0),
         precio_min: Number(si.precio_min || 0), precio_xmayor: Number(si.precio_xmayor || 0),
         proveedor: si.proveedor || '', color: '', capacidad: si.capacidad || '',
@@ -506,6 +542,7 @@ function abrirEditar(imei: any) {
   form.value = {
     nombre: imei.nombre || '',
     id_equi: imei.id_equi || null,
+    equipo: imei.equipo || imei.telefono_nombre || '',
     costo: imei.costo || 0,
     precio_venta: imei.precio_venta || 0,
     precio_min: imei.precio_min || 0,
@@ -528,6 +565,8 @@ function abrirEditar(imei: any) {
 
 function confirmarBorrar(imei: any) {
   selectedImei.value = imei
+  selectedImeis.value = []
+  reiniciarOtpEliminar()
   deleteDialogVisible.value = true
 }
 
@@ -544,9 +583,12 @@ async function guardar() {
   const nombreMayus = form.value.nombre.trim().toUpperCase()
 
   try {
+    const telefono = telefonos.value.find((item: any) => Number(item.id) === Number(form.value.id_equi))
     const data: any = {
       nombre: nombreMayus,
       id_equi: form.value.id_equi,
+      telefono_uid: telefono?.uid || '',
+      equipo: String(telefono?.nombre || form.value.equipo || '').toUpperCase(),
       costo: form.value.costo || 0,
       precio_venta: form.value.precio_venta || 0,
       precio_min: form.value.precio_min || 0,
@@ -636,7 +678,7 @@ function abrirCambiarEquipoMultiple() {
 async function aplicarCambioEquipoMultiple() {
   if (!equipoSeleccionadoMultiple.value) return
   for (const imei of selectedImeis.value) {
-    await window.db.update('imei', imei.id, { id_equi: equipoSeleccionadoMultiple.value.id })
+    await window.db.update('imei', imei.id, { id_equi: equipoSeleccionadoMultiple.value.id, telefono_uid: equipoSeleccionadoMultiple.value.uid || '', equipo: equipoSeleccionadoMultiple.value.nombre || '' })
   }
   dialogCambioEquipoMultiple.value = false
   selectedImeis.value = []
@@ -718,17 +760,38 @@ async function aplicarCambioProveedorMultiple() {
 
 function confirmarBorrarMultiple() {
   if (selectedImeis.value.length === 0) return
+  selectedImei.value = null
+  reiniciarOtpEliminar()
   deleteDialogVisible.value = true
 }
 
-async function borrarMultiple() {
-  for (const imei of selectedImeis.value) {
-    await window.db.delete('imei', imei.id)
+async function solicitarOtpEliminarImei() {
+  const imeisParaBorrar = imeisParaEliminar.value
+  if (!imeisParaBorrar.length) return
+  deleteOtpError.value = ''
+  deleteOtp.value = ''
+  deleteOtpLoading.value = true
+  try {
+    const res = await window.electron.invoke('imei:solicitarOtpEliminar', {
+      id: imeisParaBorrar[0]?.id,
+      imeiIds: imeisParaBorrar.map((imei: any) => imei.id),
+      nombre: imeisParaBorrar.length === 1 ? imeisParaBorrar[0]?.nombre : '',
+      cantidad: imeisParaBorrar.length,
+      entidad: 'IMEI',
+      entidadPlural: 'IMEI',
+    }) as any
+    if (res.success) {
+      deleteOtpEmail.value = res.data?.email || ''
+      deleteOtpEnviado.value = true
+      toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
+    } else {
+      deleteOtpError.value = res.error || 'No se pudo enviar el codigo'
+    }
+  } catch (error: any) {
+    deleteOtpError.value = error.message || 'Error solicitando codigo'
+  } finally {
+    deleteOtpLoading.value = false
   }
-  selectedImeis.value = []
-  deleteDialogVisible.value = false
-  toast.add({ severity: 'success', summary: 'Eliminados', detail: `IMEIs eliminados`, life: 2000 })
-  await cargarImeis()
 }
 
 const plantillasEtiquetas = ref<any[]>([])
@@ -993,16 +1056,47 @@ async function imprimirEtiquetaImei(plantilla: any) {
   else toast.add({ severity: 'error', summary: 'Error', detail: ultimoError || 'No se pudieron imprimir las etiquetas', life: 6000 })
 }
 
-async function borrar() {
+async function confirmarEliminarImei() {
   try {
-    const res = await window.db.delete('imei', selectedImei.value.id)
-    if (res.success) {
-      toast.add({ severity: 'success', summary: 'Exito', detail: 'IMEI eliminado', life: 3000 })
+    const imeisParaBorrar = imeisParaEliminar.value
+    if (!imeisParaBorrar.length) return
+    deleteOtpError.value = ''
+    const codigo = String(deleteOtp.value || '').replace(/\D/g, '')
+    if (!/^\d{4}$/.test(codigo)) {
+      deleteOtpError.value = 'Introduce el codigo de 4 digitos'
+      return
+    }
+
+    deleteOtpConfirmando.value = true
+    const otpRes = await window.electron.invoke('imei:confirmarOtpEliminar', {
+      imeiId: imeisParaBorrar[0]?.id,
+      imeiIds: imeisParaBorrar.map((imei: any) => imei.id),
+      codigo,
+    }) as any
+    if (!otpRes.success) {
+      deleteOtpError.value = otpRes.error || 'Codigo no valido'
+      return
+    }
+
+    let eliminados = 0
+    for (const imei of imeisParaBorrar) {
+      const res = await window.db.delete('imei', imei.id)
+      if (!res.success) {
+        toast.add({ severity: 'error', summary: 'Error', detail: res.error || `No se pudo eliminar ${imei.nombre || imei.id}`, life: 3000 })
+        return
+      }
+      eliminados++
     }
     deleteDialogVisible.value = false
+    selectedImei.value = null
+    selectedImeis.value = []
+    reiniciarOtpEliminar()
+    toast.add({ severity: 'success', summary: 'Exito', detail: `${eliminados} IMEI(s) eliminado(s)`, life: 3000 })
     await cargarImeis()
-  } catch (error) {
-    toast.add({ severity: 'error', summary: 'Error', detail: 'Error al eliminar', life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error.message || 'Error al eliminar', life: 3000 })
+  } finally {
+    deleteOtpConfirmando.value = false
   }
 }
 
@@ -1094,7 +1188,7 @@ onMounted(async () => {
       <div v-if="selectedImeis.length > 0" class="flex items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
         <span class="text-sm font-medium">{{ selectedImeis.length }} seleccionado(s)</span>
         <Button label="Cambiar Estado" icon="pi pi-refresh" severity="info" size="small" @click="abrirCambiarEstadoMultiple" />
-        <Button label="Cambiar Equipo" icon="pi pi-mobile" severity="warn" size="small" @click="abrirCambiarEquipoMultiple" />
+        <Button label="Reubicar en otro teléfono" icon="pi pi-mobile" severity="warn" size="small" @click="abrirCambiarEquipoMultiple" />
         <Button label="Color" icon="pi pi-palette" severity="help" size="small" @click="abrirCambiarColorMultiple" />
         <Button label="Capacidad" icon="pi pi-database" severity="info" size="small" @click="abrirCambiarCapacidadMultiple" />
         <Button label="Prov." icon="pi pi-truck" severity="info" size="small" @click="abrirCambiarProveedorMultiple" />
@@ -1133,7 +1227,7 @@ onMounted(async () => {
             >{{ data.estado || 'DISPONIBLE' }}</span>
           </template>
         </Column>
-        <Column field="id_equi" header="Telefono" sortable style="width: 8rem">
+        <Column field="equipo" header="Equipo" sortable style="width: 8rem">
           <template #body="{ data }">
             <span v-if="data.telefono_nombre">{{ data.telefono_nombre }}</span>
             <span v-else class="text-surface-400">-</span>
@@ -1180,7 +1274,10 @@ onMounted(async () => {
               </span>
             </div>
             <div class="min-w-0">
-              <h4 class="font-bold leading-tight truncate font-mono text-[11px]">{{ imei.nombre }}</h4>
+              <div v-if="imei.telefono_imagen" class="mb-1 h-20 rounded-md overflow-hidden border border-surface-200 dark:border-surface-700 bg-surface-100 dark:bg-surface-700">
+                <img :src="getImageUrl(imei.telefono_imagen)" class="w-full h-full object-cover" :alt="imei.telefono_nombre || 'Equipo'" />
+              </div>
+              <h4 class="font-bold leading-tight truncate font-mono text-[11px]">IMEI: {{ imei.nombre }}</h4>
               <p v-if="imei.telefono_nombre" class="text-primary font-medium truncate text-[10px]">{{ imei.telefono_nombre }}</p>
               <p class="text-surface-400 truncate text-[10px]">{{ [imei.color, imei.capacidad].filter(Boolean).join(' - ') }}</p>
             </div>
@@ -1309,7 +1406,7 @@ onMounted(async () => {
       <div class="flex flex-col gap-3 pt-2">
         <div class="grid grid-cols-2 gap-3">
           <div class="flex flex-col gap-1">
-            <label class="font-semibold text-sm">IMEI / Nombre</label>
+            <label class="font-semibold text-sm">IMEI</label>
             <InputText
               v-model="form.nombre"
               placeholder="IMEI del dispositivo (15 digitos)"
@@ -1325,7 +1422,7 @@ onMounted(async () => {
             </div>
           </div>
           <div class="flex flex-col gap-1">
-            <label class="font-semibold text-sm">Telefono</label>
+            <label class="font-semibold text-sm">Equipo</label>
             <Select
               v-model="form.id_equi"
               :options="telefonos"
@@ -1452,14 +1549,22 @@ onMounted(async () => {
       modal
       :style="{ width: '24rem' }"
     >
-      <div class="flex items-center gap-3">
+      <div class="space-y-4">
+        <div class="flex items-center gap-3">
         <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span v-if="selectedImeis.length > 1">Seguro que deseas eliminar los <strong>{{ selectedImeis.length }}</strong> IMEI seleccionados?</span>
-        <span v-else>Seguro que deseas eliminar <strong>{{ selectedImei?.nombre }}</strong>?</span>
+          <span v-if="imeisParaEliminar.length > 1">Seguro que deseas eliminar los <strong>{{ imeisParaEliminar.length }}</strong> IMEI seleccionados?</span>
+          <span v-else>Seguro que deseas eliminar <strong>{{ imeisParaEliminar[0]?.nombre }}</strong>?</span>
+        </div>
+        <div v-if="deleteOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
+          <p class="text-xs text-surface-500 text-center">Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la empresa' }}.</p>
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly />
+        </div>
+        <p v-if="deleteOtpError" class="text-red-500 text-xs text-center">{{ deleteOtpError }}</p>
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
-        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="selectedImeis.length > 1 ? borrarMultiple() : borrar()" />
+        <Button v-if="!deleteOtpEnviado" label="Enviar OTP" icon="pi pi-envelope" severity="danger" :loading="deleteOtpLoading" @click="solicitarOtpEliminarImei" />
+        <Button v-else label="Eliminar" icon="pi pi-trash" severity="danger" :loading="deleteOtpConfirmando" @click="confirmarEliminarImei" />
       </template>
     </Dialog>
 
@@ -1481,12 +1586,12 @@ onMounted(async () => {
 
     <Dialog
       v-model:visible="dialogCambioEquipoMultiple"
-      header="Cambiar Equipo"
+      header="Reubicar en otro teléfono"
       modal
       :style="{ width: '30rem' }"
     >
       <div class="space-y-4 pt-2">
-        <p class="text-sm">Asignar nuevo equipo a <strong>{{ selectedImeis.length }}</strong> IMEI(s):</p>
+        <p class="text-sm">Selecciona el teléfono destino para <strong>{{ selectedImeis.length }}</strong> IMEI(s):</p>
         <InputText v-model="busquedaEquipoMultiple" placeholder="Buscar equipo..." fluid />
         <div class="flex flex-col gap-1 max-h-60 overflow-y-auto border border-surface-200 dark:border-surface-700 rounded-lg p-1">
           <div
@@ -1506,7 +1611,7 @@ onMounted(async () => {
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogCambioEquipoMultiple = false" />
-        <Button label="Asignar" icon="pi pi-check" :disabled="!equipoSeleccionadoMultiple" @click="aplicarCambioEquipoMultiple" />
+        <Button label="Reubicar" icon="pi pi-check" :disabled="!equipoSeleccionadoMultiple" @click="aplicarCambioEquipoMultiple" />
       </template>
     </Dialog>
 

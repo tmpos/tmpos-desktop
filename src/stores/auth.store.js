@@ -31,7 +31,7 @@ export const useAuthStore = defineStore('auth', () => {
           id: 0,
           usuario: 'soporte',
           nombre: 'SOPORTE TECNICO',
-          email: 'soporte@tmpos.com',
+          email: '',
           password: soportePwd,
           pin: '',
           rol: 'soporte',
@@ -115,7 +115,7 @@ export const useAuthStore = defineStore('auth', () => {
         isAuthenticated.value = true
       } else if (parseInt(userId) === 0) {
         user.value = {
-          id: 0, usuario: 'soporte', nombre: 'SOPORTE TECNICO', email: 'soporte@tmpos.com',
+          id: 0, usuario: 'soporte', nombre: 'SOPORTE TECNICO', email: '',
           rol: 'soporte', nivel_seguridad: 'Soporte', estado: 'ACTIVADO',
           permisos: 'administrador', restrinciones: '', porciento: '', imagen: '',
         }

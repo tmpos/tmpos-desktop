@@ -29,6 +29,9 @@ const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('table')
 const dialogVisible = ref(false)
 const deleteDialogVisible = ref(false)
+const dialogProductosVisible = ref(false)
+const facturaProductosVisible = ref<any>(null)
+const busquedaProductosFactura = ref('')
 const deleteOtpEnviado = ref(false)
 const deleteOtpLoading = ref(false)
 const deleteOtpConfirmando = ref(false)
@@ -47,6 +50,7 @@ const reenviandoAlanube = ref(false)
 const actionMenu = ref()
 const facturaAccion = ref<any>(null)
 const actionMenuItems = ref([
+  { label: 'Ver productos', icon: 'pi pi-shopping-bag', command: () => verProductosFactura(facturaAccion.value) },
   { label: 'Imprimir', icon: 'pi pi-print', command: () => imprimirFactura(facturaAccion.value) },
   { label: 'Ver PDF', icon: 'pi pi-file-pdf', command: () => verFacturaPdf(facturaAccion.value) },
   { label: 'Reintentar Alanube', icon: 'pi pi-refresh', disabled: () => reenviandoAlanube.value, command: () => reintentarAlanube(facturaAccion.value) },
@@ -60,6 +64,44 @@ function toggleActionMenu(event: Event, factura: any) {
   facturaAccion.value = factura
   actionMenu.value.toggle(event)
 }
+
+function verProductosFactura(factura: any) {
+  if (!factura) return
+  facturaProductosVisible.value = factura
+  busquedaProductosFactura.value = ''
+  dialogProductosVisible.value = true
+}
+
+function nombreProductoFactura(producto: any): string {
+  return String(producto?.nombre || producto?.descripcion || producto?.producto || 'Producto sin nombre')
+}
+
+function cantidadProductoFactura(producto: any): number {
+  return Number(producto?.cantidad ?? producto?.quantity ?? 1) || 1
+}
+
+function precioProductoFactura(producto: any): number {
+  return Number(producto?.precio_final ?? producto?.precio_venta ?? producto?.precio_unitario ?? producto?.precio ?? producto?.price ?? 0) || 0
+}
+
+function totalProductoFactura(producto: any): number {
+  return Number(producto?.total ?? (cantidadProductoFactura(producto) * precioProductoFactura(producto))) || 0
+}
+
+const productosFacturaFiltrados = computed(() => {
+  const texto = busquedaProductosFactura.value.trim().toLowerCase()
+  const productos = productosFactura(facturaProductosVisible.value)
+  if (!texto) return productos
+  return productos.filter((producto: any) => [
+    producto?.nombre,
+    producto?.descripcion,
+    producto?.producto,
+    producto?.codigo,
+    producto?.codigo_barra,
+    producto?.imei,
+    producto?.serial,
+  ].some(valor => String(valor || '').toLowerCase().includes(texto)))
+})
 
 function usuarioAuditoria(): string {
   try { return localStorage.getItem('mr_user_usuario') || 'POS' } catch { return 'POS' }
@@ -425,6 +467,20 @@ function obtenerNcfFactura(factura: any): string {
 function productosFactura(factura: any): any[] {
   const productos = parseJson(factura?.productos, [])
   return Array.isArray(productos) ? productos : []
+}
+
+function costoFactura(factura: any): number {
+  const costoGuardado = Number(factura?.costo || 0)
+  if (costoGuardado !== 0) return costoGuardado
+  return productosFactura(factura).reduce((total: number, item: any) => {
+    return total + (Number(item?.costo || 0) * Number(item?.cantidad || 1))
+  }, 0)
+}
+
+function gananciaFactura(factura: any): number {
+  const gananciaGuardada = Number(factura?.ganancia || 0)
+  if (gananciaGuardada !== 0) return gananciaGuardada
+  return Number(factura?.total || 0) - costoFactura(factura)
 }
 
 function buildAlanubeSender(company: any, empresa: any) {
@@ -986,6 +1042,12 @@ onMounted(async () => {
         <Column field="total" header="Total" sortable style="width: 10rem">
           <template #body="{ data }">${{ formatCurrency(data.total) }}</template>
         </Column>
+        <Column header="Costo" style="width: 10rem">
+          <template #body="{ data }"><span class="text-orange-600 dark:text-orange-400">${{ formatCurrency(costoFactura(data)) }}</span></template>
+        </Column>
+        <Column header="Ganancia" style="width: 10rem">
+          <template #body="{ data }"><span class="font-semibold text-emerald-600 dark:text-emerald-400">${{ formatCurrency(gananciaFactura(data)) }}</span></template>
+        </Column>
         <Column field="metodo_pago" header="Pago" sortable style="width: 9rem" />
         <Column field="estado_factura" header="Estado" sortable style="width: 9rem">
           <template #body="{ data }">
@@ -1035,6 +1097,16 @@ onMounted(async () => {
               <div class="flex items-center gap-2 min-w-0">
                 <i class="pi pi-dollar text-surface-400"></i>
                 <span class="truncate font-semibold">${{ formatCurrency(factura.total) }}</span>
+              </div>
+              <div class="grid grid-cols-2 gap-2 pt-1">
+                <div class="rounded-lg bg-orange-50 dark:bg-orange-950/30 px-2 py-1.5">
+                  <p class="text-[10px] uppercase tracking-wide text-orange-700 dark:text-orange-300">Costo</p>
+                  <p class="text-sm font-semibold text-orange-700 dark:text-orange-300">${{ formatCurrency(costoFactura(factura)) }}</p>
+                </div>
+                <div class="rounded-lg bg-emerald-50 dark:bg-emerald-950/30 px-2 py-1.5">
+                  <p class="text-[10px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Ganancia</p>
+                  <p class="text-sm font-semibold text-emerald-700 dark:text-emerald-300">${{ formatCurrency(gananciaFactura(factura)) }}</p>
+                </div>
               </div>
               <div class="flex items-center gap-2 min-w-0">
                 <i class="pi pi-credit-card text-surface-400"></i>
@@ -1099,6 +1171,52 @@ onMounted(async () => {
           @click="borrar"
         />
       </template>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="dialogProductosVisible"
+      :header="`Productos · Factura ${facturaProductosVisible?.no_factura || ''}`"
+      modal
+      :style="{ width: 'min(48rem, 96vw)' }"
+    >
+      <div class="space-y-4 pt-1">
+        <div class="flex flex-wrap items-center justify-between gap-2 text-sm text-surface-500">
+          <span>{{ facturaProductosVisible?.nombre_cliente || 'CONSUMIDOR FINAL' }}</span>
+          <strong class="text-surface-900 dark:text-surface-0">Total: RD$ {{ formatCurrency(facturaProductosVisible?.total || 0) }}</strong>
+        </div>
+        <IconField>
+          <InputIcon class="pi pi-search" />
+          <InputText v-model="busquedaProductosFactura" placeholder="Buscar por producto, código, IMEI o serial..." fluid />
+        </IconField>
+        <div v-if="productosFactura(facturaProductosVisible).length" class="overflow-x-auto rounded-xl border border-surface-200 dark:border-surface-700">
+          <table class="w-full min-w-[38rem] text-sm border-collapse">
+            <thead class="bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-300">
+              <tr>
+                <th class="text-left px-3 py-2.5 font-semibold">Producto</th>
+                <th class="text-center px-3 py-2.5 font-semibold">Cant.</th>
+                <th class="text-right px-3 py-2.5 font-semibold">Precio</th>
+                <th class="text-right px-3 py-2.5 font-semibold">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(producto, index) in productosFacturaFiltrados" :key="producto.uid || producto.id || producto.imei || producto.serial || index" class="border-t border-surface-200 dark:border-surface-700">
+                <td class="px-3 py-3">
+                  <p class="font-medium text-surface-900 dark:text-surface-0">{{ nombreProductoFactura(producto) }}</p>
+                  <p v-if="producto.imei || producto.serial" class="text-xs text-surface-500 mt-0.5">{{ producto.imei ? `IMEI: ${producto.imei}` : `Serial: ${producto.serial}` }}</p>
+                </td>
+                <td class="px-3 py-3 text-center">{{ cantidadProductoFactura(producto) }}</td>
+                <td class="px-3 py-3 text-right">RD$ {{ formatCurrency(precioProductoFactura(producto)) }}</td>
+                <td class="px-3 py-3 text-right font-semibold">RD$ {{ formatCurrency(totalProductoFactura(producto)) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="productosFacturaFiltrados.length === 0" class="py-8 text-center text-surface-500">No hay productos que coincidan con la búsqueda.</div>
+        </div>
+        <div v-else class="py-10 text-center text-surface-500">
+          <i class="pi pi-shopping-bag text-3xl block mb-3 text-surface-400"></i>
+          Esta factura no tiene productos registrados.
+        </div>
+      </div>
     </Dialog>
     <TicketFacturaPrint ref="ticketPrintRef" />
     <FacturaPdfPrint ref="facturaPdfRef" />

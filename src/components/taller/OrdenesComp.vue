@@ -28,10 +28,12 @@ import OrdenTallerForm from './OrdenTallerForm.vue'
 import QRCode from 'qrcode'
 import JsBarcode from 'jsbarcode'
 import { getImageUrl } from '@/services/tmCloudClient'
+import { useEmpresa } from '@/composables/useEmpresa'
 
 import { envioElectron, encryptarPassword } from '@/funciones/funciones.js'
 
 const toast = useToast()
+const { nombre: nombreEmpresa, cargar: cargarEmpresa } = useEmpresa()
 
 // ─── Estado general ───
 const ordenes = ref<any[]>([])
@@ -619,11 +621,11 @@ function abrirEtiquetaTaller(orden: any) {
   dialogEtiquetaTaller.value = true
 }
 
-function generarBarcodeSVG(data: string): string {
+function generarBarcodeSVG(data: string, altoMm = 9): string {
   if (!data) return ''
   try {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-    JsBarcode(svg, data, { format: 'CODE128', width: 1.5, height: 40, displayValue: true, fontSize: 10, margin: 2 })
+    JsBarcode(svg, data, { format: 'CODE128', width: 0.75, height: Math.max(12, altoMm * 1.8), displayValue: true, fontSize: 5, margin: 0 })
     return new XMLSerializer()
       .serializeToString(svg)
       .replace(/width="[^"]*"/, 'width="100%"')
@@ -644,7 +646,9 @@ async function generarQR(data: string): Promise<string> {
 function aplicarVariablesEtiqueta(valor: string, orden: any): string {
   const numeroOrden = orden?.no_orden || orden?.id || ''
   return String(valor || '')
+    .replace(/\{EMPRESA\}/gi, nombreEmpresa.value || 'MI EMPRESA')
     .replace(/\{CLIENTE\}/g, orden?.nombre || '')
+    .replace(/\{FALLAS\}/gi, orden?.fallas || '')
     .replace(/\{NO_ORDEN\}/g, numeroOrden)
     .replace(/\{ORDEN\}/g, numeroOrden)
     .replace(/\{NUMERO_ORDEN\}/g, numeroOrden)
@@ -656,6 +660,8 @@ async function imprimirEtiquetaTaller(plantilla: any) {
     return
   }
   if (!ordenEtiqueta.value || !plantilla?.elementos) return
+
+  await cargarEmpresa()
 
   localStorage.setItem('etiquetas_printer', printerSel.value)
   dialogEtiquetaTaller.value = false
@@ -669,7 +675,7 @@ async function imprimirEtiquetaTaller(plantilla: any) {
   const orden = ordenEtiqueta.value
 
   let html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiqueta Taller</title><style>'
-  html += 'body{margin:0;padding:0;font-family:Arial,sans-serif}'
+  html += `@page{size:${ancho}mm ${alto}mm;margin:0}html,body{margin:0;padding:0;width:${ancho}mm;height:${alto}mm;font-family:Arial,sans-serif}`
   html += `.label{width:${mmToPx(ancho)}px;height:${mmToPx(alto)}px;position:relative;overflow:hidden;background:white}`
   html += '.elem{position:absolute;overflow:hidden;word-wrap:break-word;display:flex;align-items:center;justify-content:center}'
   html += '</style></head><body><div class="label">'
@@ -681,9 +687,9 @@ async function imprimirEtiquetaTaller(plantilla: any) {
     }
     const style = `left:${mmToPx(el.x)}px;top:${mmToPx(el.y)}px;width:${mmToPx(el.ancho)}px;height:${mmToPx(el.alto)}px;`
     if (el.tipo === 'texto') {
-      html += `<div class="elem" style="${style}font-size:${(el.fontSize || 8) * 1.333}px;font-weight:${el.bold ? 'bold' : 'normal'}">${el.contenido}</div>`
+      html += `<div class="elem" style="${style}font-size:${el.fontSize || 8}px;font-weight:${el.bold ? 'bold' : 'normal'};line-height:1;text-align:center">${el.contenido}</div>`
     } else if (el.tipo === 'barcode') {
-      html += `<div class="elem" style="${style}overflow:hidden">${generarBarcodeSVG(el.contenido)}</div>`
+      html += `<div class="elem" style="${style}overflow:hidden">${generarBarcodeSVG(el.contenido, el.alto)}</div>`
     } else if (el.tipo === 'qr') {
       const qrData = await generarQR(el.contenido)
       if (qrData) html += `<img class="elem" style="${style}object-fit:contain;max-width:100%;max-height:100%" src="${qrData}" />`
@@ -692,7 +698,7 @@ async function imprimirEtiquetaTaller(plantilla: any) {
   html += '</div></body></html>'
 
   try {
-    const res = await window.electron.invoke('print:ticket', html, printerSel.value || undefined)
+    const res = await window.electron.invoke('print:ticket', html, printerSel.value || undefined, { width: ancho, height: alto })
     if (res.success) toast.add({ severity: 'success', summary: 'Impreso', detail: 'Etiqueta enviada a la impresora', life: 2000 })
     else toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo imprimir', life: 3000 })
   } catch (error: any) {

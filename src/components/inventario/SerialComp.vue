@@ -514,11 +514,12 @@ function formatPrecio(value: unknown) {
 
 function aplicarVariablesSerial(valor: string, serial: any): string {
   return String(valor || '')
-    .replace(/\{SERIAL\}/g, serial?.nombre || '')
-    .replace(/\{PRECIO\}/g, formatPrecio(serial?.precio_venta))
-    .replace(/\{PRECIO_VENTA\}/g, formatPrecio(serial?.precio_venta))
-    .replace(/\{EMPRESA\}/g, empresaNombre.value || '')
-    .replace(/\{NOMBRE_EMPRESA\}/g, empresaNombre.value || '')
+    .replace(/\{PRODUCTO\}/gi, serial?.electrodomestico_nombre || '')
+    .replace(/\{SERIAL\}/gi, serial?.nombre || '')
+    .replace(/\{PRECIO\}/gi, formatPrecio(serial?.precio_venta))
+    .replace(/\{PRECIO_VENTA\}/gi, formatPrecio(serial?.precio_venta))
+    .replace(/\{EMPRESA\}/gi, empresaNombre.value || '')
+    .replace(/\{NOMBRE_EMPRESA\}/gi, empresaNombre.value || '')
     .replace(/MI EMPRESA/g, empresaNombre.value || 'MI EMPRESA')
     .replace(/RD\$ 0\.00/g, formatPrecio(serial?.precio_venta))
 }
@@ -668,7 +669,7 @@ async function imprimirEtiquetaSerial(plantilla: any) {
 
   for (const serial of selectedSeriales.value) {
     let html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiqueta</title><style>'
-    html += 'body{margin:0;padding:0;font-family:Arial,sans-serif}'
+    html += `@page{size:${ancho}mm ${alto}mm;margin:0}html,body{margin:0;padding:0;width:${ancho}mm;height:${alto}mm;font-family:Arial,sans-serif}`
     html += `.label{width:${mmToPx(ancho)}px;height:${mmToPx(alto)}px;position:relative;overflow:hidden;background:white}`
     html += '.elem{position:absolute;overflow:hidden;word-wrap:break-word;display:flex;align-items:center;justify-content:center}'
     html += '</style></head><body><div class="label">'
@@ -691,7 +692,7 @@ async function imprimirEtiquetaSerial(plantilla: any) {
     html += '</div></body></html>'
 
     try {
-      const res = await window.electron.invoke('print:ticket', html, printerName.value || undefined) as any
+      const res = await window.electron.invoke('print:ticket', html, printerName.value || undefined, { width: ancho, height: alto }) as any
       if (res.success) impresas++
       else ultimoError = res.error || 'No se pudo imprimir'
     } catch (error: any) {

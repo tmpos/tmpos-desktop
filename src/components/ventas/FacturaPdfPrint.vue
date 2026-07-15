@@ -6,6 +6,7 @@ import Button from 'primevue/button'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
 import { envioElectron } from '@/funciones/funciones.js'
+import { ensureConfigLoaded, getConfig, getImageUrl } from '@/services/tmCloudClient'
 
 function formatearMetodoPago(factura: any): string {
   const metodo = String(factura.metodo_pago || '').toUpperCase()
@@ -158,6 +159,38 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary)
 }
 
+// El visor con el que se imprime el PDF no siempre conserva la autenticacion de
+// TM Cloud. Por eso el logo se convierte a data URL antes de construir el HTML.
+async function resolverLogoEmpresa(ruta: any, baseUrl = ''): Promise<string> {
+  const valor = String(ruta ?? '').trim()
+  if (!valor) return ''
+
+  const rutaDirecta = normalizarRutaImagen(valor, baseUrl)
+  if (/^data:/i.test(rutaDirecta)) return rutaDirecta
+
+  // Los logos nuevos se guardan como uid de Storage (fil_xxx), no como URL.
+  if (!/^(https?:\/\/|file:|blob:|\/)/i.test(valor)) {
+    try {
+      await ensureConfigLoaded()
+      const url = getImageUrl(valor)
+      const key = getConfig()?.key || ''
+      if (url) {
+        const response = await fetch(url, {
+          headers: key ? { Authorization: `Bearer ${key}` } : {},
+        })
+        if (response.ok) {
+          const type = response.headers.get('content-type') || 'image/png'
+          return `data:${type};base64,${arrayBufferToBase64(await response.arrayBuffer())}`
+        }
+      }
+    } catch (_) {
+      // Si TM Cloud no esta disponible, se intenta la ruta existente.
+    }
+  }
+
+  return rutaDirecta
+}
+
 async function cargarEmpresa() {
   try {
     const res = await window.db.getAll('empresa')
@@ -216,6 +249,20 @@ async function cargarConfig() {
   }
 }
 
+async function cargarConfiguracionImpresora() {
+  try {
+    const res = await window.db.getAll('impresoras_config')
+    return res?.success && Array.isArray(res.data) ? res.data[0] || {} : {}
+  } catch (_) {
+    return {}
+  }
+}
+
+function limitarMedidaLogo(valor: any, predeterminado: number, minimo: number, maximo: number): number {
+  const medida = Number(valor)
+  return Number.isFinite(medida) ? Math.min(maximo, Math.max(minimo, medida)) : predeterminado
+}
+
 async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = null }: {
   factura: any
   cliente?: any
@@ -229,7 +276,10 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
   const notaFactura = obtenerNotaFactura(factura) || 'Gracias por su compra!'
   const notaFacturaHtml = notaFactura.replace(/\n/g, '<br>')
   const productos = parseJson(factura.productos, Array.isArray(factura.items) ? factura.items : [])
-  const logoEmpresa = normalizarRutaImagen(empresa?.logoprinter || empresa?.logo, link)
+  const logoEmpresa = await resolverLogoEmpresa(empresa?.logoprinter || empresa?.logo, link)
+  const configImpresora = await cargarConfiguracionImpresora()
+  const logoAncho = limitarMedidaLogo(configImpresora.factura_logo_ancho, 150, 30, 400)
+  const logoAlto = limitarMedidaLogo(configImpresora.factura_logo_alto, 90, 20, 250)
 
   const alanubeData = await obtenerAlanubeData(factura)
   const qrValue = alanubeData.documentStampUrl || `${link || 'https://tmposrd.com'}/receipt/factura?factura=${factura.no_factura || ''}`
@@ -306,7 +356,7 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
     .page { width: 100%; max-width: 760px; margin: 0 auto; padding: 16px; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
     .company { flex: 1; line-height: 1.35; }
-    .company img { max-width: 150px; max-height: 90px; object-fit: contain; margin-bottom: 8px; }
+    .company img { max-width: ${logoAncho}px; max-height: ${logoAlto}px; object-fit: contain; margin-bottom: 8px; }
     .company-name { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
     .invoice-box { width: 280px; border: 1px solid #111827; border-radius: 8px; overflow: hidden; }
     .invoice-box table { width: 100%; border-collapse: collapse; }

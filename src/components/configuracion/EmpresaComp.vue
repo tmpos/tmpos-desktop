@@ -57,6 +57,16 @@ function seleccionarLogo() {
   logoInput.value?.click()
 }
 
+async function guardarLogoInmediatamente(logo: string) {
+  if (!empresa.value?.id) return
+  await guardarEmpresa({ logo, almacen_id: almacenStore.activeId || 0 })
+  if (isOnline()) {
+    const syncResult = await pushLocalRowToCloud('empresa', empresa.value.id)
+    if (!syncResult.success) throw new Error(syncResult.error || 'No se pudo sincronizar el logo con TM Cloud')
+  }
+  window.dispatchEvent(new CustomEvent('empresa:actualizada', { detail: { logo } }))
+}
+
 async function procesarLogo(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
@@ -77,6 +87,7 @@ async function procesarLogo(e: Event) {
     const uid = await uploadImage(file, 'company/logo')
     form.value.logo = uid
     logoPreview.value = getImageUrl(uid) || ''
+    await guardarLogoInmediatamente(uid)
     toast.add({ severity: 'success', summary: 'Logo subido', detail: 'El logo se guardo en TM Cloud', life: 2500 })
   } catch (error: any) {
     toast.add({ severity: 'error', summary: 'Error al subir', detail: error?.message || 'Configura TM Cloud antes de subir el logo', life: 4000 })
@@ -93,6 +104,9 @@ async function quitarLogo() {
   }
   logoPreview.value = ''
   form.value.logo = ''
+  try { await guardarLogoInmediatamente('') } catch (error: any) {
+    toast.add({ severity: 'warn', summary: 'Logo removido localmente', detail: error?.message || 'No se pudo sincronizar el cambio', life: 4000 })
+  }
   if (logoInput.value) logoInput.value.value = ''
 }
 
@@ -122,6 +136,7 @@ async function guardar() {
         toast.add({ severity: 'warn', summary: 'Guardado local', detail: syncResult.error || 'No se pudo sincronizar la empresa con TM Cloud', life: 5000 })
       }
     }
+    window.dispatchEvent(new CustomEvent('empresa:actualizada', { detail: data }))
     toast.add({ severity: 'success', summary: 'Exito', detail: 'Empresa actualizada', life: 3000 })
   } catch (error) {
     toast.add({ severity: 'error', summary: 'Error', detail: 'Error al guardar', life: 3000 })

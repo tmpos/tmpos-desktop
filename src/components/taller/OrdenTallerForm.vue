@@ -32,6 +32,7 @@ const dialogImagenVisible = ref(false)
 const subiendoImagenes = ref(false)
 
 const tecnicos = ref<{ nombre: string; porcentaje: number }[]>([])
+const metodosPagoDB = ref<any[]>([])
 
 const piezasDisponibles = ref<any[]>([])
 const dialogPiezasVisible = ref(false)
@@ -185,7 +186,23 @@ const form = ref({
   imagen: '',
 })
 
-const totalCalculado = computed(() => (form.value.precio_pieza || 0) + (form.value.mano_obra || 0))
+const metodosPago = computed(() => {
+  const activos = metodosPagoDB.value
+    .filter((metodo: any) => String(metodo.estado || 'ACTIVO').toUpperCase() === 'ACTIVO')
+    .map((metodo: any) => ({
+      label: Number(metodo.porcentaje || 0) > 0 ? `${metodo.nombre} (${metodo.porcentaje}%)` : metodo.nombre,
+      value: metodo.nombre,
+    }))
+  return activos.length ? activos : ['EFECTIVO', 'TARJETA', 'TRANSFERENCIA', 'CHEQUE', 'CREDITO'].map(value => ({ label: value, value }))
+})
+
+const comisionPagoPorcentaje = computed(() => {
+  const metodo = metodosPagoDB.value.find((item: any) => String(item.nombre || '').toUpperCase() === String(form.value.metodo_pago || '').toUpperCase())
+  return Number(metodo?.porcentaje || 0)
+})
+const subtotalTaller = computed(() => Number(form.value.precio_pieza || 0) + Number(form.value.mano_obra || 0))
+const comisionPagoMonto = computed(() => Math.round(subtotalTaller.value * (comisionPagoPorcentaje.value / 100) * 100) / 100)
+const totalCalculado = computed(() => subtotalTaller.value + comisionPagoMonto.value)
 const pendienteCalculado = computed(() => totalCalculado.value - (form.value.abono || 0))
 
 function formDefault() {
@@ -365,7 +382,7 @@ watch(() => props.visible, async (v) => {
   }
 })
 
-watch([() => form.value.precio_pieza, () => form.value.mano_obra, () => form.value.abono], () => {
+watch([() => form.value.precio_pieza, () => form.value.mano_obra, () => form.value.abono, () => form.value.metodo_pago], () => {
   form.value.total = totalCalculado.value
   form.value.pendiente = pendienteCalculado.value
 }, { deep: true })
@@ -385,13 +402,15 @@ watch([() => form.value.porcentaje_tecnico, () => form.value.mano_obra], () => {
 })
 
 async function cargarDatos() {
-  const [tecnicosRes, ordenRes, clientesRes] = await Promise.all([
+  const [tecnicosRes, ordenRes, clientesRes, metodosRes] = await Promise.all([
     window.db.getAll('tecnicos'),
     props.orderId ? window.db.getAll('ordenes_taller') : Promise.resolve(null),
     window.db.getAll('clientes'),
+    window.db.getAll('metodos_pago'),
   ])
   cargarPiezas()
   if (clientesRes.success) clientes.value = clientesRes.data || []
+  if (metodosRes.success) metodosPagoDB.value = metodosRes.data || []
   if (tecnicosRes.success) {
     tecnicos.value = (tecnicosRes.data || []).map((t: any) => ({
       nombre: (t.nombre || '').toUpperCase(), porcentaje: t.porcentaje || 0
@@ -739,9 +758,12 @@ onMounted(async () => {
                 <label class="font-semibold text-sm">Mano de Obra</label>
                 <InputNumber v-model="form.mano_obra" :min="0" fluid @focus="(e: any) => e.target.select()" />
               </div>
-              <div class="flex flex-col gap-1">
+      <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Total</label>
                 <InputNumber :modelValue="totalCalculado" disabled fluid />
+                <small v-if="comisionPagoPorcentaje > 0" class="text-amber-600 dark:text-amber-400">
+                  Incluye recargo de {{ comisionPagoPorcentaje }}%: {{ comisionPagoMonto.toFixed(2) }}
+                </small>
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Abono</label>
@@ -753,7 +775,7 @@ onMounted(async () => {
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Metodo Pago</label>
-                <Select v-model="form.metodo_pago" :options="['EFECTIVO', 'TARJETA', 'TRANSFERENCIA', 'CHEQUE', 'CREDITO']" fluid />
+                <Select v-model="form.metodo_pago" :options="metodosPago" optionLabel="label" optionValue="value" fluid />
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">% Tecnico</label>

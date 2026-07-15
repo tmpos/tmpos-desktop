@@ -17,6 +17,7 @@ import Toast from 'primevue/toast'
 
 import { envioElectron } from '@/funciones/funciones.js'
 import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
+import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
@@ -198,14 +199,13 @@ function abrirCrear() {
   dialogVisible.value = true
 }
 
-function abrirEditar(electrodomestico = selectedElectrodomestico.value) {
-  selectedElectrodomestico.value = electrodomestico
+function abrirEditar(electrodomestico: any) {
   isEditing.value = true
+  selectedElectrodomestico.value = electrodomestico
   form.value = {
-    nombre: electrodomestico?.nombre || '',
-    imagen: electrodomestico?.imagen || '',
+    nombre: electrodomestico.nombre,
+    imagen: electrodomestico.imagen || '',
   }
-  detalleDialogVisible.value = false
   dialogVisible.value = true
 }
 
@@ -421,8 +421,16 @@ async function subirImagen() {
   }
   subiendoImagen.value = true
   try {
-    const uid = await uploadImage(file, 'electrodomesticos')
+    const uid = await uploadImage(file, 'accesorios')
     form.value.imagen = uid
+    if (isEditing.value && selectedElectrodomestico.value?.id) {
+      const actualizado = await window.db.update('electrodomesticos', selectedElectrodomestico.value.id, { imagen: uid })
+      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
+      selectedElectrodomestico.value.imagen = uid
+      const local = electrodomesticos.value.find((item: any) => item.id === selectedElectrodomestico.value.id)
+      if (local) local.imagen = uid
+      if (isOnline()) await pushLocalRowToCloud('electrodomesticos', selectedElectrodomestico.value.id)
+    }
     toast.add({ severity: 'success', summary: 'Imagen subida', life: 2000 })
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo subir la imagen', life: 4000 })
@@ -438,11 +446,16 @@ async function eliminarImagen() {
     await deleteImage(form.value.imagen)
   } catch {}
   form.value.imagen = ''
+  if (isEditing.value && selectedElectrodomestico.value?.id) {
+    await window.db.update('electrodomesticos', selectedElectrodomestico.value.id, { imagen: '' })
+    if (isOnline()) await pushLocalRowToCloud('electrodomesticos', selectedElectrodomestico.value.id)
+  }
 }
 
 function imagenUrl(uid: string | null | undefined): string | null {
   return uid ? getImageUrl(uid) : null
 }
+
 
 onMounted(async () => {
   try {
@@ -579,25 +592,21 @@ onMounted(async () => {
       v-model:visible="detalleDialogVisible"
       :header="selectedElectrodomestico?.nombre"
       modal
-      :style="{ width: '28rem' }"
+      :style="{ width: 'min(46rem, 95vw)' }"
     >
       <div class="flex flex-col gap-3">
-        <Button
-          label="Editar"
-          icon="pi pi-pencil"
-          severity="info"
-          outlined
-          class="w-full justify-start"
-          @click="abrirEditar()"
-        />
-        <Button
-          label="Agregar Serial"
-          icon="pi pi-plus"
-          severity="success"
-          outlined
-          class="w-full justify-start"
-          @click="abrirAgregarSerial"
-        />
+        <div class="flex items-center gap-3 rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3">
+          <div v-if="imagenUrl(selectedElectrodomestico?.imagen)" class="w-16 h-16 rounded-lg overflow-hidden shrink-0 border border-surface-200 dark:border-surface-700">
+            <img :src="imagenUrl(selectedElectrodomestico?.imagen)" class="w-full h-full object-cover" :alt="`Imagen de ${selectedElectrodomestico?.nombre || 'electrodomestico'}`" />
+          </div>
+          <div v-else class="w-16 h-16 rounded-lg bg-primary-100 dark:bg-primary-900 flex items-center justify-center shrink-0"><i class="pi pi-desktop text-primary-600 dark:text-primary-300 text-2xl"></i></div>
+          <div class="min-w-0"><p class="font-semibold truncate">{{ selectedElectrodomestico?.nombre }}</p><p class="text-xs text-surface-500">{{ serialesDelElectrodomesticoFiltrados.length }} serial(es) disponibles</p></div>
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <Button label="Editar" icon="pi pi-pencil" severity="info" outlined @click="abrirEditar(selectedElectrodomestico)" />
+          <Button label="Agregar Serial" icon="pi pi-plus" severity="success" outlined @click="abrirAgregarSerial" />
+          <Button label="Eliminar" icon="pi pi-trash" severity="danger" outlined @click="confirmarBorrar()" />
+        </div>
         <div class="flex flex-col gap-2">
           <div class="flex items-center justify-between gap-2">
             <span class="font-semibold text-sm">Lista de Seriales</span>
@@ -627,6 +636,12 @@ onMounted(async () => {
             </Column>
             <Column field="capacidad" header="Cap." style="min-width: 5rem" />
             <Column field="color" header="Color" style="min-width: 6rem" />
+            <Column header="Costo" style="min-width: 6.5rem">
+              <template #body="{ data }"><span class="font-medium">RD$ {{ Number(data.costo || 0).toFixed(2) }}</span></template>
+            </Column>
+            <Column header="Precio Venta" style="min-width: 7.5rem">
+              <template #body="{ data }"><span class="font-semibold text-primary">RD$ {{ Number(data.precio_venta || 0).toFixed(2) }}</span></template>
+            </Column>
             <Column field="estado" header="Estado" style="min-width: 7rem">
               <template #body="{ data }">
                 <span
@@ -643,14 +658,6 @@ onMounted(async () => {
             </template>
           </DataTable>
         </div>
-        <Button
-          label="Eliminar Electrodomestico"
-          icon="pi pi-trash"
-          severity="danger"
-          outlined
-          class="w-full justify-start mt-2"
-          @click="confirmarBorrar()"
-        />
       </div>
     </Dialog>
 
@@ -692,6 +699,13 @@ onMounted(async () => {
       modal
       :style="{ width: '34rem' }"
     >
+      <div class="flex items-center gap-3 mb-3 rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3">
+        <div v-if="imagenUrl(selectedElectrodomestico?.imagen)" class="w-12 h-12 rounded-lg overflow-hidden shrink-0 border border-surface-200 dark:border-surface-700">
+          <img :src="imagenUrl(selectedElectrodomestico?.imagen)" class="w-full h-full object-cover" :alt="`Imagen de ${selectedElectrodomestico?.nombre || 'electrodomestico'}`" />
+        </div>
+        <div v-else class="w-12 h-12 rounded-lg bg-primary-100 dark:bg-primary-900 flex items-center justify-center shrink-0"><i class="pi pi-desktop text-primary-600 dark:text-primary-300 text-lg"></i></div>
+        <div><p class="font-semibold text-sm">{{ selectedElectrodomestico?.nombre }}</p><p class="text-xs text-surface-500">Equipo para el nuevo serial</p></div>
+      </div>
       <SelectButton v-model="modoSerial" :options="modosSerial" optionLabel="label" optionValue="value" :allowEmpty="false" fluid class="w-full mb-3" />
 
       <div v-if="modoSerial === 'individual'" class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">

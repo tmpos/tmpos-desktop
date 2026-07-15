@@ -76,6 +76,15 @@ const notaData = computed(() => {
   }
 })
 
+const clienteCompleto = computed(() => {
+  const cliente = notaData.value
+  return Boolean(
+    String(cliente.customer_name || '').trim()
+    && String(cliente.customer_phone || '').trim()
+    && String(cliente.customer_cedula || '').trim(),
+  )
+})
+
 function formatCurrency(n: number): string {
   if (n == null) return '0.00'
   return Number(n).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -286,6 +295,10 @@ async function crearNotaCreditoInterna(recibido: any) {
 }
 
 async function guardarRecibir() {
+  if (!clienteCompleto.value) {
+    toast.add({ severity: 'warn', summary: 'Cliente requerido', detail: 'Completa nombre, telefono y cedula/RNC del cliente para recibir el equipo', life: 3500 })
+    return
+  }
   if (!form.value.nombre.trim() && !form.value.id_equi) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El IMEI o modelo del telefono es requerido', life: 3000 })
     return
@@ -378,6 +391,11 @@ async function publicarComoImei() {
 
   publicandoImei.value = true
   try {
+    let valorNotaCredito = 0
+    try {
+      valorNotaCredito = Number(JSON.parse(recibidoCreado.value.nota || '{}').credit_note_value || 0)
+    } catch {}
+
     const data: any = {
       estado: 'DISPONIBLE',
       precio_venta: imeiPublishForm.value.precio_venta,
@@ -385,7 +403,9 @@ async function publicarComoImei() {
       precio_xmayor: imeiPublishForm.value.precio_xmayor || 0,
     }
 
-    if (!recibidoCreado.value.costo && imeiPublishForm.value.precio_min > 0) {
+    if (valorNotaCredito > 0) {
+      data.costo = valorNotaCredito
+    } else if (!recibidoCreado.value.costo && imeiPublishForm.value.precio_min > 0) {
       data.costo = imeiPublishForm.value.precio_min * 0.7
     }
 
@@ -511,7 +531,7 @@ watch(() => props.visible, async (visible) => {
     </TabView>
     <template #footer>
       <Button label="Cancelar" severity="secondary" text @click="emit('close')" />
-      <Button label="Recibir Equipo" icon="pi pi-check" :loading="guardando" @click="guardarRecibir" />
+      <Button label="Recibir Equipo" icon="pi pi-check" :loading="guardando" :disabled="!clienteCompleto" @click="guardarRecibir" />
     </template>
   </Dialog>
 

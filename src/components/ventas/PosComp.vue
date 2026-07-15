@@ -19,7 +19,7 @@ import JsBarcode from 'jsbarcode'
 import html2canvas from 'html2canvas'
 
 import { envioElectron, peticionesFetch, encryptarPassword } from '@/funciones/funciones.js'
-import { getImageUrl } from '@/services/tmCloudClient'
+import { ensureConfigLoaded, getConfig, getImageUrl } from '@/services/tmCloudClient'
 import NotasComp from '@/components/ventas/NotasComp.vue'
 import FacturaPdfPrint from '@/components/ventas/FacturaPdfPrint.vue'
 import TicketCuentaCobrarPrint from '@/components/contabilidad/TicketCuentaCobrarPrint.vue'
@@ -3414,6 +3414,37 @@ function generarTicketHTML(): string {
 <body><div class="ticket">${getTicketBody(ticketData.value)}</div></body></html>`
 }
 
+function arrayBufferTicketToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
+async function prepararLogoTicket() {
+  const empresa = ticketData.value?.empresa
+  const logo = String(empresa?.logo || '').trim()
+  if (!logo || /^data:|^(https?:\/\/|file:|blob:|\/)/i.test(logo)) return
+  try {
+    await ensureConfigLoaded()
+    const url = getImageUrl(logo)
+    const key = getConfig()?.key || ''
+    if (!url) return
+    const response = await fetch(url, { headers: key ? { Authorization: `Bearer ${key}` } : {} })
+    if (!response.ok) return
+    const type = response.headers.get('content-type') || 'image/png'
+    ticketData.value.empresa = {
+      ...empresa,
+      logo: `data:${type};base64,${arrayBufferTicketToBase64(await response.arrayBuffer())}`,
+    }
+  } catch (_) {
+    // Se conserva el valor actual para no impedir la impresion del ticket.
+  }
+}
+
 function getTicketPreviewHTML(): string {
   return `<style>
     * { font-size: 10px; font-family: Arial, Helvetica, sans-serif; }
@@ -3432,6 +3463,7 @@ function getTicketPreviewHTML(): string {
 
 async function imprimirTicket() {
   await asegurarQrFiscalTicket()
+  await prepararLogoTicket()
   const html = generarTicketHTML()
   try {
     const res = await window.electron.invoke('print:ticket', html, printerName.value || undefined)

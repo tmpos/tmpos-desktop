@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import QRCode from 'qrcode'
 import JsBarcode from 'jsbarcode'
 import { useToast } from 'primevue/usetoast'
+import { ensureConfigLoaded, getConfig, getImageUrl } from '@/services/tmCloudClient'
 
 function formatearMetodoPago(factura: any): string {
   if (String(factura.metodo_pago || '').toLowerCase() !== 'mixto') return factura.metodo_pago || ''
@@ -77,6 +78,36 @@ function getProductTotal(producto: any): number {
 
 function resolveLogo(empresa: any): string {
   return String(empresa?.logoprinter || empresa?.logo || '').trim()
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
+// La ventana que imprime el ticket no hereda la autenticacion de TM Cloud.
+// Se incrusta el logo para que tambien funcione con uid de Storage (fil_xxx).
+async function resolverLogoTicket(ruta: any): Promise<string> {
+  const valor = String(ruta || '').trim()
+  if (!valor || /^data:/i.test(valor)) return valor
+  if (/^(https?:\/\/|file:|blob:|\/)/i.test(valor)) return valor
+  try {
+    await ensureConfigLoaded()
+    const url = getImageUrl(valor)
+    const key = getConfig()?.key || ''
+    if (!url) return valor
+    const response = await fetch(url, { headers: key ? { Authorization: `Bearer ${key}` } : {} })
+    if (!response.ok) return valor
+    const type = response.headers.get('content-type') || 'image/png'
+    return `data:${type};base64,${arrayBufferToBase64(await response.arrayBuffer())}`
+  } catch (_) {
+    return valor
+  }
 }
 
 function normalizarAlanubeData(factura: any, ecf: any = {}) {
@@ -403,6 +434,8 @@ async function printTicket(factura: any) {
     const res = await window.db.getAll('empresa')
     if (res.success && res.data?.length > 0) empresa = res.data[0]
   } catch (_) {}
+  const logo = await resolverLogoTicket(empresa?.logoprinter || empresa?.logo)
+  if (logo) empresa = { ...empresa, logo, logoprinter: logo }
 
   const alanubeData = await obtenerAlanubeData(factura)
   const qrUrl = alanubeData.documentStampUrl || `https://tmposrd.com/factura/${factura.no_factura}`

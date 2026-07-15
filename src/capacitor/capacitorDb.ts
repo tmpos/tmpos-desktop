@@ -70,11 +70,13 @@ export async function initDatabase(): Promise<void> {
     db = new SQL.Database(existingData)
     createTables()
     migrateTables()
+    auditSchema()
     await saveDb()
   } else {
     db = new SQL.Database()
     createTables()
     migrateTables()
+    auditSchema()
     insertDefaultData()
     await saveDb()
   }
@@ -252,6 +254,8 @@ function createTables() {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL,
     id_equi INTEGER,
+    telefono_uid TEXT DEFAULT '',
+    equipo TEXT DEFAULT '',
     costo REAL DEFAULT 0,
     precio_venta REAL DEFAULT 0,
     precio_min REAL DEFAULT 0,
@@ -619,6 +623,56 @@ function migrateTables() {
   if (!facturasColumns.has('costo')) {
     db.run('ALTER TABLE facturas ADD COLUMN costo REAL DEFAULT 0')
   }
+  if (!facturasColumns.has('ganancia')) {
+    db.run('ALTER TABLE facturas ADD COLUMN ganancia REAL DEFAULT 0')
+  }
+  const imeiInfo = db.exec('PRAGMA table_info("imei")')
+  const imeiColumns = new Set(
+    (imeiInfo[0]?.values || []).map((row: any[]) => String(row[1]))
+  )
+  if (!imeiColumns.has('telefono_uid')) {
+    db.run("ALTER TABLE imei ADD COLUMN telefono_uid TEXT DEFAULT ''")
+    db.run(`UPDATE imei SET telefono_uid = (SELECT uid FROM telefonos WHERE telefonos.id = imei.id_equi) WHERE id_equi IS NOT NULL`)
+  }
+  if (!imeiColumns.has('equipo')) {
+    db.run("ALTER TABLE imei ADD COLUMN equipo TEXT DEFAULT ''")
+    db.run(`UPDATE imei SET equipo = (SELECT nombre FROM telefonos WHERE telefonos.id = imei.id_equi) WHERE id_equi IS NOT NULL`)
+  }
+}
+
+// Misma auditoria de esquema para instalaciones moviles/Capacitor.
+function auditSchema() {
+  if (!db) return
+  const expected: Record<string, Record<string, string>> = {
+    empresa: { encargado: "TEXT DEFAULT ''", logo: "TEXT DEFAULT ''", impuesto: 'REAL DEFAULT 18', impuesto_incluido: 'INTEGER DEFAULT 0', moneda: "TEXT DEFAULT 'RD$'", almacen_id: 'INTEGER DEFAULT 0' },
+    telefonos: { imagen: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    imei: { telefono_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', estado: "TEXT DEFAULT 'DISPONIBLE'", almacen_id: 'INTEGER DEFAULT 0' },
+    accesorios: { imagen: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", proveedor_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
+    facturas: { costo: 'REAL DEFAULT 0', ganancia: 'REAL DEFAULT 0', financiera: "TEXT DEFAULT ''", turno_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
+    clientes: { imagen: "TEXT DEFAULT ''", rnc: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", almacen_id: 'INTEGER DEFAULT 0' },
+  }
+  db.run(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, aplicado_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, detalle TEXT DEFAULT '')`)
+  for (const [table, columns] of Object.entries(expected)) {
+    const info = db.exec(`PRAGMA table_info(${escapeId(table)})`)
+    if (!info.length) continue
+    const existing = new Set((info[0]?.values || []).map((row: any[]) => String(row[1])))
+    for (const [column, definition] of Object.entries(columns)) {
+      if (!existing.has(column)) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN ${escapeId(column)} ${definition}`)
+    }
+  }
+  const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+  for (const row of tables[0]?.values || []) {
+    const table = String(row[0])
+    if (table === 'schema_migrations') continue
+    const info = db.exec(`PRAGMA table_info(${escapeId(table)})`)
+    const existing = new Set((info[0]?.values || []).map((column: any[]) => String(column[1])))
+    if (!existing.has('almacen_id')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN almacen_id INTEGER DEFAULT 0`)
+    if (!existing.has('uid')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN uid TEXT DEFAULT ''`)
+    if (!existing.has('created_at')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN created_at TEXT DEFAULT ''`)
+    if (!existing.has('updated_at')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN updated_at TEXT DEFAULT ''`)
+  }
+  db.run(`INSERT OR REPLACE INTO schema_migrations (version, detalle) VALUES (20260714, 'Auditoria automatica de columnas')`)
 }
 
 function insertDefaultData() {

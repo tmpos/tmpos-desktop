@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -21,6 +22,7 @@ import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected 
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
+const router = useRouter()
 const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
 const telefonos = ref<any[]>([])
 const loading = ref(false)
@@ -29,6 +31,10 @@ const dialogVisible = ref(false)
 const deleteDialogVisible = ref(false)
 const detalleDialogVisible = ref(false)
 const imeiDialogVisible = ref(false)
+const imeiAccionesVisible = ref(false)
+const reubicarImeiVisible = ref(false)
+const imeiSeleccionado = ref<any>(null)
+const telefonoDestinoImei = ref<any>(null)
 const isEditing = ref(false)
 const selectedTelefono = ref<any>(null)
 const busqueda = ref('')
@@ -83,6 +89,8 @@ const imeisDelTelefonoFiltrados = computed(() => {
     i.proveedor?.toLowerCase().includes(texto)
   )
 })
+
+const telefonosDestinoImei = computed(() => telefonos.value.filter((telefono: any) => Number(telefono.id) !== Number(imeiSeleccionado.value?.id_equi)))
 
 const camposArray = ['nombre']
 const imeiCamposArray = [
@@ -212,6 +220,83 @@ async function cargarImeisDelTelefono(telefonoId: number) {
     if (res.success) imeisDelTelefono.value = filterByAlmacen(res.data || []).filter((i: any) => i.id_equi === telefonoId && i.estado === 'DISPONIBLE')
 }
 
+function itemPosDesdeImei(imei: any) {
+  return {
+    tipo: 'imei', imei_id: imei.id, imei_ids: [imei.id], imei: imei.nombre, imeis: [imei.nombre],
+    codigo: imei.nombre || '', nombre: selectedTelefono.value?.nombre || imei.equipo || '', telefono_id: imei.id_equi,
+    color: imei.color || '', colores: imei.color ? [imei.color] : [],
+    capacidad: imei.capacidad || '', capacidades: imei.capacidad ? [imei.capacidad] : [],
+    precio: Number(imei.precio_venta || 0), precio_normal: Number(imei.precio_venta || 0),
+    costo: Number(imei.costo || 0), cantidad: 1,
+  }
+}
+
+function abrirAccionesImei(imei: any) {
+  imeiSeleccionado.value = imei
+  imeiAccionesVisible.value = true
+}
+
+function validarImeiParaVenta(imei: any): boolean {
+  if (Number(imei?.precio_venta || 0) <= 0) {
+    toast.add({ severity: 'warn', summary: 'Precio requerido', detail: 'Este IMEI necesita un precio de venta mayor que cero', life: 3000 })
+    return false
+  }
+  return true
+}
+
+function agregarImeiAlCarrito() {
+  const imei = imeiSeleccionado.value
+  if (!imei || !validarImeiParaVenta(imei)) return
+  try {
+    const data = JSON.parse(localStorage.getItem('pos_cart_data') || '{}')
+    const cart = Array.isArray(data.cart) ? data.cart : []
+    if (cart.some((item: any) => item.tipo === 'imei' && (Number(item.imei_id) === Number(imei.id) || (item.imei_ids || []).map(Number).includes(Number(imei.id))))) {
+      toast.add({ severity: 'warn', summary: 'Ya agregado', detail: 'Este IMEI ya está en el carrito del POS', life: 3000 })
+      return
+    }
+    data.cart = [...cart, itemPosDesdeImei(imei)]
+    localStorage.setItem('pos_cart_data', JSON.stringify(data))
+    imeiAccionesVisible.value = false
+    router.push('/vender')
+  } catch {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo agregar el IMEI al carrito', life: 3000 })
+  }
+}
+
+function venderImeiExpress() {
+  const imei = imeiSeleccionado.value
+  if (!imei || !validarImeiParaVenta(imei)) return
+  localStorage.setItem('pos_cart_data', JSON.stringify({
+    cart: [itemPosDesdeImei(imei)], cliente: { id: null, nombre: 'AL CONTADO', telefono: '' }, clienteExpress: '', metodoPago: 'EFECTIVO',
+    descuento_fijo: 0, descuento_porc: 0, descuento_tipo: 'fijo', descuento_valor: 0,
+    nota: '', es_cotizacion: false, venta_express_pendiente: true,
+  }))
+  imeiAccionesVisible.value = false
+  router.push('/vender')
+}
+
+function abrirReubicarImei() {
+  telefonoDestinoImei.value = null
+  imeiAccionesVisible.value = false
+  reubicarImeiVisible.value = true
+}
+
+async function reubicarImei() {
+  const imei = imeiSeleccionado.value
+  const destino = telefonoDestinoImei.value
+  if (!imei || !destino) return
+  const res = await window.db.update('imei', imei.id, { id_equi: destino.id, telefono_uid: destino.uid || '', equipo: destino.nombre || '' })
+  if (!res.success) {
+    toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo reubicar el IMEI', life: 3000 })
+    return
+  }
+  if (isOnline()) await pushLocalRowToCloud('imei', imei.id)
+  reubicarImeiVisible.value = false
+  toast.add({ severity: 'success', summary: 'IMEI reubicado', detail: `Asignado a ${destino.nombre}`, life: 2500 })
+  await cargarTelefonos()
+  if (selectedTelefono.value?.id) await cargarImeisDelTelefono(selectedTelefono.value.id)
+}
+
 function abrirAgregarImei() {
   imeiForm.value = {
     nombre: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0,
@@ -258,7 +343,7 @@ async function guardarImei() {
   try {
     const existe = await window.db.getAll('imei')
     if (existe.success && (existe.data || []).find((i: any) => i.nombre === imeiForm.value.nombre.trim())) { toast.add({ severity: 'warn', summary: 'Duplicado', detail: 'El IMEI ya existe', life: 3000 }); return }
-    await window.db.insert('imei', addAlmacenId({ nombre: imeiForm.value.nombre.trim(), id_equi: selectedTelefono.value.id, costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
+    await window.db.insert('imei', addAlmacenId({ nombre: imeiForm.value.nombre.trim(), id_equi: selectedTelefono.value.id, telefono_uid: selectedTelefono.value.uid || '', costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
     toast.add({ severity: 'success', summary: 'Creado', detail: 'IMEI creado', life: 3000 })
     imeiDialogVisible.value = false
     await cargarImeisDelTelefono(selectedTelefono.value.id)
@@ -277,7 +362,7 @@ async function agregarImeiEnLote() {
     for (const imei of imeis) {
       if (existentes.has(imei)) { duplicados++; continue }
       try {
-        await window.db.insert('imei', addAlmacenId({ nombre: imei, id_equi: selectedTelefono.value.id, costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
+        await window.db.insert('imei', addAlmacenId({ nombre: imei, id_equi: selectedTelefono.value.id, telefono_uid: selectedTelefono.value.uid || '', costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
         insertados++
         sincronizarImeiServidor({ nombre: imei, costo: imeiForm.value.costo, precio_venta: imeiForm.value.precio_venta, proveedor: imeiForm.value.proveedor })
       } catch { errores++ }
@@ -307,7 +392,7 @@ async function sincronizarImeiServidor(datos: any) {
     const enviar: Record<string, any> = {
       almacen, imei: String(datos.nombre || ''), estado: 'DISPONIBLE',
       fecha: new Date().toLocaleDateString('es-DO'), equipo: '', proveedor: String(datos.proveedor || ''),
-      id_equi: String(selectedTelefono.value?.id || ''), costo: String(datos.costo || '0'),
+      id_equi: String(selectedTelefono.value?.uid || selectedTelefono.value?.id || ''), costo: String(datos.costo || '0'),
       precio_venta: String(datos.precio_venta || '0'), factura: '', no_compra: '',
       fecha_venta: '', hora_venta: '', comprador: '', detalles: '', usuario: '',
       marca: '', modelo: '', preciocompra: String(datos.costo || '0'), precioventa: String(datos.precio_venta || '0'),
@@ -480,39 +565,39 @@ onMounted(async () => {
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
         <div v-else-if="telefonosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay telefonos registrados.</div>
-        <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+        <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
           <div
             v-for="tel in telefonosFiltrados"
             :key="tel.id"
-            class="flip-card perspective-[1000px]"
+            class="flip-card min-w-0 perspective-[1000px]"
           >
             <div
-              class="flip-inner relative transition-transform duration-500 cursor-pointer"
+              class="flip-inner relative h-[172px] overflow-hidden transition-transform duration-500 cursor-pointer"
               :class="flippedTelId === tel.id ? '[transform:rotateY(180deg)]' : ''"
-              style="transform-style: preserve-3d; min-height: 130px;"
+              style="transform-style: preserve-3d;"
             >
               <!-- FRONT -->
               <div
-                class="absolute inset-0 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-5 flex flex-col gap-3 transition-shadow backface-hidden"
+                class="absolute inset-0 overflow-hidden rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-3 transition-shadow backface-hidden"
                 @click="abrirDetalle(tel)"
                 @contextmenu.prevent="() => { flippedTelId = flippedTelId === tel.id ? null : tel.id; imeiSearch = '' }"
               >
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-mono text-surface-400">#{{ tel.id }}</span>
-                  <span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-800">
+                <div class="flex min-w-0 items-center justify-between gap-2">
+                  <span class="shrink-0 text-xs font-mono text-surface-400">#{{ tel.id }}</span>
+                  <span class="max-w-[70%] truncate text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-800">
                     {{ imeiCount(tel.id) }} IMEI{{ imeiCount(tel.id) === 1 ? '' : 's' }}
                   </span>
                 </div>
-                <div class="flex items-center gap-3">
+                <div class="flex min-w-0 items-center gap-3">
                   <div v-if="imagenUrl(tel.imagen)" class="w-12 h-12 rounded-full overflow-hidden shrink-0 border border-surface-200 dark:border-surface-700">
                     <img :src="imagenUrl(tel.imagen)" class="w-full h-full object-cover" alt="" />
                   </div>
                   <div v-else class="w-12 h-12 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center shrink-0">
                     <i class="pi pi-mobile text-primary-600 dark:text-primary-300 text-xl"></i>
                   </div>
-                  <div>
-                    <h4 class="font-bold text-lg leading-tight uppercase">{{ tel.nombre }}</h4>
-                    <p class="text-sm text-surface-500 dark:text-surface-400">Ver opciones</p>
+                  <div class="min-w-0">
+                    <h4 class="truncate font-bold text-lg leading-tight uppercase">{{ tel.nombre }}</h4>
+                    <p class="truncate text-sm text-surface-500 dark:text-surface-400">Ver opciones</p>
                   </div>
                 </div>
               </div>
@@ -556,7 +641,7 @@ onMounted(async () => {
       v-model:visible="detalleDialogVisible"
       :header="selectedTelefono?.nombre"
       modal
-      :style="{ width: '28rem' }"
+      :style="{ width: 'min(46rem, 95vw)' }"
     >
       <div class="flex flex-col gap-3">
         <div class="flex items-center gap-3 rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3">
@@ -571,22 +656,29 @@ onMounted(async () => {
             <p class="text-xs text-surface-500">{{ imeisDelTelefonoFiltrados.length }} IMEI(s) disponibles</p>
           </div>
         </div>
-        <Button
-          label="Editar"
-          icon="pi pi-pencil"
-          severity="info"
-          outlined
-          class="w-full justify-start"
-          @click="abrirEditar()"
-        />
-        <Button
-          label="Agregar IMEI"
-          icon="pi pi-plus"
-          severity="success"
-          outlined
-          class="w-full justify-start"
-          @click="abrirAgregarImei"
-        />
+        <div class="grid grid-cols-3 gap-2">
+          <Button
+            label="Editar"
+            icon="pi pi-pencil"
+            severity="info"
+            outlined
+            @click="abrirEditar()"
+          />
+          <Button
+            label="Agregar IMEI"
+            icon="pi pi-plus"
+            severity="success"
+            outlined
+            @click="abrirAgregarImei"
+          />
+          <Button
+            label="Eliminar"
+            icon="pi pi-trash"
+            severity="danger"
+            outlined
+            @click="confirmarBorrar()"
+          />
+        </div>
         <div class="flex flex-col gap-2">
           <div class="flex items-center justify-between gap-2">
             <span class="font-semibold text-sm">Lista de IMEI</span>
@@ -608,6 +700,8 @@ onMounted(async () => {
             scrollable
             scrollHeight="14rem"
             responsiveLayout="scroll"
+            class="imei-lista-acciones"
+            @row-click="abrirAccionesImei($event.data)"
           >
             <Column field="nombre" header="IMEI" style="min-width: 10rem">
               <template #body="{ data }">
@@ -616,6 +710,16 @@ onMounted(async () => {
             </Column>
             <Column field="capacidad" header="Cap." style="min-width: 5rem" />
             <Column field="color" header="Color" style="min-width: 6rem" />
+            <Column field="costo" header="Costo" style="min-width: 7rem">
+              <template #body="{ data }">
+                <span class="font-medium text-orange-600 dark:text-orange-400">${{ formatCurrency(data.costo || 0) }}</span>
+              </template>
+            </Column>
+            <Column field="precio_venta" header="Precio venta" style="min-width: 8rem">
+              <template #body="{ data }">
+                <span class="font-semibold text-primary">${{ formatCurrency(data.precio_venta || 0) }}</span>
+              </template>
+            </Column>
             <Column field="estado" header="Estado" style="min-width: 7rem">
               <template #body="{ data }">
                 <span
@@ -626,21 +730,48 @@ onMounted(async () => {
                 </span>
               </template>
             </Column>
+            <Column header="Acciones" style="min-width: 6.5rem">
+              <template #body="{ data }">
+                <Button label="Acciones" icon="pi pi-ellipsis-v" size="small" severity="secondary" outlined @click.stop="abrirAccionesImei(data)" />
+              </template>
+            </Column>
 
             <template #empty>
               <div class="text-center py-4 text-surface-500 text-sm">No hay IMEI asociados.</div>
             </template>
           </DataTable>
         </div>
-        <Button
-          label="Eliminar Telefono"
-          icon="pi pi-trash"
-          severity="danger"
-          outlined
-          class="w-full justify-start mt-2"
-          @click="confirmarBorrar()"
-        />
       </div>
+    </Dialog>
+
+    <Dialog v-model:visible="imeiAccionesVisible" header="Acciones del IMEI" modal :style="{ width: 'min(27rem, 95vw)' }">
+      <div v-if="imeiSeleccionado" class="space-y-4 pt-1">
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 p-3">
+          <p class="font-mono font-semibold">{{ imeiSeleccionado.nombre }}</p>
+          <p class="text-sm text-surface-500">{{ selectedTelefono?.nombre || imeiSeleccionado.equipo || 'Sin equipo' }}</p>
+          <div class="grid grid-cols-2 gap-2 mt-3 text-sm">
+            <div><span class="text-surface-500">Costo</span><p class="font-semibold text-orange-600 dark:text-orange-400">${{ formatCurrency(imeiSeleccionado.costo) }}</p></div>
+            <div><span class="text-surface-500">Venta</span><p class="font-semibold text-primary">${{ formatCurrency(imeiSeleccionado.precio_venta) }}</p></div>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 gap-2">
+          <Button label="Vender express" icon="pi pi-bolt" severity="success" @click="venderImeiExpress" />
+          <Button label="Agregar al carrito" icon="pi pi-cart-plus" outlined @click="agregarImeiAlCarrito" />
+          <Button label="Reubicar en otro teléfono" icon="pi pi-mobile" severity="warn" outlined @click="abrirReubicarImei" />
+        </div>
+      </div>
+      <template #footer><Button label="Cerrar" severity="secondary" text @click="imeiAccionesVisible = false" /></template>
+    </Dialog>
+
+    <Dialog v-model:visible="reubicarImeiVisible" header="Reubicar IMEI" modal :style="{ width: 'min(28rem, 95vw)' }">
+      <div class="flex flex-col gap-3 pt-1">
+        <p class="text-sm text-surface-500">Selecciona el teléfono al que deseas asignar el IMEI <strong class="text-surface-900 dark:text-surface-0">{{ imeiSeleccionado?.nombre }}</strong>.</p>
+        <Select v-model="telefonoDestinoImei" :options="telefonosDestinoImei" optionLabel="nombre" placeholder="Seleccionar teléfono" filter fluid />
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="reubicarImeiVisible = false" />
+        <Button label="Reubicar" icon="pi pi-check" :disabled="!telefonoDestinoImei" @click="reubicarImei" />
+      </template>
     </Dialog>
 
     <!-- Dialog Crear/Editar -->
@@ -876,6 +1007,10 @@ onMounted(async () => {
 :deep(.telefonos-table .p-paginator) {
   flex-wrap: wrap;
   row-gap: 0.35rem;
+}
+
+:deep(.imei-lista-acciones .p-datatable-tbody > tr) {
+  cursor: pointer;
 }
 
 @media (max-width: 480px) {

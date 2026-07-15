@@ -19,8 +19,10 @@ import { envioElectron } from '@/funciones/funciones.js'
 import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useEmpresa } from '@/composables/useEmpresa'
 
 const toast = useToast()
+const { nombre: nombreEmpresa, cargar: cargarEmpresa } = useEmpresa()
 const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
 const accesorios = ref<any[]>([])
 const marcas = ref<any[]>([])
@@ -373,12 +375,13 @@ function aplicarVariablesProducto(valor: string, producto: any): string {
   const precio = Number(producto?.precio_venta || 0).toFixed(2)
   const codigo = generarCodigoProducto(producto)
   return String(valor || '')
-    .replace(/\{PRODUCTO\}/g, producto?.nombre || '')
-    .replace(/\{NOMBRE_PRODUCTO\}/g, producto?.nombre || '')
-    .replace(/\{PRECIO\}/g, `RD$ ${precio}`)
-    .replace(/\{CODIGO_BARRA\}/g, codigo)
-    .replace(/\{CODIGO\}/g, codigo)
-    .replace(/\{BARCODE\}/g, codigo)
+    .replace(/\{EMPRESA\}/gi, nombreEmpresa.value || 'MI EMPRESA')
+    .replace(/\{PRODUCTO\}/gi, producto?.nombre || '')
+    .replace(/\{NOMBRE_PRODUCTO\}/gi, producto?.nombre || '')
+    .replace(/\{PRECIO\}/gi, `RD$ ${precio}`)
+    .replace(/\{CODIGO_BARRA\}/gi, codigo)
+    .replace(/\{CODIGO\}/gi, codigo)
+    .replace(/\{BARCODE\}/gi, codigo)
 }
 
 async function imprimirEtiquetaProducto(plantilla: any) {
@@ -387,6 +390,8 @@ async function imprimirEtiquetaProducto(plantilla: any) {
     return
   }
   if (!productoEtiqueta.value || !plantilla?.elementos) return
+
+  await cargarEmpresa()
 
   localStorage.setItem('etiquetas_printer', printerSel.value)
   dialogEtiquetaProducto.value = false
@@ -424,7 +429,7 @@ async function imprimirEtiquetaProducto(plantilla: any) {
   }
 
   let html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiqueta Producto</title><style>'
-  html += 'body{margin:0;padding:0;font-family:Arial,sans-serif}'
+  html += `@page{size:${ancho}mm ${alto}mm;margin:0}html,body{margin:0;padding:0;width:${ancho}mm;height:${alto}mm;font-family:Arial,sans-serif}`
   html += `.label{width:${mmToPx(ancho)}px;height:${mmToPx(alto)}px;position:relative;overflow:hidden;background:white}`
   html += '.elem{position:absolute;overflow:hidden;word-wrap:break-word;display:flex;align-items:center;justify-content:center}'
   html += '</style></head><body><div class="label">'
@@ -450,7 +455,7 @@ async function imprimirEtiquetaProducto(plantilla: any) {
   let ultimoError = ''
   for (let i = 0; i < copias.value; i++) {
     try {
-      const res = await window.electron.invoke('print:ticket', html, printerSel.value || undefined) as any
+      const res = await window.electron.invoke('print:ticket', html, printerSel.value || undefined, { width: ancho, height: alto }) as any
       if (res.success) impresas++
       else ultimoError = res.error || 'No se pudo imprimir'
     } catch (error: any) {
@@ -1034,7 +1039,7 @@ onMounted(async () => {
             <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-surface-400 text-xs"></i>
             <InputText v-model="busquedaPlantilla" placeholder="Buscar plantilla..." fluid class="!pl-8 h-9 text-sm" />
           </div>
-          <p class="text-xs text-surface-400">Usa variables como <strong>{PRODUCTO}</strong>, <strong>{PRECIO}</strong> y <strong>{CODIGO_BARRA}</strong> en Inventario &gt; Etiquetas.</p>
+          <p class="text-xs text-surface-400">Usa variables como <strong>{producto}</strong>, <strong>{precio}</strong> y <strong>{codigo_barra}</strong> en Inventario &gt; Etiquetas.</p>
           <div v-if="plantillasFiltradas.length === 0" class="text-center py-4 text-surface-400 text-sm">{{ busquedaPlantilla ? 'Sin resultados' : 'No hay plantillas. Crea una en Inventario > Etiquetas.' }}</div>
           <div v-else class="flex flex-col gap-2 max-h-44 overflow-y-auto">
             <div

@@ -51,6 +51,8 @@ const config = ref({
   show_qr: 0,
   show_nota: 1,
   footer_text: 'Gracias por su compra',
+  factura_logo_ancho: 150,
+  factura_logo_alto: 90,
 })
 
 const selectedPrinter = ref<any>(null)
@@ -315,6 +317,24 @@ onMounted(async () => {
 
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-5 space-y-4">
             <h3 class="font-semibold flex items-center gap-2">
+              <i class="pi pi-file-pdf text-primary"></i>
+              Logo en factura PDF
+            </h3>
+            <p class="text-sm text-surface-500">Define el espacio maximo que usara el logo de la empresa en las facturas.</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div class="space-y-1.5">
+                <label class="text-sm font-semibold block">Ancho (px)</label>
+                <InputNumber v-model="config.factura_logo_ancho" :min="30" :max="400" :useGrouping="false" fluid />
+              </div>
+              <div class="space-y-1.5">
+                <label class="text-sm font-semibold block">Alto (px)</label>
+                <InputNumber v-model="config.factura_logo_alto" :min="20" :max="250" :useGrouping="false" fluid />
+              </div>
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-5 space-y-4">
+            <h3 class="font-semibold flex items-center gap-2">
               <i class="pi pi-qrcode text-primary"></i>
               Impresora de Etiquetas
             </h3>
@@ -404,7 +424,7 @@ onMounted(async () => {
                       </template>
                       <template v-if="config.show_address">Calle Principal #123, Santo Domingo<br></template>
                       <template v-if="config.show_phone">Tel: (809) 000-0000</template>
-                      <template v-if="config.show_email"> / info@miempresa.com</template>
+                      <template v-if="config.show_email"> / correo de empresa</template>
                       <template v-if="config.show_legal"><br>RNC: 000000000</template>
                     </p>
                   </div>

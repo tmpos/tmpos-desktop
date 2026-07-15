@@ -96,6 +96,48 @@ function initDatabase(): void {
     return db!.prepare(`PRAGMA table_info("${tabla}")`).all().map((col: any) => col.name)
   }
 
+  // Catalogo central de columnas. Agregar una columna aqui hace que todas las
+  // instalaciones existentes la reciban automaticamente al iniciar TMPOS.
+  const SCHEMA_COLUMNS: Record<string, Record<string, string>> = {
+    empresa: { encargado: "TEXT DEFAULT ''", logo: "TEXT DEFAULT ''", impuesto: 'REAL DEFAULT 18', impuesto_incluido: 'INTEGER DEFAULT 0', moneda: "TEXT DEFAULT 'RD$'", tipo_documento_defecto: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    telefonos: { imagen: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    imei: { id_equi: 'INTEGER', telefono_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', color: "TEXT DEFAULT ''", capacidad: "TEXT DEFAULT ''", bateria: "TEXT DEFAULT ''", estado: "TEXT DEFAULT 'DISPONIBLE'", fecha_venta: "TEXT DEFAULT ''", comprador: "TEXT DEFAULT ''", proveedor: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", precio_vendido: 'REAL DEFAULT 0', hora_venta: "TEXT DEFAULT ''", no_factura: "TEXT DEFAULT ''", nota: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    serial: { id_equi: 'INTEGER', costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', color: "TEXT DEFAULT ''", capacidad: "TEXT DEFAULT ''", bateria: "TEXT DEFAULT ''", estado: "TEXT DEFAULT 'DISPONIBLE'", almacen_id: 'INTEGER DEFAULT 0' },
+    accesorios: { codigo_barra: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', cantidad: 'INTEGER DEFAULT 1', alerta: 'INTEGER DEFAULT 10', proveedor_id: 'INTEGER DEFAULT 0', imagen: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    facturas: { costo: 'REAL DEFAULT 0', ganancia: 'REAL DEFAULT 0', financiera: "TEXT DEFAULT ''", turno_id: 'INTEGER DEFAULT 0', canal_venta: "TEXT DEFAULT ''", ncf: "TEXT DEFAULT ''", tipo_comprobante: "TEXT DEFAULT ''", comprobante_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
+    clientes: { imagen: "TEXT DEFAULT ''", rnc: "TEXT DEFAULT ''", nota: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", beneficio_empresa: 'REAL DEFAULT 0', beneficio_tecnico: 'REAL DEFAULT 0', porcentaje_tecnico: 'REAL DEFAULT 0', estado_pago_tecnico: "TEXT DEFAULT 'PENDIENTE'", almacen_id: 'INTEGER DEFAULT 0' },
+    cuentas_cobrar: { pagos: "TEXT DEFAULT '[]'", fecha_vencimiento: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    cuentas_pagar: { pagos: "TEXT DEFAULT '[]'", fecha_vencimiento: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    gastos: { turno_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
+    perdidas: { detalle: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+  }
+
+  function auditarEsquemaLocal(): void {
+    db!.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, aplicado_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, detalle TEXT DEFAULT '')`)
+    for (const [tabla, columnasEsperadas] of Object.entries(SCHEMA_COLUMNS)) {
+      if (!tableExists(tabla)) continue
+      const existentes = new Set(tableColumns(tabla))
+      for (const [columna, definicion] of Object.entries(columnasEsperadas)) {
+        if (!existentes.has(columna)) db!.exec(`ALTER TABLE "${tabla}" ADD COLUMN "${columna}" ${definicion}`)
+      }
+    }
+    const tablas = db!.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as any[]
+    for (const tabla of tablas) {
+      if (tabla.name === 'schema_migrations') continue
+      const existentes = new Set(tableColumns(tabla.name))
+      if (!existentes.has('almacen_id')) db!.exec(`ALTER TABLE "${tabla.name}" ADD COLUMN almacen_id INTEGER DEFAULT 0`)
+      if (!existentes.has('uid')) db!.exec(`ALTER TABLE "${tabla.name}" ADD COLUMN uid TEXT DEFAULT ''`)
+      if (!existentes.has('created_at')) db!.exec(`ALTER TABLE "${tabla.name}" ADD COLUMN created_at TEXT DEFAULT ''`)
+      if (!existentes.has('updated_at')) db!.exec(`ALTER TABLE "${tabla.name}" ADD COLUMN updated_at TEXT DEFAULT ''`)
+      const sinUid = db!.prepare(`SELECT id FROM "${tabla.name}" WHERE uid IS NULL OR uid = ''`).all() as any[]
+      const asignarUid = db!.prepare(`UPDATE "${tabla.name}" SET uid = ? WHERE id = ?`)
+      for (const fila of sinUid) asignarUid.run(generarUid(), fila.id)
+    }
+    db!.prepare(`INSERT OR REPLACE INTO schema_migrations (version, detalle) VALUES (?, ?)`)
+      .run(20260714, 'Auditoria automatica de columnas')
+  }
+
   function ensureProveedoresTable(): void {
     if (tableExists('proveedores')) {
       const columns = tableColumns('proveedores')
@@ -276,11 +318,11 @@ function initDatabase(): void {
       }
       if (!columns.includes('turno_id')) db!.exec(`ALTER TABLE facturas ADD COLUMN turno_id INTEGER DEFAULT 0`)
       for (const column of requiredColumns) {
-        if (!columns.includes(column) && column !== 'turno_id') db!.exec(`ALTER TABLE facturas ADD COLUMN "${column}" ${column === 'costo' ? 'REAL DEFAULT 0' : "TEXT DEFAULT ''"}`)
+        if (!columns.includes(column) && column !== 'turno_id') db!.exec(`ALTER TABLE facturas ADD COLUMN "${column}" ${['costo', 'ganancia'].includes(column) ? 'REAL DEFAULT 0' : "TEXT DEFAULT ''"}`)
       }
       return
     }
-    db!.exec(`CREATE TABLE facturas (id INTEGER PRIMARY KEY AUTOINCREMENT,cheque TEXT DEFAULT '',token TEXT DEFAULT '',cajero TEXT DEFAULT '',no_factura TEXT DEFAULT '',tipo_factura TEXT DEFAULT '',comprobante TEXT DEFAULT '',cod_cliente TEXT DEFAULT '',nombre_cliente TEXT DEFAULT '',telefono_cliente TEXT DEFAULT '',productos TEXT DEFAULT '',vendedor TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',tarjeta REAL DEFAULT 0,transferencia REAL DEFAULT 0,efectivo REAL DEFAULT 0,canal_venta TEXT DEFAULT '',fecha_emision TEXT DEFAULT '',impuesto REAL DEFAULT 0,descuento REAL DEFAULT 0,subtotal REAL DEFAULT 0,total REAL DEFAULT 0,ganancia REAL DEFAULT 0,financiera TEXT DEFAULT '',estado_factura TEXT DEFAULT 'PENDIENTE',fecha_estado TEXT DEFAULT '',mes TEXT DEFAULT '',year TEXT DEFAULT '',hora TEXT DEFAULT '',otro TEXT DEFAULT '',nota TEXT DEFAULT '',usuario TEXT DEFAULT '',identificadordb TEXT DEFAULT '',total_institucion REAL DEFAULT 0,total_cliente REAL DEFAULT 0,ncf TEXT DEFAULT '',tipo_comprobante TEXT DEFAULT '',comprobante_id INTEGER DEFAULT 0,turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+    db!.exec(`CREATE TABLE facturas (id INTEGER PRIMARY KEY AUTOINCREMENT,cheque TEXT DEFAULT '',token TEXT DEFAULT '',cajero TEXT DEFAULT '',no_factura TEXT DEFAULT '',tipo_factura TEXT DEFAULT '',comprobante TEXT DEFAULT '',cod_cliente TEXT DEFAULT '',nombre_cliente TEXT DEFAULT '',telefono_cliente TEXT DEFAULT '',productos TEXT DEFAULT '',vendedor TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',tarjeta REAL DEFAULT 0,transferencia REAL DEFAULT 0,efectivo REAL DEFAULT 0,canal_venta TEXT DEFAULT '',fecha_emision TEXT DEFAULT '',impuesto REAL DEFAULT 0,descuento REAL DEFAULT 0,subtotal REAL DEFAULT 0,costo REAL DEFAULT 0,total REAL DEFAULT 0,ganancia REAL DEFAULT 0,financiera TEXT DEFAULT '',estado_factura TEXT DEFAULT 'PENDIENTE',fecha_estado TEXT DEFAULT '',mes TEXT DEFAULT '',year TEXT DEFAULT '',hora TEXT DEFAULT '',otro TEXT DEFAULT '',nota TEXT DEFAULT '',usuario TEXT DEFAULT '',identificadordb TEXT DEFAULT '',total_institucion REAL DEFAULT 0,total_cliente REAL DEFAULT 0,ncf TEXT DEFAULT '',tipo_comprobante TEXT DEFAULT '',comprobante_id INTEGER DEFAULT 0,turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   }
 
   function ensureEmpresaTable(): void {
@@ -318,7 +360,7 @@ function initDatabase(): void {
   try { db!.exec(`ALTER TABLE accesorios ADD COLUMN proveedor_id INTEGER DEFAULT 0`) } catch {}
   try { db!.exec(`ALTER TABLE accesorios ADD COLUMN imagen TEXT DEFAULT ''`) } catch {}
   try { db!.exec(`ALTER TABLE accesorios ADD COLUMN no_compra TEXT DEFAULT ''`) } catch {}
-  db.exec(`CREATE TABLE IF NOT EXISTS telefonos (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.exec(`CREATE TABLE IF NOT EXISTS telefonos (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   try { db!.exec(`ALTER TABLE telefonos ADD COLUMN imagen TEXT DEFAULT ''`) } catch {}
   ensureProveedoresTable()
   ensureClientesTable()
@@ -336,6 +378,8 @@ function initDatabase(): void {
   try { db!.exec(`ALTER TABLE impresoras_config ADD COLUMN show_cliente INTEGER DEFAULT 1`) } catch {}
   try { db!.exec(`ALTER TABLE impresoras_config ADD COLUMN show_nota INTEGER DEFAULT 1`) } catch {}
   try { db!.exec(`ALTER TABLE impresoras_config ADD COLUMN copies INTEGER DEFAULT 1`) } catch {}
+  try { db!.exec(`ALTER TABLE impresoras_config ADD COLUMN factura_logo_ancho INTEGER DEFAULT 150`) } catch {}
+  try { db!.exec(`ALTER TABLE impresoras_config ADD COLUMN factura_logo_alto INTEGER DEFAULT 90`) } catch {}
   try { db!.exec(`ALTER TABLE cuentas_cobrar ADD COLUMN pagos TEXT DEFAULT '[]'`) } catch {}
   try { db!.exec(`ALTER TABLE cuentas_cobrar ADD COLUMN uid TEXT DEFAULT ''`) } catch {}
   try { db!.exec(`ALTER TABLE cuentas_cobrar ADD COLUMN telefono_cliente TEXT DEFAULT ''`) } catch {}
@@ -403,6 +447,53 @@ function initDatabase(): void {
     }
   } catch {}
   db.exec(`CREATE TABLE IF NOT EXISTS plantillas_etiquetas (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,ancho REAL DEFAULT 50,alto REAL DEFAULT 30,elementos TEXT DEFAULT '[]',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  const plantillasPredeterminadas = [
+    { nombre: 'Taller - Orden de servicio', elementos: [
+      { id: 'empresa', tipo: 'texto', x: 3, y: 1.5, ancho: 44, alto: 4, contenido: '{EMPRESA}', fontSize: 10, bold: true },
+      { id: 'cliente', tipo: 'texto', x: 3, y: 6.5, ancho: 44, alto: 3.5, contenido: '{CLIENTE}', fontSize: 7, bold: true },
+      { id: 'fallas', tipo: 'texto', x: 3, y: 10.5, ancho: 44, alto: 4, contenido: 'FALLA: {FALLAS}', fontSize: 5, bold: false },
+      { id: 'numero_orden', tipo: 'texto', x: 3, y: 15, ancho: 44, alto: 3, contenido: 'ORDEN: {NO_ORDEN}', fontSize: 7, bold: true },
+      { id: 'orden', tipo: 'barcode', x: 8, y: 19, ancho: 34, alto: 7, contenido: '{NO_ORDEN}' },
+    ] },
+    { nombre: 'Accesorios - Precio', elementos: [
+      { id: 'empresa', tipo: 'texto', x: 2, y: 2, ancho: 46, alto: 4, contenido: '{empresa}', fontSize: 8, bold: true },
+      { id: 'producto', tipo: 'texto', x: 2, y: 7, ancho: 46, alto: 5, contenido: '{producto}', fontSize: 9, bold: true },
+      { id: 'precio', tipo: 'texto', x: 2, y: 13, ancho: 46, alto: 5, contenido: '{precio}', fontSize: 14, bold: true },
+      { id: 'codigo', tipo: 'barcode', x: 2, y: 20, ancho: 46, alto: 8, contenido: '{codigo_barra}' },
+    ] },
+    { nombre: 'Electrodomésticos - Precio', elementos: [
+      { id: 'empresa', tipo: 'texto', x: 2, y: 2, ancho: 46, alto: 4, contenido: '{EMPRESA}', fontSize: 8, bold: true },
+      { id: 'producto', tipo: 'texto', x: 2, y: 7, ancho: 46, alto: 5, contenido: '{PRODUCTO}', fontSize: 9, bold: true },
+      { id: 'serial', tipo: 'texto', x: 2, y: 13, ancho: 46, alto: 4, contenido: 'SERIAL: {SERIAL}', fontSize: 8, bold: false },
+      { id: 'precio', tipo: 'texto', x: 2, y: 18, ancho: 46, alto: 5, contenido: '{PRECIO}', fontSize: 13, bold: true },
+      { id: 'codigo', tipo: 'barcode', x: 2, y: 24, ancho: 46, alto: 5, contenido: '{SERIAL}' },
+    ] },
+    { nombre: 'Garantía - Cliente y equipo', elementos: [
+      { id: 'titulo', tipo: 'texto', x: 2, y: 2, ancho: 46, alto: 4, contenido: '{GARANTIA}', fontSize: 10, bold: true },
+      { id: 'cliente', tipo: 'texto', x: 2, y: 7, ancho: 46, alto: 4, contenido: '{CLIENTE}', fontSize: 8, bold: true },
+      { id: 'producto', tipo: 'texto', x: 2, y: 12, ancho: 46, alto: 4, contenido: '{PRODUCTO}', fontSize: 8, bold: false },
+      { id: 'imei', tipo: 'texto', x: 2, y: 17, ancho: 46, alto: 4, contenido: 'IMEI: {IMEI}', fontSize: 8, bold: false },
+      { id: 'vence', tipo: 'texto', x: 2, y: 22, ancho: 46, alto: 4, contenido: 'VENCE: {VENCIMIENTO}', fontSize: 8, bold: true },
+      { id: 'codigo', tipo: 'barcode', x: 2, y: 27, ancho: 46, alto: 3, contenido: '{IMEI}' },
+    ] },
+  ]
+  const existePlantilla = db!.prepare(`SELECT id FROM plantillas_etiquetas WHERE nombre = ? LIMIT 1`)
+  const insertarPlantilla = db!.prepare(`INSERT INTO plantillas_etiquetas (nombre, ancho, alto, elementos, created_at, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+  for (const plantilla of plantillasPredeterminadas) {
+    const esGarantia = plantilla.nombre.startsWith('Garant')
+    if (!existePlantilla.get(plantilla.nombre)) insertarPlantilla.run(plantilla.nombre, esGarantia ? 25.4 : 50, esGarantia ? 38.1 : 30, JSON.stringify(plantilla.elementos))
+  }
+  const plantillaTaller = db!.prepare(`SELECT id FROM plantillas_etiquetas WHERE nombre = ? LIMIT 1`).get('Taller - Orden de servicio') as any
+  if (plantillaTaller?.id) {
+    const disenoTaller = plantillasPredeterminadas[0].elementos
+    db!.prepare(`UPDATE plantillas_etiquetas SET elementos = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(JSON.stringify(disenoTaller), plantillaTaller.id)
+  }
+  const plantillaAccesorios = db!.prepare(`SELECT id FROM plantillas_etiquetas WHERE nombre = ? LIMIT 1`).get('Accesorios - Precio') as any
+  if (plantillaAccesorios?.id) {
+    const disenoAccesorios = plantillasPredeterminadas[1].elementos
+    db!.prepare(`UPDATE plantillas_etiquetas SET elementos = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(JSON.stringify(disenoAccesorios), plantillaAccesorios.id)
+  }
+  db!.prepare(`UPDATE plantillas_etiquetas SET ancho = 25.4, alto = 38.1 WHERE nombre LIKE 'Garant%'`).run()
   db.exec(`CREATE TABLE IF NOT EXISTS licencia (id INTEGER PRIMARY KEY AUTOINCREMENT,licencia_equipo TEXT,licencia_cifrada TEXT,estado TEXT DEFAULT 'sin_verificar',nombre_empresa TEXT,fecha_inicio_prueba TEXT,fecha_vencimiento TEXT,ultima_verificacion TEXT,api_key TEXT,datos_servidor TEXT,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`INSERT OR IGNORE INTO licencia (id, estado) VALUES (1, 'sin_verificar')`)
   try { db.exec(`ALTER TABLE licencia ADD COLUMN datos_servidor TEXT`) } catch {}
@@ -410,7 +501,15 @@ function initDatabase(): void {
   if (badKey?.api_key && /^\d+-[0-9A-F]{12}$/i.test(badKey.api_key)) {
     db!.prepare(`UPDATE licencia SET api_key = NULL, updated_at = datetime('now','localtime') WHERE id = 1`).run()
   }
-  db.exec(`CREATE TABLE IF NOT EXISTS imei (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,id_equi INTEGER,costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,color TEXT DEFAULT '',capacidad TEXT DEFAULT '',bateria TEXT DEFAULT '',estado TEXT DEFAULT 'DISPONIBLE',fecha_venta TEXT,comprador TEXT DEFAULT '',proveedor TEXT DEFAULT '',no_compra TEXT DEFAULT '',precio_vendido REAL DEFAULT 0,hora_venta TEXT DEFAULT '',no_factura TEXT DEFAULT '',nota TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (id_equi) REFERENCES telefonos(id))`)
+  db.exec(`CREATE TABLE IF NOT EXISTS imei (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,id_equi INTEGER,telefono_uid TEXT DEFAULT '',equipo TEXT DEFAULT '',costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,color TEXT DEFAULT '',capacidad TEXT DEFAULT '',bateria TEXT DEFAULT '',estado TEXT DEFAULT 'DISPONIBLE',fecha_venta TEXT,comprador TEXT DEFAULT '',proveedor TEXT DEFAULT '',no_compra TEXT DEFAULT '',precio_vendido REAL DEFAULT 0,hora_venta TEXT DEFAULT '',no_factura TEXT DEFAULT '',nota TEXT DEFAULT '',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (id_equi) REFERENCES telefonos(id))`)
+  try { db!.exec(`ALTER TABLE imei ADD COLUMN telefono_uid TEXT DEFAULT ''`) } catch {}
+  try { db!.exec(`ALTER TABLE imei ADD COLUMN equipo TEXT DEFAULT ''`) } catch {}
+  try {
+    db!.exec(`UPDATE imei SET telefono_uid = (SELECT uid FROM telefonos WHERE telefonos.id = imei.id_equi) WHERE (telefono_uid IS NULL OR telefono_uid = '') AND id_equi IS NOT NULL`)
+  } catch {}
+  try {
+    db!.exec(`UPDATE imei SET equipo = (SELECT nombre FROM telefonos WHERE telefonos.id = imei.id_equi) WHERE (equipo IS NULL OR TRIM(equipo) = '') AND id_equi IS NOT NULL`)
+  } catch {}
   db.exec(`CREATE TABLE IF NOT EXISTS electrodomesticos (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   try { db!.exec(`ALTER TABLE electrodomesticos ADD COLUMN imagen TEXT DEFAULT ''`) } catch {}
   db.exec(`CREATE TABLE IF NOT EXISTS serial (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,id_equi INTEGER,costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,color TEXT DEFAULT '',capacidad TEXT DEFAULT '',bateria TEXT DEFAULT '',estado TEXT DEFAULT 'DISPONIBLE',fecha_venta TEXT,comprador TEXT DEFAULT '',proveedor TEXT DEFAULT '',no_compra TEXT DEFAULT '',precio_vendido REAL DEFAULT 0,hora_venta TEXT DEFAULT '',no_factura TEXT DEFAULT '',nota TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (id_equi) REFERENCES electrodomesticos(id))`)
@@ -479,6 +578,7 @@ function initDatabase(): void {
   db.exec(`CREATE TABLE IF NOT EXISTS cuadres (id INTEGER PRIMARY KEY AUTOINCREMENT,fecha TEXT DEFAULT '',turno_id INTEGER DEFAULT 0,turno_usuario TEXT DEFAULT '',monto_inicial REAL DEFAULT 0,total_ventas REAL DEFAULT 0,efectivo REAL DEFAULT 0,tarjeta REAL DEFAULT 0,transferencia REAL DEFAULT 0,total_gastos REAL DEFAULT 0,saldo_final REAL DEFAULT 0,observacion TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   const tablasConAlmacen = ['facturas', 'clientes', 'proveedores', 'telefonos', 'accesorios', 'electrodomesticos', 'imei', 'serial', 'piezas', 'tecnicos', 'ordenes_taller', 'gastos', 'gastos_fijos', 'cuentas_cobrar', 'cuentas_pagar', 'notas', 'comprobantes_fiscales', 'plantillas_etiquetas', 'correo']
   for (const t of tablasConAlmacen) { try { db!.exec(`ALTER TABLE "${t}" ADD COLUMN almacen_id INTEGER DEFAULT 0`) } catch {} }
+  auditarEsquemaLocal()
 }
 
 function registrarBitacora(tabla: string, registroId: number, accion: string, usuario: string, datosNuevos: any, datosAnteriores: any) {
@@ -583,6 +683,28 @@ function setupIpcHandlers(): void {
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('imei:repararReferenciasTelefono', () => {
+    try {
+      const rows = db!.prepare(`
+        SELECT imei.id, imei.telefono_uid, telefonos.uid AS telefono_uid_nuevo
+        FROM imei
+        INNER JOIN telefonos ON telefonos.id = imei.id_equi
+        WHERE imei.id_equi IS NOT NULL AND telefonos.uid IS NOT NULL AND TRIM(telefonos.uid) <> ''
+      `).all() as any[]
+      const update = db!.prepare(`UPDATE imei SET telefono_uid = ?, updated_at = ? WHERE id = ?`)
+      const ids: number[] = []
+      for (const row of rows) {
+        const uid = String(row.telefono_uid_nuevo || '')
+        if (String(row.telefono_uid || '') === uid) continue
+        update.run(uid, new Date().toISOString(), row.id)
+        ids.push(Number(row.id))
+      }
+      return { success: true, data: { repaired: ids.length, ids, scanned: rows.length } }
+    } catch (error: any) {
+      return { success: false, error: error.message || 'No se pudieron reparar los IMEI' }
     }
   })
 
@@ -729,6 +851,7 @@ function setupIpcHandlers(): void {
   const licenciaEquipoOtp = new Map<string, { codigo: string; licencia: string; email: string; mac: string; expiresAt: number; datosServidor: any }>()
   const licenciaVisualizacionOtp = new Map<string, { codigo: string; licencia: string; email: string; expiresAt: number }>()
   const facturaEliminacionOtp = new Map<string, { codigo: string; facturaIds: number[]; email: string; expiresAt: number }>()
+  const imeiEliminacionOtp = new Map<string, { codigo: string; imeiIds: number[]; email: string; expiresAt: number }>()
 
   function getLicenciaAuthToken(): string {
     return getLicenciaWriteToken()
@@ -1640,7 +1763,7 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('caja:getTurnoActivo', async () => {
     try {
-      const row = db!.prepare(`SELECT id FROM caja_turnos WHERE estado = 'abierto' ORDER BY id DESC LIMIT 1`).get() as any
+      const row = db!.prepare(`SELECT * FROM caja_turnos WHERE estado = 'abierto' ORDER BY id DESC LIMIT 1`).get() as any
       return { success: true, data: row || null }
     } catch (e: any) { return { success: false, error: e.message } }
   })
@@ -1879,6 +2002,65 @@ function setupIpcHandlers(): void {
     } catch (e: any) { return { success: false, error: e.message || 'Error validando codigo' } }
   })
 
+  ipcMain.handle('imei:solicitarOtpEliminar', async (_event, imei: any = {}) => {
+    try {
+      const imeiIds = (Array.isArray(imei?.imeiIds) ? imei.imeiIds : [imei?.id])
+        .map((id: any) => Number(id || 0))
+        .filter((id: number) => id > 0)
+        .sort((a: number, b: number) => a - b)
+      if (imeiIds.length === 0) return { success: false, error: 'IMEI invalido' }
+
+      const email = getEmailEmpresa()
+      if (!email || !email.includes('@')) return { success: false, error: 'Configura un correo valido en los datos de la empresa' }
+
+      const mac = normalizarMac(obtenerMacAddress()) || 'LOCAL'
+      const key = `${mac}:${imeiIds.join(',')}`
+      const codigo = Math.floor(1000 + Math.random() * 9000).toString()
+      imeiEliminacionOtp.set(key, { codigo, imeiIds, email, expiresAt: Date.now() + 10 * 60 * 1000 })
+
+      const emailResult = await enviarEmailOtpEliminarFactura(email, codigo, {
+        ...imei,
+        entidad: 'IMEI',
+        entidadPlural: 'IMEI',
+        no_factura: imeiIds.length === 1 ? (imei?.nombre || imeiIds[0]) : '',
+        nombre_cliente: imeiIds.length === 1 ? (imei?.nombre || 'Sin nombre') : '',
+        cantidad: imeiIds.length,
+        total: Number(imei?.total || 0),
+      })
+      if (!emailResult.success) {
+        imeiEliminacionOtp.delete(key)
+        return { success: false, error: emailResult.error || 'No se pudo enviar el codigo' }
+      }
+
+      return { success: true, data: { email: ocultarEmail(email), expiresMinutes: 10 } }
+    } catch (e: any) { return { success: false, error: e.message || 'Error solicitando codigo' } }
+  })
+
+  ipcMain.handle('imei:confirmarOtpEliminar', async (_event, payload: { imeiId?: number; imeiIds?: number[]; codigo?: string } = {}) => {
+    try {
+      const imeiIds = (Array.isArray(payload?.imeiIds) ? payload.imeiIds : [payload?.imeiId])
+        .map((id: any) => Number(id || 0))
+        .filter((id: number) => id > 0)
+        .sort((a: number, b: number) => a - b)
+      const codigo = String(payload?.codigo || '').replace(/\D/g, '')
+      if (imeiIds.length === 0) return { success: false, error: 'IMEI invalido' }
+      if (!/^\d{4}$/.test(codigo)) return { success: false, error: 'Introduce el codigo de 4 digitos' }
+
+      const mac = normalizarMac(obtenerMacAddress()) || 'LOCAL'
+      const key = `${mac}:${imeiIds.join(',')}`
+      const registro = imeiEliminacionOtp.get(key)
+      if (!registro) return { success: false, error: 'Solicita un codigo nuevo' }
+      if (Date.now() > registro.expiresAt) {
+        imeiEliminacionOtp.delete(key)
+        return { success: false, error: 'El codigo vencio. Solicita uno nuevo' }
+      }
+      if (registro.codigo !== codigo) return { success: false, error: 'Codigo incorrecto' }
+
+      imeiEliminacionOtp.delete(key)
+      return { success: true }
+    } catch (e: any) { return { success: false, error: e.message || 'Error validando codigo' } }
+  })
+
   ipcMain.handle('transferencia:realizar', async (_event, params: { tabla: string; items: { id: number; cantidad: number }[]; origen_id: number; destino_id: number; transferencia: any }) => {
     try {
       const { tabla, items, origen_id, destino_id, transferencia } = params
@@ -2043,7 +2225,7 @@ function setupIpcHandlers(): void {
   })
 
   // Imprimir ticket
-  ipcMain.handle('print:ticket', async (_event, html: string, printerName?: string) => {
+  ipcMain.handle('print:ticket', async (_event, html: string, printerName?: string, pageSizeMm?: { width?: number; height?: number }) => {
     let printWindow: BrowserWindow | null = null
     const tmpPath = path.join(app.getPath('temp'), `print-ticket-${Date.now()}.html`)
     try {
@@ -2071,6 +2253,11 @@ function setupIpcHandlers(): void {
       }
       const printOptions: any = { silent: true, printBackground: true, margins: { marginType: 'none' } }
       if (printerName) printOptions.deviceName = printerName
+      const width = Number(pageSizeMm?.width || 0)
+      const height = Number(pageSizeMm?.height || 0)
+      if (width > 0 && height > 0) {
+        printOptions.pageSize = { width: Math.round(width * 1000), height: Math.round(height * 1000) }
+      }
       return new Promise((resolve) => {
         printWindow!.webContents.print(printOptions, (success, failureReason) => {
           if (printWindow) { printWindow.close(); printWindow = null }
@@ -2388,9 +2575,9 @@ function setupIpcHandlers(): void {
 
   function getOtpEmailConfig() {
     return {
-      activo: 1,
-      email: 'tmposrd@gmail.com',
-      password: decodeBase64Password('bHRra2lleHJ0Y2hzcG5ycA=='),
+      activo: 0,
+      email: '',
+      password: '',
       host: 'smtp.gmail.com',
       puerto: 587,
       seguridad: 'STARTTLS',
@@ -2401,8 +2588,8 @@ function setupIpcHandlers(): void {
     const defaultEmailConfig = getOtpEmailConfig()
     const row = db!.prepare(`SELECT * FROM correo WHERE id = 1`).get() as any
     if (!row) return defaultEmailConfig
-    const email = row.email || defaultEmailConfig.email
-    const password = row.password ? decodeBase64Password(row.password || '') : defaultEmailConfig.password
+    const email = row.email || ''
+    const password = row.password ? decodeBase64Password(row.password || '') : ''
     return {
       activo: Number(row.activo ?? defaultEmailConfig.activo),
       email,

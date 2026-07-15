@@ -5,6 +5,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth.store'
 import { useAlmacenStore } from '@/stores/almacen.store'
 import { useAlertas } from '@/composables/useAlertas'
+import { ensureConfigLoaded, getImageUrl } from '@/services/tmCloudClient'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 
@@ -15,7 +16,7 @@ const auth = useAuthStore()
 const almacenStore = useAlmacenStore()
 const cambiandoAlmacen = ref(false)
 
-const { alertas, verificarAlertas } = useAlertas()
+const { alertas, verificarAlertas, descartarAlerta, descartarTodas } = useAlertas()
 const alertasPanelVisible = ref(false)
 
 function cambiarAlmacen() {
@@ -29,17 +30,26 @@ const empresaLogo = ref('')
 
 async function cargarEmpresa() {
   try {
+    await ensureConfigLoaded()
     const res = await window.db.getAll('empresa')
     if (res.success && res.data?.length > 0) {
       const almacenId = almacenStore.activeId || 0
       const e = res.data.find((r: any) => Number(r.almacen_id) === almacenId) || res.data.find((r: any) => !r.almacen_id || Number(r.almacen_id) === 0) || res.data[0]
       empresaNombre.value = e.nombre || ''
-      empresaLogo.value = e.logo || ''
+      empresaLogo.value = getImageUrl(e.logo || '') || e.logo || ''
       ;(window as any).__empresaNombre = e.nombre || 'MI EMPRESA'
       ;(window as any).__empresaDireccion = e.direccion || ''
       ;(window as any).__empresaTelefono = e.telefono || ''
     }
   } catch (_) {}
+}
+
+function ocultarLogo() {
+  empresaLogo.value = ''
+}
+
+function refrescarEmpresa() {
+  cargarEmpresa()
 }
 let licenciaInterval: ReturnType<typeof setInterval> | null = null
 let updateInterval: ReturnType<typeof setInterval> | null = null
@@ -141,6 +151,7 @@ async function descargarAhora() {
 
 onMounted(() => {
   cargarEmpresa()
+  window.addEventListener('empresa:actualizada', refrescarEmpresa)
   almacenStore.load()
   verificarAlertas()
   setInterval(verificarAlertas, 600000)
@@ -180,6 +191,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('empresa:actualizada', refrescarEmpresa)
   window.removeEventListener('keydown', handleKeyDown)
 })
 
@@ -264,7 +276,7 @@ onUnmounted(() => {
       <div class="topbar-row topbar-brand-row">
         <div class="branding">
           <div class="logo cursor-pointer" @click="router.push('/')">
-            <img v-if="empresaLogo" :src="empresaLogo" class="w-full h-full object-contain p-1" />
+            <img v-if="empresaLogo" :src="empresaLogo" class="w-full h-full object-contain p-1" alt="Logo de empresa" @error="ocultarLogo" />
             <span v-else-if="empresaNombre" class="text-lg font-bold" style="color:var(--p-primary-500)">{{ empresaNombre.charAt(0) }}</span>
             <svg v-else width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -299,19 +311,23 @@ onUnmounted(() => {
               <i class="pi pi-bell action-icon" :class="alertas.length > 0 ? 'text-amber-400' : ''"></i>
               <span v-if="alertas.length > 0" class="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] flex items-center justify-center font-bold">{{ alertas.length > 9 ? '9+' : alertas.length }}</span>
             </button>
-            <div v-if="alertasPanelVisible" class="absolute right-0 top-full mt-1 w-72 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 shadow-xl z-50 overflow-hidden" @click.stop>
-              <div class="px-3 py-2 border-b border-surface-100 dark:border-surface-700 text-xs font-semibold text-surface-500 flex items-center justify-between">
+            <div v-if="alertasPanelVisible" class="alertas-panel absolute right-0 top-full mt-1 w-72 rounded-xl border border-surface-200 dark:border-surface-700 shadow-xl z-50 overflow-hidden" :style="{ backgroundColor: themeStore.isDark ? '#0f172a' : '#ffffff', color: themeStore.isDark ? '#f8fafc' : '#1e293b' }" @click.stop>
+              <div class="alertas-panel-header px-3 py-2 border-b border-surface-100 dark:border-surface-700 text-xs font-semibold flex items-center justify-between">
                 <span>Alertas ({{ alertas.length }})</span>
-                <button @click="alertasPanelVisible = false" class="text-surface-400 hover:text-surface-600"><i class="pi pi-times text-xs"></i></button>
+                <div class="flex items-center gap-2">
+                  <button v-if="alertas.length" @click="descartarTodas" class="text-primary hover:underline">Limpiar</button>
+                  <button @click="alertasPanelVisible = false" class="text-surface-400 hover:text-surface-600"><i class="pi pi-times text-xs"></i></button>
+                </div>
               </div>
-              <div v-if="alertas.length === 0" class="px-3 py-6 text-center text-surface-400 text-xs">Sin alertas</div>
+              <div v-if="alertas.length === 0" class="alertas-panel-empty px-3 py-6 text-center text-xs">Sin alertas</div>
               <div v-else class="max-h-64 overflow-y-auto divide-y divide-surface-100 dark:divide-surface-700">
                 <div v-for="(a, i) in alertas" :key="i" class="px-3 py-2.5 flex items-start gap-2.5 text-sm hover:bg-surface-50 dark:hover:bg-surface-800/50 cursor-pointer" @click="alertasPanelVisible = false; a.ruta ? router.push(a.ruta) : null">
                   <i class="pi mt-0.5 text-xs" :class="a.severidad === 'danger' ? 'pi-exclamation-circle text-red-500' : a.severidad === 'warning' ? 'pi-exclamation-triangle text-amber-500' : 'pi-info-circle text-blue-500'"></i>
-                  <div>
+                  <div class="min-w-0 flex-1">
                     <div class="font-medium text-xs">{{ a.tipo === 'stock' ? 'Stock Bajo' : a.tipo === 'turno' ? 'Turno' : 'Alerta' }}</div>
-                    <div class="text-xs text-surface-500">{{ a.mensaje }}</div>
+                    <div class="alertas-panel-message text-xs">{{ a.mensaje }}</div>
                   </div>
+                  <button class="text-surface-400 hover:text-surface-700 dark:hover:text-surface-200" @click.stop="descartarAlerta(a)" v-tooltip="'Descartar alerta'"><i class="pi pi-times text-xs"></i></button>
                 </div>
               </div>
             </div>
@@ -619,6 +635,29 @@ onUnmounted(() => {
 .action-label {
   font-size: 0.875rem;
   font-weight: 500;
+}
+
+.alertas-panel {
+  background: #ffffff;
+  color: #1e293b;
+}
+
+.alertas-panel-header,
+.alertas-panel-message,
+.alertas-panel-empty {
+  color: #64748b;
+}
+
+:global(.dark) .alertas-panel {
+  background: #0f172a !important;
+  border-color: #334155 !important;
+  color: #f8fafc;
+}
+
+:global(.dark) .alertas-panel-header,
+:global(.dark) .alertas-panel-message,
+:global(.dark) .alertas-panel-empty {
+  color: #cbd5e1 !important;
 }
 
 </style>

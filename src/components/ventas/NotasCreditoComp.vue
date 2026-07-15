@@ -14,6 +14,7 @@ import Select from 'primevue/select'
 import Calendar from 'primevue/calendar'
 import Textarea from 'primevue/textarea'
 import Fieldset from 'primevue/fieldset'
+import Menu from 'primevue/menu'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import TicketFacturaPrint from './TicketFacturaPrint.vue'
@@ -37,11 +38,26 @@ const deleteOtpError = ref('')
 const isEditing = ref(false)
 const selectedNota = ref<any>(null)
 const selectedNotas = ref<any[]>([])
+const notaActionMenu = ref()
+const notaAccion = ref<any>(null)
 const busqueda = ref('')
 const rangoActivo = ref<string>('todo')
 const rangoPersonalizado = ref<Date[]>([])
 const comprobanteFiltro = ref('')
 const facturasOrigen = ref<any[]>([])
+
+const notaActionItems = computed(() => [
+  { label: 'Imprimir', icon: 'pi pi-print', command: () => notaAccion.value && imprimirNota(notaAccion.value) },
+  { label: 'Ver PDF', icon: 'pi pi-file-pdf', command: () => notaAccion.value && verNotaPdf(notaAccion.value) },
+  { label: 'Editar', icon: 'pi pi-pencil', command: () => notaAccion.value && abrirEditar(notaAccion.value) },
+  { separator: true },
+  { label: 'Eliminar', icon: 'pi pi-trash', class: 'text-red-500', command: () => notaAccion.value && confirmarBorrar(notaAccion.value) },
+])
+
+function abrirMenuAccionesNota(event: Event, nota: any) {
+  notaAccion.value = nota
+  notaActionMenu.value?.toggle(event)
+}
 
 function getRango(key: string): { inicio: string; fin: string } | null {
   if (key === 'todo') return null
@@ -482,14 +498,9 @@ onMounted(async () => {
         responsiveLayout="scroll"
       >
         <Column selectionMode="multiple" headerStyle="width: 3rem" />
-        <Column header="Acciones" style="width: 12rem">
+        <Column header="Acciones" style="width: 5rem">
           <template #body="{ data }">
-            <div class="flex gap-1">
-              <Button icon="pi pi-print" severity="info" text rounded @click.stop="imprimirNota(data)" v-tooltip="'Imprimir'" />
-              <Button icon="pi pi-file-pdf" severity="danger" text rounded @click.stop="verNotaPdf(data)" v-tooltip="'Ver PDF'" />
-              <Button icon="pi pi-pencil" severity="info" text rounded @click.stop="abrirEditar(data)" v-tooltip="'Editar'" />
-              <Button icon="pi pi-trash" severity="danger" text rounded @click.stop="confirmarBorrar(data)" v-tooltip="'Eliminar'" />
-            </div>
+            <Button icon="pi pi-ellipsis-v" severity="secondary" text rounded @click.stop="abrirMenuAccionesNota($event, data)" v-tooltip="'Acciones'" />
           </template>
         </Column>
         <Column field="id" header="ID" style="width: 5rem" />
@@ -548,16 +559,14 @@ onMounted(async () => {
               </div>
             </div>
 
-            <div class="flex gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
-              <Button icon="pi pi-print" severity="info" text rounded size="small" @click.stop="imprimirNota(nota)" v-tooltip="'Imprimir'" />
-              <Button icon="pi pi-file-pdf" severity="danger" text rounded size="small" @click.stop="verNotaPdf(nota)" v-tooltip="'Ver PDF'" />
-              <Button icon="pi pi-pencil" severity="info" text rounded size="small" @click.stop="abrirEditar(nota)" v-tooltip="'Editar'" />
-              <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click.stop="confirmarBorrar(nota)" v-tooltip="'Eliminar'" />
+            <div class="flex justify-end mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
+              <Button icon="pi pi-ellipsis-v" severity="secondary" text rounded size="small" @click.stop="abrirMenuAccionesNota($event, nota)" v-tooltip="'Acciones'" />
             </div>
           </div>
         </div>
       </div>
     </Fieldset>
+    <Menu ref="notaActionMenu" :model="notaActionItems" popup appendTo="body" />
 
     <Dialog
       v-model:visible="dialogVisible"

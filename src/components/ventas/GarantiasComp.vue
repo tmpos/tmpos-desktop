@@ -51,9 +51,10 @@
             <span v-else class="text-xs text-surface-400">0</span>
           </template>
         </Column>
-        <Column header="Acciones" style="width:8rem">
+        <Column header="Acciones" style="width:10rem">
           <template #body="{ data }">
             <div class="flex gap-1">
+              <Button icon="pi pi-print" severity="warn" text rounded size="small" v-tooltip="'Imprimir etiqueta'" @click.stop="abrirImpresionEtiqueta(data)" />
               <Button icon="pi pi-whatsapp" severity="success" text rounded size="small" v-tooltip="'Avisar por WhatsApp'" @click.stop="avisarGarantiaWhatsApp(data)" />
               <Button icon="pi pi-pencil" severity="info" text rounded size="small" v-tooltip="'Editar'" @click.stop="abrirEditar(data)" />
               <Button icon="pi pi-trash" severity="danger" text rounded size="small" v-tooltip="'Eliminar'" @click.stop="confirmarBorrar(data)" />
@@ -197,6 +198,30 @@
       </template>
     </Dialog>
 
+    <Dialog v-model:visible="dialogImpresoraEtiqueta" header="Imprimir etiqueta de garantía" modal :style="{ width: 'min(28rem, 95vw)' }">
+      <div class="flex flex-col gap-3 pt-1">
+        <div class="rounded-lg bg-surface-50 dark:bg-surface-800 p-3 text-sm">
+          <p class="font-semibold">{{ garantiaEtiqueta?.cliente_nombre || 'Cliente' }}</p>
+          <p class="text-xs text-surface-500">{{ garantiaEtiqueta?.producto_nombre || '' }} · {{ garantiaEtiqueta?.imei || garantiaEtiqueta?.serial || '' }}</p>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm font-semibold">Impresora</label>
+          <Select v-model="impresoraEtiqueta" :options="impresorasEtiqueta" optionLabel="label" optionValue="value" placeholder="Seleccionar impresora" filter fluid :loading="cargandoImpresorasEtiqueta" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm font-semibold">Tamaño de etiqueta (pulgadas)</label>
+          <Select v-model="plantillaEtiquetaId" :options="plantillasEtiqueta" optionLabel="nombre" optionValue="id" placeholder="Seleccionar plantilla" filter fluid />
+          <small v-if="plantillaEtiquetaSeleccionada" class="text-surface-500">{{ plantillaEtiquetaSeleccionada.ancho }} × {{ plantillaEtiquetaSeleccionada.alto }} mm</small>
+          <small v-else class="text-amber-600 dark:text-amber-400">Crea primero una plantilla en Inventario → Etiquetas.</small>
+        </div>
+        <p v-if="!cargandoImpresorasEtiqueta && impresorasEtiqueta.length === 0" class="text-sm text-amber-600 dark:text-amber-400">No se encontraron impresoras instaladas.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogImpresoraEtiqueta = false" />
+        <Button label="Imprimir" icon="pi pi-print" :disabled="!impresoraEtiqueta || !plantillaEtiquetaId" :loading="imprimiendoEtiqueta" @click="confirmarImpresionEtiqueta" />
+      </template>
+    </Dialog>
+
     <Dialog v-model:visible="deleteDialogVisible" header="Eliminar Garantia" modal :style="{ width: '24rem' }">
       <div class="space-y-4">
         <div class="flex items-center gap-3">
@@ -296,6 +321,15 @@ const deleteOtpEmail = ref('')
 const deleteOtpError = ref('')
 const garantiaParaEliminar = ref<any>(null)
 const deleteMultipleDialogVisible = ref(false)
+const dialogImpresoraEtiqueta = ref(false)
+const garantiaEtiqueta = ref<any>(null)
+const impresorasEtiqueta = ref<{ label: string; value: string }[]>([])
+const impresoraEtiqueta = ref('')
+const cargandoImpresorasEtiqueta = ref(false)
+const imprimiendoEtiqueta = ref(false)
+const plantillasEtiqueta = ref<any[]>([])
+const plantillaEtiquetaId = ref<number | null>(null)
+const plantillaEtiquetaSeleccionada = computed(() => plantillasEtiqueta.value.find((plantilla: any) => Number(plantilla.id) === Number(plantillaEtiquetaId.value)) || null)
 
 const garantiasParaEliminar = computed(() => {
   if (garantiaParaEliminar.value) return [garantiaParaEliminar.value]
@@ -749,6 +783,78 @@ function avisarReclamoWhatsApp(r: any) {
 
 function avisarGarantiaWhatsApp(g: any) {
   abrirWhatsAppGarantia(g, mensajeEstadoReclamo(g?.ultimo_reclamo || null, g))
+}
+
+function escaparHtml(valor: any): string {
+  return String(valor ?? '').replace(/[&<>'"]/g, caracter => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;',
+  }[caracter] || caracter))
+}
+
+async function abrirImpresionEtiqueta(garantia: any) {
+  garantiaEtiqueta.value = garantia
+  const impresoraConfigurada = localStorage.getItem('etiquetas_printer') || ''
+  impresoraEtiqueta.value = ''
+  impresorasEtiqueta.value = []
+  plantillaEtiquetaId.value = null
+  try {
+    const plantillas = await (window as any).db.getAll('plantillas_etiquetas')
+    if (plantillas?.success) plantillasEtiqueta.value = plantillas.data || []
+  } catch {
+    plantillasEtiqueta.value = []
+  }
+  dialogImpresoraEtiqueta.value = true
+  cargandoImpresorasEtiqueta.value = true
+  try {
+    const resultado = await (window as any).electron?.invoke('getPrinters')
+    if (resultado?.success) {
+      impresorasEtiqueta.value = (resultado.data || [])
+        .map((impresora: any) => ({ label: impresora.displayName || impresora.name, value: impresora.name }))
+        .filter((impresora: any) => impresora.value)
+      if (impresorasEtiqueta.value.some((impresora: any) => impresora.value === impresoraConfigurada)) {
+        impresoraEtiqueta.value = impresoraConfigurada
+      }
+    }
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Impresoras', detail: error?.message || 'No se pudieron cargar las impresoras', life: 3000 })
+  } finally {
+    cargandoImpresorasEtiqueta.value = false
+  }
+}
+
+async function confirmarImpresionEtiqueta() {
+  const plantilla = plantillaEtiquetaSeleccionada.value
+  if (!garantiaEtiqueta.value || !impresoraEtiqueta.value || !plantilla) return
+  imprimiendoEtiqueta.value = true
+  await imprimirEtiquetaGarantia(garantiaEtiqueta.value, impresoraEtiqueta.value, plantilla)
+  imprimiendoEtiqueta.value = false
+}
+
+async function imprimirEtiquetaGarantia(garantia: any, impresora: string, plantilla: any) {
+  const ancho = Number(plantilla.ancho || 50)
+  const alto = Number(plantilla.alto || 30)
+  const compacta = ancho <= 30
+  const fuente = compacta ? 6 : 10
+  const identificador = garantia.imei || garantia.serial || 'SIN IDENTIFICADOR'
+  const filas = [
+    ['CLIENTE', garantia.cliente_nombre || 'CONSUMIDOR FINAL'],
+    ['TEL.', garantia.cliente_telefono || 'SIN TELÉFONO'],
+    ['EQUIPO', garantia.producto_nombre || garantia.tipo_producto || 'PRODUCTO'],
+    [garantia.imei ? 'IMEI' : 'SERIAL', identificador],
+    ['FACTURA', garantia.no_factura || 'N/A'],
+    ['VENCE', garantia.fecha_vencimiento || 'N/A'],
+  ].map(([titulo, valor]) => `<div class="fila"${compacta && (titulo === 'TEL.' || titulo === 'FACTURA') ? ' style="display:none"' : ''}><b>${escaparHtml(titulo)}:</b> <span>${escaparHtml(valor)}</span></div>`).join('')
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiqueta de garantía</title><style>
+    @page{size:${ancho}mm ${alto}mm;margin:0}*{box-sizing:border-box}body{width:${ancho}mm;height:${alto}mm;overflow:hidden;margin:0;padding:${ancho <= 30 ? '1.5' : '2.5'}mm;font-family:Arial,sans-serif;color:#000;font-size:${fuente}px}.titulo{text-align:center;font-size:0;font-weight:800;border-bottom:1px solid #000;padding-bottom:.5mm;margin-bottom:.5mm}.titulo:before{content:'GARANTIA';font-size:${fuente + 3}px}.fila{padding:${ancho <= 30 ? '.35' : '.65'}mm 0;border-bottom:1px dashed #999;word-break:break-word;line-height:1.05}.codigo{font-family:monospace;font-size:${fuente + 1}px;font-weight:700;text-align:center;padding:.5mm 0;word-break:break-all}.pie{text-align:center;font-size:${Math.max(6, fuente - 2)}px;padding-top:.5mm}
+  </style></head><body><div class="titulo">ETIQUETA DE GARANTÍA</div>${filas}<div class="codigo">${escaparHtml(identificador)}</div><div class="pie">Conservar junto al equipo</div></body></html>`
+  try {
+    const resultado = await (window as any).electron?.invoke('print:ticket', html, impresora, { width: ancho, height: alto })
+    if (!resultado?.success) throw new Error(resultado?.error || 'No se pudo enviar a la impresora')
+    dialogImpresoraEtiqueta.value = false
+    toast.add({ severity: 'success', summary: 'Etiqueta enviada', detail: `Etiqueta de ${garantia.cliente_nombre || 'cliente'} enviada a la impresora`, life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error al imprimir', detail: error?.message || 'No se pudo imprimir la etiqueta', life: 4000 })
+  }
 }
 
 onMounted(cargar)
