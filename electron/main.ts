@@ -7,6 +7,7 @@ import http from 'http'
 import https from 'https'
 import net from 'net'
 import tls from 'tls'
+import dns from 'dns'
 import { networkInterfaces, hostname } from 'os'
 import crypto from 'crypto'
 import bcrypt from 'bcryptjs'
@@ -142,10 +143,10 @@ function initDatabase(): void {
     if (tableExists('proveedores')) {
       const columns = tableColumns('proveedores')
       if (!columns.includes('id')) {
-        const copyColumns = ['nombre', 'rnc', 'telefono', 'email', 'encargado', 'cuenta_bancaria', 'direccion']
+        const copyColumns = ['nombre', 'rnc', 'telefono', 'email', 'encargado', 'cuenta_bancaria', 'direccion', 'imagen']
           .filter(column => columns.includes(column))
         db!.exec(`ALTER TABLE proveedores RENAME TO proveedores_old`)
-        db!.exec(`CREATE TABLE proveedores (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,rnc TEXT DEFAULT '',telefono TEXT DEFAULT '',email TEXT DEFAULT '',encargado TEXT DEFAULT '',cuenta_bancaria TEXT DEFAULT '',direccion TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+        db!.exec(`CREATE TABLE proveedores (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,rnc TEXT DEFAULT '',telefono TEXT DEFAULT '',email TEXT DEFAULT '',encargado TEXT DEFAULT '',cuenta_bancaria TEXT DEFAULT '',direccion TEXT DEFAULT '',imagen TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
         if (copyColumns.length > 0) {
           const columnsSql = copyColumns.map(column => `"${column}"`).join(', ')
           db!.exec(`INSERT INTO proveedores (${columnsSql}) SELECT ${columnsSql} FROM proveedores_old`)
@@ -153,12 +154,12 @@ function initDatabase(): void {
         db!.exec('DROP TABLE proveedores_old')
         return
       }
-      for (const column of ['rnc', 'telefono', 'email', 'encargado', 'cuenta_bancaria', 'direccion', 'created_at', 'updated_at']) {
+      for (const column of ['rnc', 'telefono', 'email', 'encargado', 'cuenta_bancaria', 'direccion', 'imagen', 'created_at', 'updated_at']) {
         if (!columns.includes(column)) db!.exec(`ALTER TABLE proveedores ADD COLUMN "${column}" TEXT DEFAULT ''`)
       }
       return
     }
-    db!.exec(`CREATE TABLE proveedores (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,rnc TEXT DEFAULT '',telefono TEXT DEFAULT '',email TEXT DEFAULT '',encargado TEXT DEFAULT '',cuenta_bancaria TEXT DEFAULT '',direccion TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+    db!.exec(`CREATE TABLE proveedores (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,rnc TEXT DEFAULT '',telefono TEXT DEFAULT '',email TEXT DEFAULT '',encargado TEXT DEFAULT '',cuenta_bancaria TEXT DEFAULT '',direccion TEXT DEFAULT '',imagen TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   }
 
   function ensureClientesTable(): void {
@@ -224,8 +225,8 @@ function initDatabase(): void {
       const columns = tableColumns('piezas')
       if (!columns.includes('id')) {
         db!.exec(`ALTER TABLE piezas RENAME TO piezas_old`)
-        db!.exec(`CREATE TABLE piezas (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,cantidad INTEGER DEFAULT 0,alerta INTEGER DEFAULT 1,proveedor TEXT DEFAULT '',descripcion TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
-        const copyColumns = ['nombre', 'costo', 'precio_venta', 'cantidad', 'alerta', 'proveedor', 'descripcion', 'created_at', 'updated_at'].filter(c => columns.includes(c))
+        db!.exec(`CREATE TABLE piezas (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,cantidad INTEGER DEFAULT 0,alerta INTEGER DEFAULT 1,proveedor TEXT DEFAULT '',descripcion TEXT DEFAULT '',imagen TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+        const copyColumns = ['nombre', 'costo', 'precio_venta', 'cantidad', 'alerta', 'proveedor', 'descripcion', 'imagen', 'created_at', 'updated_at'].filter(c => columns.includes(c))
         if (copyColumns.length > 0) {
           const columnsSql = copyColumns.map(column => `"${column}"`).join(', ')
           db!.exec(`INSERT INTO piezas (${columnsSql}) SELECT ${columnsSql} FROM piezas_old`)
@@ -233,12 +234,12 @@ function initDatabase(): void {
         db!.exec('DROP TABLE piezas_old')
         return
       }
-      for (const column of ['costo', 'precio_venta', 'cantidad', 'alerta', 'proveedor', 'descripcion', 'created_at', 'updated_at']) {
+      for (const column of ['costo', 'precio_venta', 'cantidad', 'alerta', 'proveedor', 'descripcion', 'imagen', 'created_at', 'updated_at']) {
         if (!columns.includes(column)) db!.exec(`ALTER TABLE piezas ADD COLUMN "${column}" TEXT DEFAULT ''`)
       }
       return
     }
-    db!.exec(`CREATE TABLE piezas (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,cantidad INTEGER DEFAULT 0,alerta INTEGER DEFAULT 1,proveedor TEXT DEFAULT '',descripcion TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+    db!.exec(`CREATE TABLE piezas (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,cantidad INTEGER DEFAULT 0,alerta INTEGER DEFAULT 1,proveedor TEXT DEFAULT '',descripcion TEXT DEFAULT '',imagen TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   }
 
   try { db!.exec(`CREATE TABLE IF NOT EXISTS movimientos_piezas (id INTEGER PRIMARY KEY AUTOINCREMENT,pieza_id INTEGER NOT NULL,pieza_nombre TEXT DEFAULT '',tipo TEXT DEFAULT '',cantidad_antes INTEGER DEFAULT 0,cantidad_despues INTEGER DEFAULT 0,referencia TEXT DEFAULT '',fecha TEXT DEFAULT '',hora TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`) } catch {} 
@@ -613,7 +614,10 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('db:getAll', (_event, tabla: string) => {
     try {
-      const rows = db!.prepare(`SELECT * FROM "${tabla}" ORDER BY id DESC`).all()
+      // Empresa es una configuración única: siempre se toma el primer registro
+      // creado, sin depender del valor del id ni del almacén activo.
+      const orderBy = tabla === 'empresa' ? 'ORDER BY rowid ASC' : 'ORDER BY id DESC'
+      const rows = db!.prepare(`SELECT * FROM "${tabla}" ${orderBy}`).all()
       return { success: true, data: rows }
     } catch (error: any) {
       return { success: false, error: error.message }
@@ -937,7 +941,7 @@ function setupIpcHandlers(): void {
 
     if (!nombre && !legal && !encargado && !telefono && !email && !direccion) return
 
-    const empresaLocal = db!.prepare(`SELECT id FROM empresa ORDER BY id DESC LIMIT 1`).get() as any
+    const empresaLocal = db!.prepare(`SELECT id FROM empresa ORDER BY rowid ASC LIMIT 1`).get() as any
     if (empresaLocal?.id) {
       db!.prepare(`
         UPDATE empresa
@@ -1183,13 +1187,7 @@ function setupIpcHandlers(): void {
   }
 
   function getEmailEmpresa() {
-    const empresa = db!.prepare(`
-      SELECT email
-      FROM empresa
-      WHERE email IS NOT NULL AND TRIM(email) <> ''
-      ORDER BY id DESC
-      LIMIT 1
-    `).get() as any
+    const empresa = db!.prepare(`SELECT email FROM empresa ORDER BY rowid ASC LIMIT 1`).get() as any
     return String(empresa?.email || '').trim()
   }
 
@@ -2547,6 +2545,41 @@ function setupIpcHandlers(): void {
       if (action === 'vaciarTabla') {
         try { db!.exec(`DELETE FROM "${args[0]}"`); db!.exec(`DELETE FROM sqlite_sequence WHERE name='${args[0]}'`); return { success: true } } catch (error: any) { return { success: false, error: error.message } }
       }
+      if (action === 'resetTableIds') {
+        const tabla = String(args[0] || '')
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tabla)) return { success: false, error: 'Nombre de tabla no valido' }
+        try {
+          const existe = db!.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(tabla)
+          if (!existe) return { success: false, error: 'La tabla no existe' }
+          const filas = db!.prepare(`SELECT id FROM "${tabla}" ORDER BY id ASC`).all() as any[]
+          const tablasLocales = db!.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as any[]
+          const referencias: Array<{ tabla: string; columna: string }> = []
+          for (const filaTabla of tablasLocales) {
+            const tablaHija = String(filaTabla.name || '')
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tablaHija)) continue
+            const claves = db!.prepare(`PRAGMA foreign_key_list("${tablaHija}")`).all() as any[]
+            for (const clave of claves) {
+              if (String(clave.table || '') === tabla && String(clave.to || 'id') === 'id') referencias.push({ tabla: tablaHija, columna: String(clave.from) })
+            }
+          }
+          db!.pragma('foreign_keys = OFF')
+          const resetear = db!.transaction(() => {
+            const cambios = filas.map((fila, indice) => ({ anterior: Number(fila.id), nuevo: indice + 1, temporal: -(Number(fila.id) + 1000000000) }))
+            const actualizarId = db!.prepare(`UPDATE "${tabla}" SET id = ? WHERE id = ?`)
+            for (const cambio of cambios) actualizarId.run(cambio.temporal, cambio.anterior)
+            for (const referencia of referencias) {
+              const actualizarReferencia = db!.prepare(`UPDATE "${referencia.tabla}" SET "${referencia.columna}" = ? WHERE "${referencia.columna}" = ?`)
+              for (const cambio of cambios) actualizarReferencia.run(cambio.nuevo, cambio.anterior)
+            }
+            for (const cambio of cambios) actualizarId.run(cambio.nuevo, cambio.temporal)
+            db!.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(tabla)
+            return cambios.length
+          })
+          const renumerados = resetear()
+          db!.pragma('foreign_keys = ON')
+          return { success: true, renumbered: renumerados }
+        } catch (error: any) { try { db!.pragma('foreign_keys = ON') } catch {} return { success: false, error: error.message } }
+      }
       if (action === 'eliminarTabla') {
         try { db!.exec(`DROP TABLE IF EXISTS "${args[0]}"`); return { success: true } } catch (error: any) { return { success: false, error: error.message } }
       }
@@ -2566,27 +2599,37 @@ function setupIpcHandlers(): void {
   function decodeBase64Password(encoded: string): string {
     if (!encoded) return ''
     try {
-      const base64Regex = /^[A-Za-z0-9+/]+=*$/
-      if (!base64Regex.test(encoded)) return encoded
-      const decoded = Buffer.from(encoded, 'base64').toString('utf8')
-      return Buffer.from(decoded, 'utf8').toString('base64') === encoded ? decoded : encoded
+      let valor = encoded.trim()
+      // Algunas versiones guardaron la misma clave varias veces en Base64. Se
+      // decodifica los niveles necesarios y se detiene al llegar al password real.
+      for (let intento = 0; intento < 5; intento++) {
+        const base64 = valor.startsWith('b64:') ? valor.slice(4) : valor
+        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) break
+        const padded = base64.padEnd(base64.length + ((4 - base64.length % 4) % 4), '=')
+        const decoded = Buffer.from(padded, 'base64').toString('utf8')
+        if (Buffer.from(decoded, 'utf8').toString('base64') !== padded) break
+        if (!base64.includes('=') && !decoded.startsWith('b64:') && !/^[A-Za-z0-9+/]+={1,2}$/.test(decoded)) break
+        valor = decoded
+      }
+      return valor
     } catch { return encoded }
   }
 
   function getOtpEmailConfig() {
+    const row = db!.prepare(`SELECT * FROM correo ORDER BY id ASC LIMIT 1`).get() as any
     return {
-      activo: 0,
-      email: '',
-      password: '',
-      host: 'smtp.gmail.com',
-      puerto: 587,
-      seguridad: 'STARTTLS',
+      activo: Number(row?.activo || 0),
+      email: row?.email || '',
+      password: row?.password ? decodeBase64Password(row.password) : '',
+      host: row?.host || row?.smtp_host || 'smtp.gmail.com',
+      puerto: Number(row?.puerto || row?.port || 587),
+      seguridad: row?.seguridad || row?.secure || 'STARTTLS',
     }
   }
 
   function getEmailConfig() {
     const defaultEmailConfig = getOtpEmailConfig()
-    const row = db!.prepare(`SELECT * FROM correo WHERE id = 1`).get() as any
+    const row = db!.prepare(`SELECT * FROM correo ORDER BY id ASC LIMIT 1`).get() as any
     if (!row) return defaultEmailConfig
     const email = row.email || ''
     const password = row.password ? decodeBase64Password(row.password || '') : ''
@@ -2620,9 +2663,22 @@ function setupIpcHandlers(): void {
     })
   }
 
-  function connectSmtp(host: string, port: number, secure: boolean): Promise<any> {
+  async function resolverHostSmtp(host: string): Promise<string> {
+    try {
+      return (await dns.promises.lookup(host)).address
+    } catch (firstError: any) {
+      try {
+        const direcciones = await dns.promises.resolve4(host)
+        if (direcciones[0]) return direcciones[0]
+      } catch (_) {}
+      throw new Error(`No se pudo resolver el servidor SMTP ${host}. Verifica la conexion DNS.`)
+    }
+  }
+
+  async function connectSmtp(host: string, port: number, secure: boolean): Promise<any> {
+    const address = await resolverHostSmtp(host)
     return new Promise((resolve, reject) => {
-      const options: any = { host, port, servername: host }
+      const options: any = { host: address, port, servername: host }
       const socket = secure ? tls.connect(options) : net.connect(options)
       socket.setTimeout(30000)
       socket.once('error', reject)
@@ -2645,7 +2701,10 @@ function setupIpcHandlers(): void {
       }
       await smtpCommand(socket, 'AUTH LOGIN', [334])
       await smtpCommand(socket, Buffer.from(config.email).toString('base64'), [334])
-      await smtpCommand(socket, Buffer.from(config.password).toString('base64'), [235])
+      const password = /smtp\.gmail\.com/i.test(host)
+        ? String(config.password || '').replace(/\s+/g, '')
+        : String(config.password || '')
+      await smtpCommand(socket, Buffer.from(password).toString('base64'), [235])
       await smtpCommand(socket, `MAIL FROM:<${config.email}>`)
       await smtpCommand(socket, `RCPT TO:<${toEmail}>`, [250, 251])
       await smtpCommand(socket, 'DATA', [354])

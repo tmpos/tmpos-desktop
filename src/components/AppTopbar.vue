@@ -33,8 +33,8 @@ async function cargarEmpresa() {
     await ensureConfigLoaded()
     const res = await window.db.getAll('empresa')
     if (res.success && res.data?.length > 0) {
-      const almacenId = almacenStore.activeId || 0
-      const e = res.data.find((r: any) => Number(r.almacen_id) === almacenId) || res.data.find((r: any) => !r.almacen_id || Number(r.almacen_id) === 0) || res.data[0]
+      // Empresa siempre corresponde al primer registro, no al último ni al almacén activo.
+      const e = res.data[0]
       empresaNombre.value = e.nombre || ''
       empresaLogo.value = getImageUrl(e.logo || '') || e.logo || ''
       ;(window as any).__empresaNombre = e.nombre || 'MI EMPRESA'

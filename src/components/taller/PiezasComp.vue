@@ -17,6 +17,8 @@ import Toast from 'primevue/toast'
 
 import { envioElectron } from '@/funciones/funciones.js'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
+import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 
 const toast = useToast()
 const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
@@ -65,9 +67,12 @@ const formDefault = () => ({
   alerta: 1,
   proveedor: '',
   descripcion: '',
+  imagen: '',
 })
 
 const form = ref(formDefault())
+const fileInput = ref<HTMLInputElement | null>(null)
+const subiendoImagen = ref(false)
 
 const proveedores = ref<any[]>([])
 const dialogNuevoProveedor = ref(false)
@@ -122,6 +127,7 @@ function abrirEditar(pieza: any) {
     alerta: pieza.alerta || 1,
     proveedor: pieza.proveedor || '',
     descripcion: pieza.descripcion || '',
+    imagen: pieza.imagen || '',
   }
   dialogVisible.value = true
 }
@@ -155,6 +161,7 @@ async function guardar() {
       alerta: form.value.alerta || 1,
       proveedor: form.value.proveedor.trim().toUpperCase(),
       descripcion: form.value.descripcion.trim(),
+      imagen: form.value.imagen || '',
     }
 
     if (isEditing.value) {
@@ -221,6 +228,57 @@ async function borrar() {
   } catch (error) {
     toast.add({ severity: 'error', summary: 'Error', detail: 'Error al eliminar', life: 3000 })
   }
+}
+
+async function subirImagen() {
+  const input = fileInput.value
+  if (!input?.files?.length) return
+  const file = input.files[0]
+  if (!file.type.startsWith('image/')) {
+    toast.add({ severity: 'warn', summary: 'Solo imagenes', detail: 'Selecciona un archivo de imagen', life: 3000 })
+    return
+  }
+  if (!tmCloudConnected()) {
+    toast.add({ severity: 'warn', summary: 'TM Cloud no configurado', detail: 'Configura TM Cloud para subir imagenes', life: 3000 })
+    return
+  }
+
+  subiendoImagen.value = true
+  try {
+    const uid = await uploadImage(file, 'piezas')
+    form.value.imagen = uid
+    if (isEditing.value && selectedPieza.value?.id) {
+      const actualizado = await window.db.update('piezas', selectedPieza.value.id, { imagen: uid })
+      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
+      selectedPieza.value.imagen = uid
+      const local = piezas.value.find((pieza: any) => pieza.id === selectedPieza.value.id)
+      if (local) local.imagen = uid
+      if (isOnline()) await pushLocalRowToCloud('piezas', selectedPieza.value.id)
+    }
+    toast.add({ severity: 'success', summary: 'Imagen subida', life: 2000 })
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo subir la imagen', life: 4000 })
+  } finally {
+    subiendoImagen.value = false
+    input.value = ''
+  }
+}
+
+async function eliminarImagen() {
+  if (!form.value.imagen) return
+  try { await deleteImage(form.value.imagen) } catch {}
+  form.value.imagen = ''
+  if (isEditing.value && selectedPieza.value?.id) {
+    await window.db.update('piezas', selectedPieza.value.id, { imagen: '' })
+    selectedPieza.value.imagen = ''
+    const local = piezas.value.find((pieza: any) => pieza.id === selectedPieza.value.id)
+    if (local) local.imagen = ''
+    if (isOnline()) await pushLocalRowToCloud('piezas', selectedPieza.value.id)
+  }
+}
+
+function imagenUrl(uid: string | null | undefined): string | null {
+  return uid ? getImageUrl(uid) : null
 }
 
 async function guardarNuevoProveedor() {
@@ -316,6 +374,13 @@ onMounted(async () => {
         dataKey="id"
         responsiveLayout="scroll"
       >
+        <Column header="Imagen" style="width: 4rem">
+          <template #body="{ data }">
+            <div v-if="imagenUrl(data.imagen)" class="w-8 h-8 rounded overflow-hidden">
+              <img :src="imagenUrl(data.imagen)" class="w-full h-full object-cover" alt="" />
+            </div>
+          </template>
+        </Column>
         <Column header="Acciones" style="width: 8rem">
           <template #body="{ data }">
             <div class="flex gap-1">
@@ -350,6 +415,9 @@ onMounted(async () => {
             class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-3 transition-shadow hover:shadow-md hover:border-primary-300 dark:hover:border-primary-600 cursor-pointer"
             @click="abrirEditar(pieza)"
           >
+            <div v-if="imagenUrl(pieza.imagen)" class="-mx-4 -mt-4 h-36 overflow-hidden rounded-t-xl">
+              <img :src="imagenUrl(pieza.imagen)" class="w-full h-full object-cover" :alt="`Imagen de ${pieza.nombre}`" />
+            </div>
             <div class="flex items-center justify-between">
               <span class="text-xs font-mono text-surface-400">#{{ pieza.id }}</span>
               <span
@@ -425,6 +493,17 @@ onMounted(async () => {
         <div class="flex flex-col gap-1 sm:col-span-2">
           <label class="font-semibold text-sm">Descripcion</label>
           <Textarea v-model="form.descripcion" rows="3" placeholder="Descripcion" />
+        </div>
+        <div class="flex flex-col gap-2 sm:col-span-2">
+          <label class="font-semibold text-sm">Imagen</label>
+          <div v-if="form.imagen" class="relative w-32 h-32 rounded-lg overflow-hidden border border-surface-200 dark:border-surface-700">
+            <img :src="imagenUrl(form.imagen)" class="w-full h-full object-cover" alt="Imagen de la pieza" />
+            <Button icon="pi pi-times" severity="danger" text rounded size="small" class="absolute top-1 right-1 !w-6 !h-6 !text-xs bg-white/80 dark:bg-surface-800/80" @click="eliminarImagen" />
+          </div>
+          <div class="flex gap-2">
+            <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="subirImagen" />
+            <Button :label="(form.imagen ? 'Cambiar ' : 'Subir ') + 'Imagen'" icon="pi pi-upload" severity="secondary" outlined :loading="subiendoImagen" @click="fileInput?.click()" />
+          </div>
         </div>
       </div>
 

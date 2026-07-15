@@ -31,11 +31,27 @@ const form = ref({
 })
 
 function decodeBase64(str: string): string {
-  try { return atob(str) } catch { return str }
+  let valor = str.trim()
+  try {
+    for (let intento = 0; intento < 5; intento++) {
+      const base64 = valor.startsWith('b64:') ? valor.slice(4) : valor
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) break
+      const padded = base64.padEnd(base64.length + ((4 - base64.length % 4) % 4), '=')
+      const decoded = atob(padded)
+      if (!base64.includes('=') && !decoded.startsWith('b64:') && !/^[A-Za-z0-9+/]+={1,2}$/.test(decoded)) break
+      valor = decoded
+    }
+  } catch (_) {}
+  return valor
 }
 
 function encodeBase64(str: string): string {
-  try { return btoa(str) } catch { return str }
+  try { return `b64:${btoa(str)}` } catch { return str }
+}
+
+// Permite pegar una clave antigua que ya esta en Base64 sin codificarla dos veces.
+function normalizarPasswordParaGuardar(str: string): string {
+  return decodeBase64(str)
 }
 
 async function cargarConfig() {
@@ -72,7 +88,7 @@ async function guardar() {
     const data = {
       activo: form.value.activo ? 1 : 0,
       email: form.value.email.trim().toLowerCase(),
-      password: form.value.password ? encodeBase64(form.value.password.trim()) : '',
+      password: form.value.password ? encodeBase64(normalizarPasswordParaGuardar(form.value.password)) : '',
     }
 
     let res
@@ -182,13 +198,8 @@ onMounted(cargarConfig)
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Contrasena</label>
-            <div v-if="otpVerificado" class="flex gap-2">
-              <Password v-model="form.password" placeholder="Contrasena" toggleMask :feedback="false" fluid class="flex-1" />
-              <Button icon="pi pi-lock-open" severity="secondary" text @click="otpVerificado = false; form.password = ''" v-tooltip="'Ocultar'" />
-            </div>
-            <div v-else>
-              <Button label="Verificar para ver contrasena" icon="pi pi-shield" severity="warning" size="small" @click="solicitarOtp" :loading="otpEnviando" />
-            </div>
+            <Password v-model="form.password" placeholder="Contrasena de aplicacion SMTP" toggleMask :feedback="false" fluid />
+            <small class="text-xs text-surface-400">Para Gmail usa una contrasena de aplicacion.</small>
           </div>
         </div>
 

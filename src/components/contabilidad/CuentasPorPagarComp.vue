@@ -12,10 +12,12 @@ import Fieldset from 'primevue/fieldset'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import Swal from 'sweetalert2'
 
 const toast = useToast()
 const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
 const cuentas = ref<any[]>([])
+const proveedores = ref<any[]>([])
 const loading = ref(false)
 const busqueda = ref('')
 const filtroEstado = ref('')
@@ -25,10 +27,12 @@ const dialogPago = ref(false)
 const cuentaSelected = ref<any>(null)
 const montoPago = ref(0)
 const guardando = ref(false)
+const generandoPdf = ref(false)
 
 const dialogNueva = ref(false)
 const guardandoNueva = ref(false)
 const nuevaForm = ref({
+  proveedor_id: null as number | null,
   nombre_proveedor: '',
   telefono_proveedor: '',
   no_factura: '',
@@ -70,6 +74,52 @@ function formatFecha(fechaStr: string): string {
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
 }
 
+function escaparHtml(valor: any): string {
+  return String(valor ?? '').replace(/[&<>"']/g, caracter => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[caracter] || caracter))
+}
+
+async function generarPdfCuentaPagar(cuenta: any) {
+  if (!cuenta) return
+  generandoPdf.value = true
+  try {
+    let empresa: any = {}
+    try {
+      const res = await window.db.getAll('empresa')
+      if (res.success && res.data?.length) empresa = res.data[0]
+    } catch {}
+    const pagos = (() => {
+      try {
+        const datos = JSON.parse(cuenta.pagos || '[]')
+        return Array.isArray(datos) ? datos : []
+      } catch { return [] }
+    })()
+    const moneda = (valor: any) => `RD$ ${formatCurrency(Number(valor || 0))}`
+    const abonosHtml = pagos.length
+      ? pagos.map((pago: any, indice: number) => `<tr><td>${escaparHtml(pago.nopago || indice + 1)}</td><td>${escaparHtml(`${pago.fecha || ''} ${pago.hora || ''}`)}</td><td>${moneda(pago.cantidad)}</td></tr>`).join('')
+      : '<tr><td colspan="3" class="empty">Sin abonos registrados.</td></tr>'
+    const fecha = new Date().toLocaleString('es-DO')
+    const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><style>@page{size:letter;margin:12mm}body{font-family:Arial,sans-serif;color:#1f2937;font-size:12px}.page{max-width:700px;margin:auto}.header{text-align:center;border-bottom:2px solid #b45309;padding-bottom:12px}.header h1{margin:0;color:#b45309;font-size:22px}.header p{margin:4px 0;color:#6b7280}.title{margin:18px 0;background:#b45309;color:#fff;padding:10px;text-align:center;font-size:16px;font-weight:bold}.box{border:1px solid #d1d5db;border-radius:8px;padding:11px;margin:12px 0}.row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.total{font-size:17px}.green{color:#15803d}.red{color:#dc2626}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{padding:7px;border-bottom:1px solid #e5e7eb;text-align:left}th{background:#f3f4f6}.empty{text-align:center;color:#6b7280}.footer{text-align:center;color:#9ca3af;margin-top:20px;font-size:10px}</style></head><body><div class="page"><div class="header"><h1>${escaparHtml(empresa.nombre || 'MI EMPRESA')}</h1><p>${escaparHtml(empresa.telefono || '')} ${empresa.email ? `| ${escaparHtml(empresa.email)}` : ''}</p></div><div class="title">ESTADO DE CUENTA POR PAGAR</div><div class="box"><p><b>Proveedor:</b> ${escaparHtml(cuenta.nombre_proveedor || 'Sin registro')}</p><p><b>Teléfono:</b> ${escaparHtml(cuenta.telefono_proveedor || 'N/A')}</p><p><b>Factura:</b> ${escaparHtml(cuenta.no_factura || 'N/A')}</p><p><b>Fecha de compra:</b> ${escaparHtml(formatFecha(cuenta.fecha_compra) || 'N/A')}</p><p><b>Vencimiento:</b> ${escaparHtml(formatFecha(cuenta.fecha_vencimiento) || 'N/A')}</p></div><div class="box"><div class="row total"><span>Total</span><b>${moneda(cuenta.total)}</b></div><div class="row total"><span>Abonado</span><b class="green">${moneda(cuenta.abonado)}</b></div><div class="row total"><span>Saldo pendiente</span><b class="red">${moneda(cuenta.saldo)}</b></div></div><h3>Abonos realizados</h3><table><thead><tr><th>#</th><th>Fecha y hora</th><th>Monto</th></tr></thead><tbody>${abonosHtml}</tbody></table><div class="footer">Generado el ${escaparHtml(fecha)} | TM POS</div></div></body></html>`
+    const archivo = `Cuenta_por_Pagar_${String(cuenta.no_factura || cuenta.id).replace(/[^a-z0-9]+/gi, '_')}.pdf`
+    const resultado = await window.electron.invoke('generate:pdf', html, archivo) as { success: boolean; dataUrl?: string; error?: string }
+    if (!resultado.success || !resultado.dataUrl) throw new Error(resultado.error || 'No se pudo generar el PDF')
+    const blob = await (await fetch(resultado.dataUrl)).blob()
+    const url = URL.createObjectURL(blob)
+    const decision = await Swal.fire({ title: 'Estado de cuenta por pagar', html: `<iframe src="${url}" style="width:100%;height:75vh;border:0;background:#fff"></iframe>`, width: '90vw', showCancelButton: true, confirmButtonText: 'Descargar PDF', cancelButtonText: 'Cerrar' })
+    if (decision.isConfirmed) {
+      const bytes = new Uint8Array(await blob.arrayBuffer())
+      let binario = ''
+      for (let i = 0; i < bytes.length; i += 0x8000) binario += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+      const guardado = await window.electron.invoke('save:pdf', `data:application/pdf;base64,${btoa(binario)}`, archivo) as { success: boolean; error?: string }
+      if (!guardado.success) throw new Error(guardado.error || 'No se pudo guardar el PDF')
+    }
+    URL.revokeObjectURL(url)
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error.message || 'No se pudo generar el PDF', life: 3500 })
+  } finally {
+    generandoPdf.value = false
+  }
+}
+
 function getEstadoSeverity(estado: string): 'success' | 'danger' | 'warn' | 'info' | undefined {
   switch (estado) {
     case 'ACTIVA': return 'warn'
@@ -86,6 +136,20 @@ async function cargarCuentas() {
     if (res.success) cuentas.value = filterByAlmacen(res.data || [])
   } catch (_) {}
   loading.value = false
+}
+
+async function cargarProveedores() {
+  try {
+    const res = await window.db.getAll('proveedores')
+    if (res.success) proveedores.value = filterByAlmacen(res.data || [])
+  } catch (_) {}
+}
+
+function seleccionarProveedor() {
+  const proveedor = proveedores.value.find((item: any) => Number(item.id) === Number(nuevaForm.value.proveedor_id))
+  if (!proveedor) return
+  nuevaForm.value.nombre_proveedor = proveedor.nombre || ''
+  nuevaForm.value.telefono_proveedor = proveedor.telefono || ''
 }
 
 function abrirPago(cuenta: any) {
@@ -190,6 +254,7 @@ async function cambiarEstado(cuenta: any, estado: string) {
 
 function abrirNueva() {
   nuevaForm.value = {
+    proveedor_id: null,
     nombre_proveedor: '',
     telefono_proveedor: '',
     no_factura: '',
@@ -216,6 +281,7 @@ async function guardarNueva() {
   try {
     const total = Number(nuevaForm.value.total)
     await window.db.insert('cuentas_pagar', addAlmacenId({
+      cod_proveedor: nuevaForm.value.proveedor_id ? String(nuevaForm.value.proveedor_id) : '',
       nombre_proveedor: nuevaForm.value.nombre_proveedor.trim().toUpperCase(),
       telefono_proveedor: nuevaForm.value.telefono_proveedor.trim(),
       no_factura: nuevaForm.value.no_factura.trim().toUpperCase(),
@@ -235,7 +301,9 @@ async function guardarNueva() {
   }
 }
 
-onMounted(cargarCuentas)
+onMounted(async () => {
+  await Promise.all([cargarCuentas(), cargarProveedores()])
+})
 </script>
 
 <template>
@@ -425,12 +493,27 @@ onMounted(cargarCuentas)
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogPago = false" />
+        <Button label="PDF" icon="pi pi-file-pdf" severity="danger" outlined :loading="generandoPdf" @click="generarPdfCuentaPagar(cuentaSelected)" />
         <Button v-if="cuentaSelected?.saldo > 0" label="Registrar Pago" icon="pi pi-check" :loading="guardando" :disabled="montoPago <= 0" @click="registrarPago" />
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="dialogNueva" header="Nueva Cuenta por Pagar" modal :style="{ width: '90%', maxWidth: '500px' }">
+    <Dialog v-model:visible="dialogNueva" header="Nueva Cuenta por Pagar" modal :style="{ width: 'min(26rem, 95vw)' }">
       <div class="space-y-4 pt-2">
+        <div class="flex flex-col gap-1">
+          <label class="text-sm font-semibold">Seleccionar proveedor</label>
+          <Select
+            v-model="nuevaForm.proveedor_id"
+            :options="proveedores"
+            optionLabel="nombre"
+            optionValue="id"
+            filter
+            showClear
+            placeholder="Elegir proveedor registrado..."
+            fluid
+            @change="seleccionarProveedor"
+          />
+        </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm font-semibold">Proveedor <span class="text-red-500">*</span></label>
           <InputText v-model="nuevaForm.nombre_proveedor" placeholder="Nombre del proveedor" fluid class="uppercase" style="text-transform: uppercase" />

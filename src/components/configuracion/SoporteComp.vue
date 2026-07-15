@@ -396,10 +396,12 @@ function valorFicticio(colName: string, colType: string, tipoGeneracion: string)
 
 async function resetearID() {
   if (!utilTablaReset.value) return
+  if (!window.confirm(`Se conservaran todos los registros de ${utilTablaReset.value}; solo se renumeraran sus IDs desde 1. Deseas continuar?`)) return
   utilCargando.value = true
   try {
-    await window.electron.invoke('consultaservidor', 'rawQuery', `DELETE FROM sqlite_sequence WHERE name='${utilTablaReset.value}'`)
-    toast.add({ severity: 'success', summary: 'ID reseteado', detail: `El contador de ${utilTablaReset.value} se ha reseteado`, life: 3000 })
+    const res = await window.electron.invoke('consultaservidor', 'resetTableIds', utilTablaReset.value)
+    if (!res?.success) throw new Error(res?.error || 'No se pudo resetear la tabla')
+    toast.add({ severity: 'success', summary: 'IDs renumerados', detail: `${res.renumbered || 0} registros conservados. El proximo ID sera ${Number(res.renumbered || 0) + 1}.`, life: 3500 })
   } catch (e: any) { toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 4000 }) }
   finally { utilCargando.value = false }
 }
@@ -615,7 +617,7 @@ onMounted(async () => { await cargarTablas() })
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl">
             <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-4 space-y-3">
               <h4 class="font-semibold text-sm flex items-center gap-2"><i class="pi pi-sync text-blue-500"></i> Resetear ID de tabla</h4>
-              <p class="text-xs text-surface-400">Limpia el contador auto-increment de una tabla.</p>
+              <p class="text-xs text-surface-400">Conserva los datos y renumera los IDs consecutivamente desde 1.</p>
               <div class="flex gap-2">
                 <Select v-model="utilTablaReset" :options="tablas" placeholder="Seleccionar tabla" class="flex-1" fluid />
                 <Button label="Resetear" severity="warn" :disabled="!utilTablaReset" @click="resetearID" :loading="utilCargando" />
