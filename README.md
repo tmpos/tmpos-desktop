@@ -1,17 +1,15 @@
 # TMPOS Desktop
 
-![Version](https://img.shields.io/badge/version-2.12.3-blue)
-![Downloads](https://img.shields.io/github/downloads/tmpos/tmpos-desktop/v2.12.3/total)
+![Version](https://img.shields.io/badge/version-2.12.4-blue)
+![Downloads](https://img.shields.io/github/downloads/tmpos/tmpos-desktop/v2.12.4/total)
 
 Sistema para tiendas de celulares offline con tmcloud
 
-## Novedades v2.12.3
+## Novedades v2.12.4
 
-- Proveedores: imágenes, consulta de deuda, abonos, historial y estado de cuenta PDF.
-- Cuentas por pagar: selección de proveedores registrados y PDF con detalle de pagos.
-- Taller: imágenes para piezas con sincronización inmediata a TM Cloud.
-- Configuración y datos: correcciones de correo, esquema e identificación de empresa.
+- Corrección de empaquetado: el ejecutable de Windows usa el ícono oficial de TMPOS en lugar del ícono genérico de Electron.
+- Incluye todas las novedades de proveedores, cuentas por pagar y piezas de la versión anterior.
 
 ## Descarga
 
-[![Descargar v2.12.3](https://img.shields.io/badge/Descargar-v2.12.3-brightgreen?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-desktop/releases/download/v2.12.3/TMPOS.Setup.2.12.3.exe)
+[![Descargar v2.12.4](https://img.shields.io/badge/Descargar-v2.12.4-brightgreen?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-desktop/releases/download/v2.12.4/TMPOS.Setup.2.12.4.exe)

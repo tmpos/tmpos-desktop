@@ -11,8 +11,7 @@
   "win": {
     "target": "nsis",
     "icon": "build/icon.ico",
-    "artifactName": "${productName}.Setup.${version}.${ext}",
-    "signAndEditExecutable": false
+    "artifactName": "${productName}.Setup.${version}.${ext}"
   },
   "nsis": {
     "oneClick": false,
