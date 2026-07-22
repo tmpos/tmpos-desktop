@@ -641,6 +641,7 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'moneda', type: 'TEXT' },
     { name: 'tipo_documento_defecto', type: 'TEXT' },
     { name: 'almacen_id', type: 'INTEGER' },
+    { name: 'almacen_uid', type: 'TEXT' },
     { name: 'created_at', type: 'DATETIME' },
     { name: 'updated_at', type: 'DATETIME' },
   ],
@@ -749,6 +750,8 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'uid', type: 'TEXT' },
     { name: 'nombre', type: 'TEXT' },
     { name: 'id_equi', type: 'INTEGER' },
+    { name: 'equipo_uid', type: 'TEXT' },
+    { name: 'equipo', type: 'TEXT' },
     { name: 'costo', type: 'REAL' },
     { name: 'precio_venta', type: 'REAL' },
     { name: 'precio_min', type: 'REAL' },
@@ -883,6 +886,25 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'fecha', type: 'TEXT' },
     { name: 'hora', type: 'TEXT' },
     { name: 'comentario', type: 'TEXT' },
+    { name: 'metodo_pago', type: 'TEXT' },
+    { name: 'banco_id', type: 'INTEGER' },
+    { name: 'banco_uid', type: 'TEXT' },
+    { name: 'banco_nombre', type: 'TEXT' },
+    { name: 'turno_id', type: 'INTEGER' },
+    { name: 'almacen_id', type: 'INTEGER' },
+    { name: 'almacen_uid', type: 'TEXT' },
+    { name: 'created_at', type: 'DATETIME' },
+    { name: 'updated_at', type: 'DATETIME' },
+  ],
+  bancos: [
+    { name: 'uid', type: 'TEXT' },
+    { name: 'nombre', type: 'TEXT' },
+    { name: 'numero_cuenta', type: 'TEXT' },
+    { name: 'moneda', type: 'TEXT' },
+    { name: 'saldo', type: 'REAL' },
+    { name: 'fecha_transaccion', type: 'TEXT' },
+    { name: 'almacen_id', type: 'INTEGER' },
+    { name: 'almacen_uid', type: 'TEXT' },
     { name: 'created_at', type: 'DATETIME' },
     { name: 'updated_at', type: 'DATETIME' },
   ],
@@ -1013,7 +1035,12 @@ async function createTables() {
   const base = form.url.replace(/\/+$/, '')
   const key = form.serviceKey
   const tableNames = Object.keys(TABLE_SCHEMAS)
-  const batch = tableNames.map(name => ({ name, columns: TABLE_SCHEMAS[name] }))
+  const batch = tableNames.map(name => ({
+    name,
+    columns: TABLE_SCHEMAS[name].some(column => column.name === 'almacen_uid')
+      ? TABLE_SCHEMAS[name]
+      : [...TABLE_SCHEMAS[name], { name: 'almacen_uid', type: 'TEXT' }],
+  }))
 
   try {
     const res = await fetch(`${base}/schema/tables/batch`, {
@@ -1059,7 +1086,8 @@ async function createLocalTablesFromServer() {
       if (!hasUid) extraCols.push('"uid" TEXT DEFAULT \'\'')
       if (!hasCreatedAt) extraCols.push('"created_at" TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
       if (!hasUpdatedAt) extraCols.push('"updated_at" TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
-      extraCols.push('"almacen_id" INTEGER DEFAULT 0')
+      if (!cols.some((c: any) => c.name === 'almacen_id')) extraCols.push('"almacen_id" INTEGER DEFAULT 0')
+      if (!cols.some((c: any) => c.name === 'almacen_uid')) extraCols.push('"almacen_uid" TEXT DEFAULT \'\'')
       const columnDefs = cols.map((c: any) => {
         let type = 'TEXT DEFAULT \'\''
         if (c.type?.toLowerCase().includes('int')) type = 'INTEGER DEFAULT 0'

@@ -1,6 +1,6 @@
 {
   "name": "TMPOS",
-  "version": "2.12.7",
+  "version": "2.12.8",
   "description": "TMPOS Desktop App",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -13,8 +13,8 @@
     "preview": "vite preview",
     "cap:sync": "npx cap sync",
     "cap:android": "npx cap open android",
-    "cap:build": "vite build && npx cap sync",
-    "cap:dev": "vite build && npx cap sync && npx cap run android"
+    "cap:build": "vite build --mode android && npx cap sync",
+    "cap:dev": "vite build --mode android && npx cap sync && npx cap run android"
   },
   "keywords": [],
   "author": "",

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -11,6 +11,7 @@ import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import InputOtp from 'primevue/inputotp'
 import Select from 'primevue/select'
+import ToggleSwitch from 'primevue/toggleswitch'
 import Calendar from 'primevue/calendar'
 import Fieldset from 'primevue/fieldset'
 import Menu from 'primevue/menu'
@@ -22,10 +23,15 @@ import JsBarcode from 'jsbarcode'
 import QRCode from 'qrcode'
 import TicketFacturaPrint from '@/components/ventas/TicketFacturaPrint.vue'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useAlmacenStore } from '@/stores/almacen.store'
+import { useAuthStore } from '@/stores/auth.store'
 import { getImageUrl } from '@/services/tmCloudClient'
 
 const toast = useToast()
 const router = useRouter()
+const route = useRoute()
+const almacenStore = useAlmacenStore()
+const auth = useAuthStore()
 const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
 const imeis = ref<any[]>([])
 const telefonos = ref<any[]>([])
@@ -45,8 +51,10 @@ const selectedImei = ref<any>(null)
 const selectedImeis = ref<any[]>([])
 const imeiActionMenu = ref()
 const imeiAccion = ref<any>(null)
-const busqueda = ref('')
-const estadoFiltro = ref('DISPONIBLE')
+const busqueda = ref(String(route.query.search || ''))
+const estadoFiltro = ref(route.query.estado === 'todos' ? '' : 'DISPONIBLE')
+const verTodosAlmacenes = ref(false)
+const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const dialogAccionVenta = ref(false)
 const dialogClienteExpress = ref(false)
 const dialogNuevoClienteExpress = ref(false)
@@ -173,6 +181,14 @@ const formDefault = () => ({
 
 const imeiDuplicado = ref(false)
 
+const telefonosAlmacenActual = computed(() => {
+  const almacenUid = String(almacenStore.activeUid || '')
+  if (!almacenUid) return []
+  return telefonos.value
+    .filter((telefono: any) => String(telefono.almacen_uid || '') === almacenUid)
+    .sort((a: any, b: any) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'))
+})
+
 watch(() => form.value.nombre, async (val) => {
   if (!val || val.length < 10) { imeiDuplicado.value = false; return }
   try {
@@ -249,6 +265,7 @@ async function crearProveedorImei() {
 async function cargarImeis() {
   loading.value = true
   try {
+    await almacenStore.load()
     const [resImei, resTel, resProv, resClientes] = await Promise.all([
       window.db.getAll('imei'),
       window.db.getAll('telefonos'),
@@ -262,10 +279,15 @@ async function cargarImeis() {
     if (resImei.success) {
       const telMap = new Map((resTel.data || []).map((t: any) => [t.id, t]))
       const telUidMap = new Map((resTel.data || []).map((t: any) => [t.uid, t]))
-      imeis.value = filterByAlmacen(resImei.data || []).map((i: any) => ({
+      const almacenMap = new Map(almacenStore.almacenes.map((item: any) => [Number(item.id), item.nombre]))
+      const lista = puedeVerTodosAlmacenes.value && verTodosAlmacenes.value
+        ? (resImei.data || [])
+        : filterByAlmacen(resImei.data || [])
+      imeis.value = lista.map((i: any) => ({
         ...i,
         telefono_nombre: telMap.get(i.id_equi)?.nombre || telUidMap.get(i.telefono_uid)?.nombre || '',
         telefono_imagen: telMap.get(i.id_equi)?.imagen || telUidMap.get(i.telefono_uid)?.imagen || '',
+    almacen_nombre: almacenStore.almacenes.find((almacen: any) => String(almacen.uid) === String(i.almacen_uid))?.nombre || almacenMap.get(Number(i.almacen_id)) || 'Sin empresa asignada',
       }))
     }
   } catch (error) {
@@ -274,6 +296,11 @@ async function cargarImeis() {
     loading.value = false
   }
 }
+
+watch(verTodosAlmacenes, () => {
+  selectedImeis.value = []
+  cargarImeis()
+})
 
 function abrirAccionVenta(imei: any) {
   abrirAccionVentaLista([imei])
@@ -641,6 +668,19 @@ const nuevaCapacidadMultiple = ref('')
 const dialogCambioAlmacenMultiple = ref(false)
 const almacenesLista = ref<any[]>([])
 const almacenDestinoMultiple = ref<any>(null)
+const equipoDestinoAlmacen = ref<any>(null)
+
+const equiposAlmacenDestino = computed(() => {
+  const destinoUid = String(almacenDestinoMultiple.value?.uid || '')
+  if (!destinoUid) return []
+  return telefonos.value
+    .filter((telefono: any) => String(telefono.almacen_uid || '') === destinoUid)
+    .sort((a: any, b: any) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'))
+})
+
+function cambiarAlmacenDestinoSeleccionado() {
+  equipoDestinoAlmacen.value = null
+}
 
 function abrirCambiarEstadoMultiple() {
   nuevoEstadoMultiple.value = 'DISPONIBLE'
@@ -665,11 +705,17 @@ const proveedoresFiltrados = computed(() => {
 
 const equiposFiltradosMultiple = computed(() => {
   const texto = busquedaEquipoMultiple.value.toLowerCase().trim()
-  if (!texto) return telefonos.value
-  return telefonos.value.filter((t: any) => t.nombre?.toLowerCase().includes(texto))
+  const almacenUid = String(almacenStore.activeUid || '')
+  if (!almacenUid) return []
+  const telefonosAlmacenActual = telefonos.value
+    .filter((telefono: any) => String(telefono.almacen_uid || '') === almacenUid)
+    .sort((a: any, b: any) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'))
+  if (!texto) return telefonosAlmacenActual
+  return telefonosAlmacenActual.filter((t: any) => t.nombre?.toLowerCase().includes(texto))
 })
 
-function abrirCambiarEquipoMultiple() {
+async function abrirCambiarEquipoMultiple() {
+  await Promise.all([almacenStore.load(), cargarTelefonos()])
   busquedaEquipoMultiple.value = ''
   equipoSeleccionadoMultiple.value = null
   dialogCambioEquipoMultiple.value = true
@@ -677,8 +723,21 @@ function abrirCambiarEquipoMultiple() {
 
 async function aplicarCambioEquipoMultiple() {
   if (!equipoSeleccionadoMultiple.value) return
+  const equipoDestino = equipoSeleccionadoMultiple.value
+  const almacenUid = String(equipoDestino.almacen_uid || almacenStore.activeUid || '')
+  const almacenId = Number(equipoDestino.almacen_id || almacenStore.activeId || 0)
+  if (!almacenUid || String(equipoDestino.uid || '') === '') {
+    toast.add({ severity: 'warn', summary: 'Datos incompletos', detail: 'El teléfono destino debe tener UID de equipo y UID de almacén', life: 3000 })
+    return
+  }
   for (const imei of selectedImeis.value) {
-    await window.db.update('imei', imei.id, { id_equi: equipoSeleccionadoMultiple.value.id, telefono_uid: equipoSeleccionadoMultiple.value.uid || '', equipo: equipoSeleccionadoMultiple.value.nombre || '' })
+    await window.db.update('imei', imei.id, {
+      id_equi: equipoDestino.id,
+      telefono_uid: equipoDestino.uid,
+      equipo: equipoDestino.nombre || '',
+      almacen_id: almacenId,
+      almacen_uid: almacenUid,
+    })
   }
   dialogCambioEquipoMultiple.value = false
   selectedImeis.value = []
@@ -708,25 +767,37 @@ function abrirCambiarCapacidadMultiple() {
 }
 
 async function abrirCambiarAlmacenMultiple() {
-  const res = await (window as any).electron.invoke('db:getAll', 'almacenes')
-  if (res.success && res.data) almacenesLista.value = res.data
+  await Promise.all([almacenStore.load(), cargarTelefonos()])
+  const almacenesOrigenUid = new Set(selectedImeis.value.map((imei: any) => String(imei.almacen_uid || almacenStore.activeUid || '')))
+  almacenesLista.value = almacenStore.almacenes.filter((almacen: any) => !almacenesOrigenUid.has(String(almacen.uid || '')))
   almacenDestinoMultiple.value = null
+  equipoDestinoAlmacen.value = null
   dialogCambioAlmacenMultiple.value = true
 }
 
 async function cambiarAlmacenMultiple() {
-  if (!almacenDestinoMultiple.value || selectedImeis.value.length === 0) return
+  if (!almacenDestinoMultiple.value || !equipoDestinoAlmacen.value || selectedImeis.value.length === 0) return
   const destinoId = almacenDestinoMultiple.value.id || almacenDestinoMultiple.value
+  const destinoUid = String(almacenDestinoMultiple.value.uid || '')
+  const equipoDestino = equipoDestinoAlmacen.value
+  const cantidad = selectedImeis.value.length
   try {
     for (const imei of selectedImeis.value) {
-      await (window as any).electron.invoke('db:update', 'imei', imei.id, { almacen_id: Number(destinoId) })
+      const res = await window.db.update('imei', imei.id, {
+        almacen_id: Number(destinoId),
+        almacen_uid: destinoUid,
+        id_equi: Number(equipoDestino.id),
+        telefono_uid: equipoDestino.uid || '',
+        equipo: equipoDestino.nombre || '',
+      })
+      if (!res.success) throw new Error(res.error || `No se pudo mover el IMEI ${imei.nombre || imei.id}`)
     }
     dialogCambioAlmacenMultiple.value = false
     selectedImeis.value = []
-    toast.add({ severity: 'success', summary: 'Almacen cambiado', detail: 'IMEIs movidos al almacen seleccionado', life: 3000 })
+    toast.add({ severity: 'success', summary: 'Almacen y equipo actualizados', detail: `${cantidad} IMEI(s) asignados a ${equipoDestino.nombre}`, life: 3000 })
     await cargarImeis()
   } catch (e: any) {
-    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al cambiar almacen', life: 4000 })
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al cambiar almacen y equipo', life: 4000 })
   }
 }
 
@@ -781,7 +852,7 @@ async function solicitarOtpEliminarImei() {
       entidadPlural: 'IMEI',
     }) as any
     if (res.success) {
-      deleteOtpEmail.value = res.data?.email || ''
+    deleteOtpEmail.value = res.data?.networkUrl || ''
       deleteOtpEnviado.value = true
       toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
     } else {
@@ -1133,6 +1204,7 @@ onMounted(async () => {
     }
   } catch (_) {}
 
+  await almacenStore.load()
   await cargarTelefonos()
   await cargarImeis()
 })
@@ -1157,6 +1229,10 @@ onMounted(async () => {
             class="w-44"
             placeholder="Estado"
           />
+          <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            <span class="text-xs font-medium whitespace-nowrap">Ver todos los almacenes</span>
+          </label>
         </div>
         <div class="flex items-center gap-2">
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
@@ -1233,6 +1309,7 @@ onMounted(async () => {
             <span v-else class="text-surface-400">-</span>
           </template>
         </Column>
+        <Column v-if="verTodosAlmacenes && puedeVerTodosAlmacenes" field="almacen_nombre" header="Almacén" sortable style="width: 10rem" />
         <Column field="color" header="Color" sortable style="width: 7rem" />
         <Column field="capacidad" header="Capacidad" sortable style="width: 7rem" />
         <Column field="precio_venta" header="Venta" sortable style="width: 7rem">
@@ -1279,6 +1356,9 @@ onMounted(async () => {
               </div>
               <h4 class="font-bold leading-tight truncate font-mono text-[11px]">IMEI: {{ imei.nombre }}</h4>
               <p v-if="imei.telefono_nombre" class="text-primary font-medium truncate text-[10px]">{{ imei.telefono_nombre }}</p>
+              <p v-if="verTodosAlmacenes && puedeVerTodosAlmacenes" class="text-amber-600 dark:text-amber-400 font-medium truncate text-[10px]">
+                <i class="pi pi-building mr-1"></i>{{ imei.almacen_nombre }}
+              </p>
               <p class="text-surface-400 truncate text-[10px]">{{ [imei.color, imei.capacidad].filter(Boolean).join(' - ') }}</p>
             </div>
             <div class="font-bold text-primary text-xs">${{ (imei.precio_venta || 0).toFixed(2) }}</div>
@@ -1425,7 +1505,7 @@ onMounted(async () => {
             <label class="font-semibold text-sm">Equipo</label>
             <Select
               v-model="form.id_equi"
-              :options="telefonos"
+              :options="telefonosAlmacenActual"
               optionLabel="nombre"
               optionValue="id"
               placeholder="Seleccionar"
@@ -1498,7 +1578,15 @@ onMounted(async () => {
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Proveedor</label>
             <div class="flex gap-2">
-              <Select v-model="form.proveedor" :options="proveedores.map(p => p.nombre)" placeholder="Seleccionar proveedor" class="flex-1" fluid />
+              <Select
+                v-model="form.proveedor"
+                :options="proveedores.map(p => p.nombre)"
+                placeholder="Seleccionar proveedor"
+                filter
+                filterPlaceholder="Buscar proveedor..."
+                class="flex-1"
+                fluid
+              />
               <Button icon="pi pi-plus" severity="info" text rounded size="small" @click="dialogNuevoProveedor = true" v-tooltip="'Nuevo proveedor'" />
             </div>
           </div>
@@ -1556,7 +1644,7 @@ onMounted(async () => {
           <span v-else>Seguro que deseas eliminar <strong>{{ imeisParaEliminar[0]?.nombre }}</strong>?</span>
         </div>
         <div v-if="deleteOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
-          <p class="text-xs text-surface-500 text-center">Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la empresa' }}.</p>
+      <p class="text-xs text-surface-500 text-center">Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.</p>
           <InputOtp v-model="deleteOtp" :length="4" integerOnly />
         </div>
         <p v-if="deleteOtpError" class="text-red-500 text-xs text-center">{{ deleteOtpError }}</p>
@@ -1596,9 +1684,9 @@ onMounted(async () => {
         <div class="flex flex-col gap-1 max-h-60 overflow-y-auto border border-surface-200 dark:border-surface-700 rounded-lg p-1">
           <div
             v-for="tel in equiposFiltradosMultiple"
-            :key="tel.id"
+            :key="tel.uid || tel.id"
             class="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors text-sm"
-            :class="equipoSeleccionadoMultiple?.id === tel.id
+            :class="equipoSeleccionadoMultiple?.uid === tel.uid
               ? 'bg-primary text-primary-contrast'
               : 'hover:bg-surface-100 dark:hover:bg-surface-700'"
             @click="equipoSeleccionadoMultiple = tel"
@@ -1680,23 +1768,48 @@ onMounted(async () => {
 
     <Dialog
       v-model:visible="dialogCambioAlmacenMultiple"
-      header="Cambiar Almacen"
+      header="Cambiar Almacen y Equipo"
       modal
-      :style="{ width: '24rem' }"
+      :style="{ width: '30rem' }"
     >
       <div class="space-y-4 pt-2">
-        <p class="text-sm">Mover <strong>{{ selectedImeis.length }}</strong> IMEI(s) al almacen:</p>
-        <Select
-          v-model="almacenDestinoMultiple"
-          :options="almacenesLista"
-          optionLabel="nombre"
-          placeholder="Seleccionar almacen"
-          fluid
-        />
+        <p class="text-sm">Mover <strong>{{ selectedImeis.length }}</strong> IMEI(s) a otro almacen y asignarlos a uno de sus equipos:</p>
+        <div class="space-y-1.5">
+          <label class="text-sm font-semibold">Almacen destino</label>
+          <Select
+            v-model="almacenDestinoMultiple"
+            :options="almacenesLista"
+            optionLabel="nombre"
+            placeholder="Seleccionar almacen"
+            fluid
+            @change="cambiarAlmacenDestinoSeleccionado"
+          />
+          <p v-if="almacenesLista.length === 0" class="text-xs text-amber-600 dark:text-amber-400">
+            No hay otro almacen disponible para realizar el traslado.
+          </p>
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-sm font-semibold">Equipo del almacen destino</label>
+          <Select
+            v-model="equipoDestinoAlmacen"
+            :options="equiposAlmacenDestino"
+            optionLabel="nombre"
+            placeholder="Seleccionar telefono"
+            :disabled="!almacenDestinoMultiple || equiposAlmacenDestino.length === 0"
+            filter
+            fluid
+          />
+          <p v-if="almacenDestinoMultiple && equiposAlmacenDestino.length === 0" class="text-xs text-amber-600 dark:text-amber-400">
+            Este almacen no tiene telefonos registrados. Crea primero el equipo en ese almacen.
+          </p>
+          <p v-else-if="equipoDestinoAlmacen" class="text-xs text-surface-500">
+            Los IMEI quedaran asignados a <strong>{{ equipoDestinoAlmacen.nombre }}</strong>.
+          </p>
+        </div>
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogCambioAlmacenMultiple = false" />
-        <Button label="Mover" icon="pi pi-warehouse" :disabled="!almacenDestinoMultiple" @click="cambiarAlmacenMultiple" />
+        <Button label="Mover y Asignar" icon="pi pi-warehouse" :disabled="!almacenDestinoMultiple || !equipoDestinoAlmacen" @click="cambiarAlmacenMultiple" />
       </template>
     </Dialog>
 

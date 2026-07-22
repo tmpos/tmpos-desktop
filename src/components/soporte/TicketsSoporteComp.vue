@@ -156,8 +156,10 @@ import InputText from 'primevue/inputtext'
 import Textarea from 'primevue/textarea'
 import Select from 'primevue/select'
 import { useToast } from 'primevue/usetoast'
+import { useAlmacenStore } from '@/stores/almacen.store'
 
 const toast = useToast()
+const almacenStore = useAlmacenStore()
 
 const tickets = ref<any[]>([])
 const comentarios = ref<any[]>([])
@@ -198,7 +200,7 @@ async function crearTicket() {
   guardando.value = true; error.value = ''
   try {
     const codigo = `TK-${Date.now().toString(36).toUpperCase()}`
-    const data = { ...form.value, codigo, estado: 'ABIERTO', usuario: '', almacen_id: 0 }
+    const data = { ...form.value, codigo, estado: 'ABIERTO', usuario: '', almacen_id: almacenStore.activeId || 0, almacen_uid: almacenStore.activeUid || '' }
     const res = await (window as any).electron.invoke('db:insert', 'tickets_soporte', data)
     if (!res.success) throw new Error(res.error)
     dialogTicket.value = false

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -9,6 +10,7 @@ import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
+import SelectButton from 'primevue/selectbutton'
 import Calendar from 'primevue/calendar'
 import Textarea from 'primevue/textarea'
 import Fieldset from 'primevue/fieldset'
@@ -19,9 +21,10 @@ import Toast from 'primevue/toast'
 import TicketApartadoPrint from './TicketApartadoPrint.vue'
 import ApartadoPdfPrint from './ApartadoPdfPrint.vue'
 
-import { envioElectron } from '@/funciones/funciones.js'
+import { envioElectron, peticionesFetch, encryptarPassword } from '@/funciones/funciones.js'
 
 const toast = useToast()
+const route = useRoute()
 const ticketApartadoRef = ref<any>(null)
 const apartadoPdfRef = ref<any>(null)
 const apartados = ref<any[]>([])
@@ -35,7 +38,7 @@ const dialogDetalle = ref(false)
 const deleteDialogVisible = ref(false)
 const selectedApartado = ref<any>(null)
 const selectedApartados = ref<any[]>([])
-const busqueda = ref('')
+const busqueda = ref(String(route.query.search || ''))
 const viewMode = ref<'table' | 'cards'>('table')
 
 const now = new Date()
@@ -63,7 +66,9 @@ const pagoForm = ref({
 })
 
 const dialogNuevoCliente = ref(false)
-const nuevoClienteForm = ref({ nombre: '', telefono: '' })
+const nuevoClienteForm = ref({ nombre: '', telefono: '', direccion: '', rnc: '' })
+const rncTipo = ref<'RNC' | 'CEDULA'>('RNC')
+const buscandoClienteApi = ref(false)
 const guardandoCliente = ref(false)
 
 const dialogNuevoTelefono = ref(false)
@@ -123,15 +128,30 @@ const saldoCalculado = computed(() => {
   return Math.max(0, (form.value.total || 0) - (form.value.inicial || 0))
 })
 
+function normalizarDocumento(valor: any): string {
+  return String(valor || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function getDocumentoCliente(apartado: any): string {
+  const cliente = clientes.value.find(c =>
+    String(c.id || c.codigo || '') === String(apartado.cod_cliente || '')
+  )
+  return cliente?.rnc || ''
+}
+
 const apartadosFiltrados = computed(() => {
   const texto = busqueda.value.toLowerCase().trim()
+  const textoNormalizado = normalizarDocumento(busqueda.value)
   if (!texto) return apartados.value
-  return apartados.value.filter(a =>
-    a.no_apartado?.toLowerCase().includes(texto) ||
-    a.nombre_cliente?.toLowerCase().includes(texto) ||
-    a.telefono_cliente?.toLowerCase().includes(texto) ||
-    a.imei_nombre?.toLowerCase().includes(texto)
-  )
+  return apartados.value.filter(a => {
+    const camposTexto = [a.no_apartado, a.no_factura, a.nombre_cliente, a.telefono_cliente, a.notas]
+    const coincideTexto = camposTexto.some(valor => String(valor || '').toLowerCase().includes(texto))
+    const camposNormalizados = [a.imei_nombre, a.imei, a.notas, getDocumentoCliente(a)]
+    const coincideDocumentoOImei = Boolean(textoNormalizado) && camposNormalizados.some(valor =>
+      normalizarDocumento(valor).includes(textoNormalizado)
+    )
+    return coincideTexto || coincideDocumentoOImei
+  })
 })
 
 async function cargarApartados() {
@@ -211,6 +231,49 @@ function seleccionarTelefono(telefono: any) {
   dialogNuevoTelefono.value = false
 }
 
+function abrirNuevoCliente() {
+  nuevoClienteForm.value = { nombre: '', telefono: '', direccion: '', rnc: '' }
+  rncTipo.value = 'RNC'
+  dialogNuevoCliente.value = true
+}
+
+async function buscarClienteApi() {
+  const valor = nuevoClienteForm.value.rnc.trim().replace(/-/g, '')
+  if (!valor) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Ingresa un RNC o cedula', life: 3000 })
+    return
+  }
+
+  nuevoClienteForm.value.rnc = valor
+  buscandoClienteApi.value = true
+  try {
+    const tokenCifrado = await encryptarPassword('1234567890abc', 10)
+    const resultado: any = rncTipo.value === 'CEDULA'
+      ? await peticionesFetch('https://demo.tmposrd.com/api2', 'buscarcedula', { cedula: valor }, tokenCifrado, 'POST')
+      : await peticionesFetch('https://demo.tmposrd.com/api2', `consultarrnc/${valor}`, {}, tokenCifrado, 'GET')
+
+    if (resultado?.error) {
+      toast.add({ severity: 'error', summary: 'Error', detail: resultado.error, life: 4000 })
+      return
+    }
+
+    let info = resultado?.datos || resultado?.data || resultado
+    if (Array.isArray(info)) info = info[0]
+    if (!info || (typeof info === 'object' && Object.keys(info).length === 0)) {
+      toast.add({ severity: 'info', summary: 'No encontrado', detail: 'No se encontraron datos para ese documento', life: 3000 })
+      return
+    }
+
+    nuevoClienteForm.value.nombre = String(info.name || info.nombre || info.razon_social || info.RazonSocial || '').toUpperCase()
+    nuevoClienteForm.value.direccion = String(info.direccion || info.Direccion || info.address || info.domicilio || '').toUpperCase()
+    toast.add({ severity: 'success', summary: 'Encontrado', detail: `Datos cargados: ${nuevoClienteForm.value.nombre}`, life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error.message || 'Error al consultar el documento', life: 4000 })
+  } finally {
+    buscandoClienteApi.value = false
+  }
+}
+
 async function crearCliente() {
   if (!nuevoClienteForm.value.nombre.trim()) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El nombre es requerido', life: 3000 })
@@ -222,11 +285,17 @@ async function crearCliente() {
       nombre: nuevoClienteForm.value.nombre.trim().toUpperCase(),
       telefono: nuevoClienteForm.value.telefono.trim(),
       email: '',
-      direccion: '',
-      rnc: '',
+      direccion: nuevoClienteForm.value.direccion.trim().toUpperCase(),
+      rnc: nuevoClienteForm.value.rnc.trim().replace(/-/g, ''),
     })
     if (res.success) {
-      const nuevo = { id: res.data.id, nombre: nuevoClienteForm.value.nombre.trim().toUpperCase(), telefono: nuevoClienteForm.value.telefono.trim() }
+      const nuevo = {
+        id: res.data.id,
+        nombre: nuevoClienteForm.value.nombre.trim().toUpperCase(),
+        telefono: nuevoClienteForm.value.telefono.trim(),
+        direccion: nuevoClienteForm.value.direccion.trim().toUpperCase(),
+        rnc: nuevoClienteForm.value.rnc.trim().replace(/-/g, ''),
+      }
       clientes.value.unshift(nuevo)
       seleccionarCliente(nuevo)
       toast.add({ severity: 'success', summary: 'Cliente creado', detail: nuevo.nombre, life: 3000 })
@@ -473,7 +542,7 @@ onMounted(async () => {
       <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <IconField>
           <InputIcon class="pi pi-search" />
-          <InputText v-model="busqueda" placeholder="Buscar apartado..." />
+          <InputText v-model="busqueda" placeholder="Buscar apartado, cliente, IMEI, cédula o RNC..." />
         </IconField>
 
         <div class="flex items-center gap-2">
@@ -582,7 +651,7 @@ onMounted(async () => {
       </div>
     </Fieldset>
 
-    <Dialog v-model:visible="dialogNuevo" header="Nuevo Apartado" modal :style="{ width: '90%', maxWidth: '650px' }">
+    <Dialog v-model:visible="dialogNuevo" header="Nuevo Apartado" modal :style="{ width: 'min(34rem, 94vw)' }">
       <TabView>
         <TabPanel header="Cliente">
           <div class="flex flex-col gap-3 pt-2">
@@ -596,10 +665,22 @@ onMounted(async () => {
                   optionValue="id"
                   placeholder="Seleccionar cliente"
                   filter
+                  :filterFields="['nombre', 'telefono', 'cedula', 'rnc']"
+                  filterPlaceholder="Buscar por nombre, cédula o RNC..."
                   class="flex-1"
                   @change="seleccionarCliente(clientes.find(c => c.id === $event.value))"
-                />
-                <Button icon="pi pi-plus" severity="secondary" @click="nuevoClienteForm = { nombre: '', telefono: '' }; dialogNuevoCliente = true" v-tooltip="'Nuevo cliente'" />
+                >
+                  <template #option="{ option }">
+                    <div class="flex flex-col">
+                      <span>{{ option.nombre }}</span>
+                      <small class="text-surface-500">
+                        {{ option.cedula || option.rnc || 'Sin cédula/RNC' }}
+                        <span v-if="option.telefono"> · {{ option.telefono }}</span>
+                      </small>
+                    </div>
+                  </template>
+                </Select>
+                <Button icon="pi pi-plus" severity="secondary" @click="abrirNuevoCliente" v-tooltip="'Nuevo cliente'" />
               </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
@@ -655,7 +736,7 @@ onMounted(async () => {
               </div>
               <div class="flex flex-col gap-1">
                 <label class="text-sm font-semibold">Saldo Pendiente (RD$)</label>
-                <InputNumber :value="saldoCalculado" mode="currency" currency="DOP" locale="es-DO" disabled fluid />
+                <InputNumber :modelValue="saldoCalculado" mode="currency" currency="DOP" locale="es-DO" disabled fluid />
               </div>
             </div>
             <div class="flex flex-col gap-1">
@@ -679,10 +760,23 @@ onMounted(async () => {
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="dialogNuevoCliente" header="Nuevo Cliente" modal :style="{ width: '24rem' }">
+    <Dialog v-model:visible="dialogNuevoCliente" header="Nuevo Cliente" modal :style="{ width: 'min(26rem, 94vw)' }">
       <div class="flex flex-col gap-3 pt-2">
         <InputText v-model="nuevoClienteForm.nombre" placeholder="Nombre del cliente" class="uppercase" style="text-transform: uppercase;" />
         <InputText v-model="nuevoClienteForm.telefono" placeholder="Telefono" />
+        <div class="flex gap-2">
+          <SelectButton v-model="rncTipo" :options="['RNC', 'CEDULA']" class="shrink-0" />
+          <div class="flex flex-1 gap-1 min-w-0">
+            <InputText
+              v-model="nuevoClienteForm.rnc"
+              :placeholder="rncTipo === 'RNC' ? 'RNC' : 'Cédula'"
+              class="flex-1 min-w-0"
+              @keyup.enter="buscarClienteApi"
+            />
+            <Button icon="pi pi-search" severity="info" :loading="buscandoClienteApi" @click="buscarClienteApi" v-tooltip="'Buscar en API'" />
+          </div>
+        </div>
+        <InputText v-model="nuevoClienteForm.direccion" placeholder="Dirección" class="uppercase" style="text-transform: uppercase;" />
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogNuevoCliente = false" />

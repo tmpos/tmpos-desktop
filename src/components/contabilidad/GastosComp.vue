@@ -13,12 +13,15 @@ import Calendar from 'primevue/calendar'
 import Textarea from 'primevue/textarea'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { useAlmacenStore } from '@/stores/almacen.store'
 
 import { envioElectron } from '@/funciones/funciones.js'
 import TicketGastoPrint from './TicketGastoPrint.vue'
 
 const toast = useToast()
+const almacenStore = useAlmacenStore()
 const gastos = ref<any[]>([])
+const bancos = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
 const dialogVisible = ref(false)
@@ -52,6 +55,8 @@ const formDefault = () => ({
   fecha: new Date(),
   hora: new Date(),
   comentario: '',
+  metodo_pago: 'EFECTIVO',
+  banco_id: null as number | null,
 })
 
 const form = ref(formDefault())
@@ -61,6 +66,13 @@ function formatHora(date: Date): string {
   const h = String(date.getHours()).padStart(2, '0')
   const m = String(date.getMinutes()).padStart(2, '0')
   return `${h}:${m}`
+}
+
+function formatFechaDb(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 const gastosFiltrados = computed(() => {
@@ -94,6 +106,19 @@ async function cargarGastos() {
   }
 }
 
+async function cargarBancos() {
+  try {
+    const res = await window.db.getAll('bancos')
+    bancos.value = (res.success ? res.data || [] : []).filter((banco: any) =>
+      almacenStore.activeUid && banco.almacen_uid
+        ? String(banco.almacen_uid) === almacenStore.activeUid
+        : !Number(banco.almacen_id) || Number(banco.almacen_id) === almacenStore.activeId
+    )
+  } catch {
+    bancos.value = []
+  }
+}
+
 function abrirCrear() {
   isEditing.value = false
   selectedGasto.value = null
@@ -109,6 +134,8 @@ function abrirEditar(gasto: any) {
     fecha: gasto.fecha ? new Date(gasto.fecha) : new Date(),
     hora: gasto.hora ? new Date(`2000-01-01T${gasto.hora}`) : new Date(),
     comentario: gasto.comentario || '',
+    metodo_pago: String(gasto.metodo_pago || 'EFECTIVO').toUpperCase(),
+    banco_id: gasto.banco_id ? Number(gasto.banco_id) : null,
   }
   dialogVisible.value = true
 }
@@ -133,10 +160,14 @@ async function guardar() {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'La cantidad es requerida', life: 3000 })
     return
   }
+  if (form.value.metodo_pago === 'TRANSFERENCIA' && !form.value.banco_id) {
+    toast.add({ severity: 'warn', summary: 'Banco requerido', detail: 'Selecciona el banco de donde saldra el dinero', life: 3000 })
+    return
+  }
 
   try {
     const fechaStr = form.value.fecha instanceof Date
-      ? form.value.fecha.toISOString().split('T')[0]
+      ? formatFechaDb(form.value.fecha)
       : form.value.fecha
 
     const horaStr = form.value.hora instanceof Date
@@ -145,36 +176,38 @@ async function guardar() {
 
     const turnosRes = await window.db.getAll('caja_turnos')
     const turnoAbierto = turnosRes.success
-      ? (turnosRes.data || []).find((turno: any) => turno.estado === 'abierto')
+      ? (turnosRes.data || []).find((turno: any) => turno.estado === 'abierto' && (
+          almacenStore.activeUid && turno.almacen_uid
+            ? String(turno.almacen_uid) === almacenStore.activeUid
+            : !Number(turno.almacen_id) || Number(turno.almacen_id) === almacenStore.activeId
+        ))
       : null
 
+    const banco = bancos.value.find((item: any) => Number(item.id) === Number(form.value.banco_id || 0))
     const data = {
       cantidad: form.value.cantidad,
       fecha: fechaStr,
       hora: horaStr,
       comentario: form.value.comentario.trim().toUpperCase(),
+      metodo_pago: form.value.metodo_pago,
+      banco_id: banco?.id || 0,
+      banco_uid: banco?.uid || '',
       turno_id: isEditing.value
         ? (selectedGasto.value?.turno_id || 0)
         : (turnoAbierto?.id || 0),
+      almacen_id: almacenStore.activeId || 0,
+      almacen_uid: almacenStore.activeUid || '',
+      usuario: localStorage.getItem('mr_user_usuario') || '',
     }
-
-    if (isEditing.value) {
-      const res = await window.db.update('gastos', selectedGasto.value.id, data)
-      if (res.success) {
-        toast.add({ severity: 'success', summary: 'Exito', detail: 'Gasto actualizado', life: 3000 })
-      } else {
-        toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo actualizar', life: 3000 })
-        return
-      }
-    } else {
-      const res = await window.db.insert('gastos', data)
-      if (res.success) {
-        toast.add({ severity: 'success', summary: 'Exito', detail: 'Gasto creado', life: 3000 })
-      } else {
-        toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo crear', life: 3000 })
-        return
-      }
+    const res = await window.electron.invoke('gastos:guardarConPago', {
+      ...data,
+      id: isEditing.value ? selectedGasto.value?.id : 0,
+    }) as any
+    if (!res.success) {
+      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo guardar', life: 3500 })
+      return
     }
+    toast.add({ severity: 'success', summary: 'Exito', detail: isEditing.value ? 'Gasto actualizado' : 'Gasto creado', life: 3000 })
 
     dialogVisible.value = false
     await cargarGastos()
@@ -185,7 +218,7 @@ async function guardar() {
 
 async function borrar() {
   try {
-    const res = await window.db.delete('gastos', selectedGasto.value.id)
+    const res = await window.electron.invoke('gastos:eliminarConPago', selectedGasto.value.id, localStorage.getItem('mr_user_usuario') || '') as any
     if (res.success) {
       toast.add({ severity: 'success', summary: 'Exito', detail: 'Gasto eliminado', life: 3000 })
     } else {
@@ -209,7 +242,7 @@ async function borrarMultiple() {
   let errors = 0
   for (const id of ids) {
     try {
-      const res = await window.db.delete('gastos', id)
+      const res = await window.electron.invoke('gastos:eliminarConPago', id, localStorage.getItem('mr_user_usuario') || '') as any
       if (!res.success) errors++
     } catch {
       errors++
@@ -242,6 +275,7 @@ onMounted(async () => {
   }
 
   await cargarGastos()
+  await cargarBancos()
 })
 </script>
 
@@ -319,6 +353,10 @@ onMounted(async () => {
         <Column field="cantidad" header="Cantidad" sortable style="width: 10rem">
           <template #body="{ data }">${{ formatCantidad(data.cantidad) }}</template>
         </Column>
+        <Column field="metodo_pago" header="Metodo" sortable style="width: 10rem">
+          <template #body="{ data }">{{ data.metodo_pago || 'EFECTIVO' }}</template>
+        </Column>
+        <Column field="banco_nombre" header="Banco" sortable style="width: 11rem" />
         <Column field="comentario" header="Comentario" sortable />
 
         <template #empty>
@@ -348,6 +386,7 @@ onMounted(async () => {
               <p class="text-sm text-surface-500 dark:text-surface-400">
                 {{ formatFecha(gasto.fecha) }} - {{ gasto.hora || '--:--' }}
               </p>
+              <p class="text-xs text-surface-400 mt-1">{{ gasto.metodo_pago || 'EFECTIVO' }}<span v-if="gasto.banco_nombre"> · {{ gasto.banco_nombre }}</span></p>
             </div>
 
             <div class="flex gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
@@ -383,11 +422,26 @@ onMounted(async () => {
           <label class="font-semibold text-sm">Comentario</label>
           <Textarea v-model="form.comentario" placeholder="Comentario del gasto..." fluid autoResize />
         </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Metodo de pago</label>
+          <select v-model="form.metodo_pago" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700" @change="form.banco_id = null">
+            <option value="EFECTIVO">Efectivo</option>
+            <option value="TRANSFERENCIA">Transferencia</option>
+          </select>
+        </div>
+        <div v-if="form.metodo_pago === 'TRANSFERENCIA'" class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Banco de origen</label>
+          <select v-model="form.banco_id" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700">
+            <option :value="null">Seleccionar banco</option>
+            <option v-for="banco in bancos" :key="banco.uid || banco.id" :value="banco.id">{{ banco.nombre }} · RD$ {{ formatCantidad(banco.saldo) }}</option>
+          </select>
+          <small v-if="bancos.length === 0" class="text-amber-500">No hay bancos disponibles en este almacen.</small>
+        </div>
       </div>
 
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="form.metodo_pago === 'TRANSFERENCIA' && !form.banco_id" @click="guardar" />
       </template>
     </Dialog>
 

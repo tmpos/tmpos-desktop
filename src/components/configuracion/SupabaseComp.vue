@@ -386,7 +386,7 @@ function detenerScanner() {
 const tablasEsperadas = [
   'usuarios', 'empresa', 'clientes', 'proveedores', 'categorias', 'marcas',
   'accesorios', 'telefonos', 'imei', 'electrodomesticos', 'serial',
-  'facturas', 'piezas', 'tecnicos', 'ordenes_taller', 'correo',
+  'facturas', 'piezas', 'tecnicos', 'ordenes_taller', 'correo', 'bancos',
   'gastos', 'gastos_fijos', 'impresoras_config', 'cuentas_cobrar',
   'cuentas_pagar', 'comprobantes_fiscales', 'bitacora', 'notas',
   'licencia', 'plantillas_etiquetas', 'configuracion',

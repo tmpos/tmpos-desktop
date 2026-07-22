@@ -112,7 +112,7 @@ async function verificarLicenciaAhora() {
   licError.value = false
   try {
     console.log('[LicenciaComp] Verificando licencia...')
-    const res = await window.electron.invoke('licencia:verificar', { forceOnline: true }) as any
+    const res = await window.electron.invoke('licencia:verificar') as any
     console.log('[LicenciaComp] Resultado:', res)
     if (res.success) {
       licMsg.value = res.data?.mensaje || 'Licencia verificada correctamente'

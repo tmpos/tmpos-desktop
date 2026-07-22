@@ -1,4 +1,5 @@
 import { ref, computed } from 'vue'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 export interface SpotlightResultado {
   tipo: 'producto' | 'cliente' | 'accion'
@@ -10,6 +11,7 @@ export interface SpotlightResultado {
 }
 
 export function useSpotlight() {
+  const systemMode = useSystemModeStore()
   const dialogSpotlight = ref(false)
   const busquedaSpotlight = ref('')
   const spotlightIndex = ref(-1)
@@ -36,7 +38,7 @@ export function useSpotlight() {
     for (const acc of accesorios.value) {
       if (acc.nombre?.toLowerCase().includes(texto) || acc.marca_nombre?.toLowerCase().includes(texto)) {
         results.push({
-          tipo: 'producto', label: acc.nombre, detalle: `Accesorio | Stock: ${acc.cantidad || 0}`,
+        tipo: 'producto', label: acc.nombre, detalle: `${systemMode.isGeneralStore ? 'Producto' : 'Accesorio'} | Stock: ${acc.cantidad || 0}`,
           icono: 'pi pi-box', data: acc, accion: 'accesorio',
         })
       }

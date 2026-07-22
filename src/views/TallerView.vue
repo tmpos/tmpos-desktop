@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, shallowRef, computed, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
@@ -11,15 +12,17 @@ import ReporteTallerComp from '@/components/taller/ReporteTallerComp.vue'
 import Toast from 'primevue/toast'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
+import Textarea from 'primevue/textarea'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
 
 const auth = useAuthStore()
 const toast = useToast()
+const route = useRoute()
 
 const expressVisible = ref(false)
-const expressForm = ref({ pieza_usada: '', total_reparacion: 0, costo_pieza: 0 })
+const expressForm = ref({ pieza_usada: '', observacion: '', total_reparacion: 0, costo_pieza: 0 })
 const ordenesRef = ref<any>(null)
 const gananciaExpress = computed(() => (expressForm.value.total_reparacion || 0) - (expressForm.value.costo_pieza || 0))
 
@@ -46,14 +49,17 @@ const active = shallowRef('')
 
 function onSelect(key: string) {
   if (key === 'orden-express') {
-    expressForm.value = { pieza_usada: '', total_reparacion: 0, costo_pieza: 0 }
+    expressForm.value = { pieza_usada: '', observacion: '', total_reparacion: 0, costo_pieza: 0 }
     expressVisible.value = true
     return
   }
   active.value = key
 }
 
-active.value = items.value.find(i => i.key !== 'orden-express')?.key || items.value[0]?.key || ''
+const tabRuta = String(route.query.tab || '')
+active.value = items.value.some(item => item.key === tabRuta && item.key !== 'orden-express')
+  ? tabRuta
+  : (items.value.find(i => i.key !== 'orden-express')?.key || items.value[0]?.key || '')
 
 function formatearNumeroOrdenExpress(id: number) {
   return `EXP-${String(id).padStart(6, '0')}`
@@ -68,6 +74,7 @@ async function guardarExpress() {
     const data: any = {
       nombre: 'REPARACION EXPRESS',
       piezas: expressForm.value.pieza_usada.trim().toUpperCase(),
+      fallas: expressForm.value.observacion.trim().toUpperCase(),
       total: expressForm.value.total_reparacion || 0,
       precio_pieza: expressForm.value.costo_pieza || 0,
       beneficio_empresa: gananciaExpress.value,
@@ -115,6 +122,17 @@ async function guardarExpress() {
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Pieza Usada</label>
           <InputText v-model="expressForm.pieza_usada" placeholder="Pieza utilizada" fluid class="uppercase" style="text-transform: uppercase;" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Observación</label>
+          <Textarea
+            v-model="expressForm.observacion"
+            placeholder="Detalle u observación de la reparación"
+            rows="3"
+            fluid
+            class="uppercase"
+            style="text-transform: uppercase;"
+          />
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div class="flex flex-col gap-1">

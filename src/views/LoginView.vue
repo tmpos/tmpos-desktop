@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth.store'
+import { refreshLoginUsers } from '@/services/tmCloudSyncService'
 import InputText from 'primevue/inputtext'
 import InputOtp from 'primevue/inputotp'
 import Password from 'primevue/password'
@@ -19,6 +20,7 @@ const usuario = ref('')
 const password = ref('')
 const pin = ref('')
 const loading = ref(false)
+let usuariosApiPromise: Promise<any> | null = null
 const verficando = ref(true)
 const pinContainer = ref<HTMLElement | null>(null)
 
@@ -116,10 +118,9 @@ async function verificarLicenciaApp() {
       licenciaCifrada.value = macResult.data.cifrada
     }
 
-    const offlineOnly = navigator.onLine === false
-    console.log('[Login] Enviando verificar..., offlineOnly:', offlineOnly)
+    console.log('[Login] Verificando licencia online; se usara la copia local solo si falla la conexion')
     const result = await withTimeout(
-      window.electron.invoke('licencia:verificar', { offlineOnly }),
+      window.electron.invoke('licencia:verificar'),
       LICENCIA_TIMEOUT_MS,
       'licencia:verificar'
     ) as any
@@ -295,6 +296,7 @@ async function iniciarSesion() {
       return
     }
     loading.value = true
+    await actualizarUsuariosDesdeApi()
     const res = await auth.login(usuario.value.trim(), password.value.trim())
     loading.value = false
     console.log('[Login] Login result:', JSON.stringify(res))
@@ -309,6 +311,7 @@ async function iniciarSesion() {
       return
     }
     loading.value = true
+    await actualizarUsuariosDesdeApi()
     const res = await auth.loginWithPin(pin.value)
     loading.value = false
     console.log('[Login] Login result:', JSON.stringify(res))
@@ -317,6 +320,20 @@ async function iniciarSesion() {
     } else {
       toast.add({ severity: 'error', summary: 'Error', detail: res.error, life: 3000 })
     }
+  }
+}
+
+async function actualizarUsuariosDesdeApi() {
+  if (!usuariosApiPromise) {
+    usuariosApiPromise = refreshLoginUsers().finally(() => { usuariosApiPromise = null })
+  }
+  try {
+    await Promise.race([
+      usuariosApiPromise,
+      new Promise(resolve => setTimeout(resolve, 8000)),
+    ])
+  } catch {
+    // El login sigue disponible con la copia SQLite cuando no hay internet.
   }
 }
 
@@ -556,6 +573,9 @@ onMounted(async () => {
   } catch (_) {}
 
   await verificarLicenciaApp()
+  // Adelantar la descarga para que los usuarios remotos esten disponibles al
+  // momento de introducir el PIN, sin bloquear el modo offline.
+  void actualizarUsuariosDesdeApi()
 })
 
 onUnmounted(() => {

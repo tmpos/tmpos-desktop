@@ -35,7 +35,7 @@
               <div class="flex justify-between"><span>Inicial:</span><span>{{ formatMoney(turnoActual.monto_inicial) }}</span></div>
               <div class="flex justify-between"><span>+ Ventas efectivo:</span><span class="text-green-300">{{ formatMoney(resumenVentas.efectivo) }}</span></div>
               <div class="flex justify-between"><span>+ Entradas:</span><span class="text-green-300">{{ formatMoney(turnoActual.entradas || 0) }}</span></div>
-              <div class="flex justify-between"><span>- Gastos:</span><span class="text-red-300">{{ formatMoney(gastosTurno) }}</span></div>
+              <div class="flex justify-between"><span>- Gastos efectivo:</span><span class="text-red-300">{{ formatMoney(gastosEfectivoTurno) }}</span></div>
               <div class="flex justify-between"><span>- Retiros:</span><span class="text-red-300">{{ formatMoney(turnoActual.retiros || 0) }}</span></div>
             </div>
           </div>
@@ -78,7 +78,7 @@
             </div>
             <div class="divide-y divide-red-100 dark:divide-red-900/20 max-h-52 overflow-auto">
               <div v-for="g in gastosLista" :key="g.id" class="flex justify-between items-center px-4 py-2.5 text-sm">
-                <div><div class="font-medium">{{ g.comentario }}</div></div>
+                <div><div class="font-medium">{{ g.comentario }}</div><div class="text-[10px] text-surface-400">{{ g.metodo_pago || 'EFECTIVO' }}<span v-if="g.banco_nombre"> · {{ g.banco_nombre }}</span></div></div>
                 <span class="font-bold text-red-600 dark:text-red-400">-{{ formatMoney(g.cantidad || g.monto) }}</span>
               </div>
             </div>
@@ -168,11 +168,26 @@
             <input v-model.number="gastoForm.monto" type="number" step="0.01" min="0" class="flex-1 px-3 py-2.5 text-sm font-bold outline-none bg-transparent" placeholder="0.00" />
           </div>
         </div>
+        <div>
+          <label class="text-xs font-semibold mb-1.5 block">Metodo de pago</label>
+          <select v-model="gastoForm.metodo_pago" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm outline-none focus:ring-2 focus:ring-primary-500" @change="gastoForm.banco_id = null">
+            <option value="EFECTIVO">Efectivo</option>
+            <option value="TRANSFERENCIA">Transferencia</option>
+          </select>
+        </div>
+        <div v-if="gastoForm.metodo_pago === 'TRANSFERENCIA'">
+          <label class="text-xs font-semibold mb-1.5 block">Banco de origen <span class="text-red-500">*</span></label>
+          <select v-model="gastoForm.banco_id" :disabled="cargandoBancosGasto" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm outline-none focus:ring-2 focus:ring-primary-500">
+            <option :value="null">{{ cargandoBancosGasto ? 'Cargando bancos...' : 'Seleccionar banco' }}</option>
+            <option v-for="banco in bancosGasto" :key="banco.uid || banco.id" :value="banco.id">{{ banco.nombre }} · {{ formatMoney(Number(banco.saldo || 0)) }}</option>
+          </select>
+          <p v-if="!cargandoBancosGasto && bancosGasto.length === 0" class="text-xs text-amber-500 mt-1">No hay bancos disponibles en este almacen.</p>
+        </div>
       </div>
       <template #footer>
         <div class="flex gap-2 justify-end">
           <button @click="showGastoModal = false" class="px-4 py-2 rounded-lg text-sm font-medium border border-surface-300 dark:border-surface-600 hover:bg-surface-100 dark:hover:bg-surface-700">Cancelar</button>
-          <button @click="guardarGasto" :disabled="procesandoGasto || !gastoForm.descripcion || !gastoForm.monto" class="px-5 py-2 rounded-lg text-white text-sm font-medium flex items-center gap-2 bg-orange-500 hover:bg-orange-600"><i v-if="procesandoGasto" class="pi pi-spin pi-spinner"></i><i v-else class="pi pi-check"></i>Guardar Gasto</button>
+          <button @click="guardarGasto" :disabled="procesandoGasto || !gastoForm.descripcion || !gastoForm.monto || (gastoForm.metodo_pago === 'TRANSFERENCIA' && !gastoForm.banco_id)" class="px-5 py-2 rounded-lg text-white text-sm font-medium flex items-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50"><i v-if="procesandoGasto" class="pi pi-spin pi-spinner"></i><i v-else class="pi pi-check"></i>Guardar Gasto</button>
         </div>
       </template>
     </Dialog>
@@ -268,15 +283,18 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth.store'
+import { useAlmacenStore } from '@/stores/almacen.store'
 import Dialog from 'primevue/dialog'
 
 const router = useRouter()
 const auth = useAuthStore()
+const almacenStore = useAlmacenStore()
 const loading = ref(true)
 const refreshing = ref(false)
 const turnoActual = ref(null)
 const resumenVentas = ref({ efectivo: 0, tarjeta: 0, transferencia: 0, total: 0, cantidad: 0 })
 const gastosTurno = ref(0)
+const gastosEfectivoTurno = ref(0)
 const gastosLista = ref([])
 const ultimasVentas = ref([])
 const cerrandoTurno = ref(false)
@@ -308,9 +326,11 @@ const descripcionMovimiento = ref('')
 const procesandoMovimiento = ref(false)
 
 const showGastoModal = ref(false)
-const gastoForm = ref({ categoria: '', descripcion: '', monto: 0 })
+const gastoForm = ref({ categoria: '', descripcion: '', monto: 0, metodo_pago: 'EFECTIVO', banco_id: null })
 const procesandoGasto = ref(false)
 const categoriasGasto = ['Alimentos', 'Servicios', 'Suministros', 'Nomina', 'Mantenimiento', 'Transporte', 'Otros']
+const bancosGasto = ref([])
+const cargandoBancosGasto = ref(false)
 
 const showDetalleVenta = ref(false)
 const ventaSeleccionada = ref(null)
@@ -321,7 +341,7 @@ const efectivoEsperado = computed(() => {
   if (!turnoActual.value) return 0
   const inicial = turnoActual.value.monto_inicial || 0
   const ventas = resumenVentas.value.efectivo || 0
-  const gastos = gastosTurno.value || 0
+  const gastos = gastosEfectivoTurno.value || 0
   const entradas = turnoActual.value.entradas || 0
   const retiros = turnoActual.value.retiros || 0
   return inicial + ventas + entradas - gastos - retiros
@@ -378,7 +398,11 @@ async function cargarDatos() {
     await ensureTables()
     const res = await window.db.getAll('caja_turnos')
     if (res.success && res.data?.length) {
-      const abierto = res.data.find(r => r.estado === 'abierto')
+      const abierto = res.data.find(r => r.estado === 'abierto' && (
+        almacenStore.activeUid && r.almacen_uid
+          ? String(r.almacen_uid) === almacenStore.activeUid
+          : !Number(r.almacen_id) || Number(r.almacen_id) === almacenStore.activeId
+      ))
       if (abierto) {
         turnoActual.value = abierto
         await cargarVentas()
@@ -426,6 +450,9 @@ async function cargarGastos() {
     })
     gastosLista.value = gastos
     gastosTurno.value = gastos.reduce((s, g) => s + Number(g.cantidad || g.monto || 0), 0)
+    gastosEfectivoTurno.value = gastos
+      .filter(g => String(g.metodo_pago || 'EFECTIVO').toUpperCase() !== 'TRANSFERENCIA')
+      .reduce((s, g) => s + Number(g.cantidad || g.monto || 0), 0)
   } catch (e) {
     console.error('Error cargando gastos:', e)
   }
@@ -457,6 +484,8 @@ async function guardarApertura() {
       observacion: observacionApertura.value || '',
       usuario_id: Number(localStorage.getItem('mr_user_id') || 0),
       usuario_nombre: user,
+      almacen_id: almacenStore.activeId || 0,
+      almacen_uid: almacenStore.activeUid || '',
     })
     abrirTurnoModal.value = false
     await cargarDatos()
@@ -483,7 +512,9 @@ async function guardarMovimiento() {
       turno_id: turnoActual.value.id,
       tipo: tipoMovimiento.value,
       monto,
-      descripcion: descripcionMovimiento.value || ''
+      descripcion: descripcionMovimiento.value || '',
+      almacen_id: almacenStore.activeId || 0,
+      almacen_uid: almacenStore.activeUid || '',
     })
     const campo = tipoMovimiento.value === 'entrada' ? 'entradas' : 'retiros'
     const valorActual = turnoActual.value[campo] || 0
@@ -497,21 +528,49 @@ async function guardarMovimiento() {
   }
 }
 
-function agregarGasto() {
-  gastoForm.value = { categoria: '', descripcion: '', monto: 0 }
+async function cargarBancosGasto() {
+  cargandoBancosGasto.value = true
+  try {
+    const res = await window.db.getAll('bancos')
+    bancosGasto.value = (res.success ? res.data || [] : []).filter(banco =>
+      almacenStore.activeUid && banco.almacen_uid
+        ? String(banco.almacen_uid) === almacenStore.activeUid
+        : !Number(banco.almacen_id) || Number(banco.almacen_id) === almacenStore.activeId
+    )
+  } catch (_) {
+    bancosGasto.value = []
+  } finally {
+    cargandoBancosGasto.value = false
+  }
+}
+
+async function agregarGasto() {
+  gastoForm.value = { categoria: '', descripcion: '', monto: 0, metodo_pago: 'EFECTIVO', banco_id: null }
   showGastoModal.value = true
+  await cargarBancosGasto()
 }
 
 async function guardarGasto() {
   if (procesandoGasto.value || !gastoForm.value.descripcion.trim() || !gastoForm.value.monto) return
+  if (gastoForm.value.metodo_pago === 'TRANSFERENCIA' && !gastoForm.value.banco_id) return
   procesandoGasto.value = true
   try {
-    const result = await window.db.insert('gastos', {
+    const ahora = new Date()
+    const fechaLocal = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}-${String(ahora.getDate()).padStart(2, '0')}`
+    const banco = bancosGasto.value.find(item => Number(item.id) === Number(gastoForm.value.banco_id || 0))
+    const comentario = gastoForm.value.categoria ? `${gastoForm.value.categoria}: ${gastoForm.value.descripcion.trim()}` : gastoForm.value.descripcion.trim()
+    const result = await window.electron.invoke('gastos:guardarConPago', {
       cantidad: Number(gastoForm.value.monto),
-      comentario: gastoForm.value.descripcion.trim(),
+      comentario,
+      metodo_pago: gastoForm.value.metodo_pago,
+      banco_id: banco?.id || 0,
+      banco_uid: banco?.uid || '',
       turno_id: turnoActual.value.id,
-      fecha: new Date().toISOString().split('T')[0],
-      hora: new Date().toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' }),
+      fecha: fechaLocal,
+      hora: `${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`,
+      almacen_id: almacenStore.activeId || 0,
+      almacen_uid: almacenStore.activeUid || '',
+      usuario: auth.user?.usuario || auth.user?.nombre || '',
     })
     console.log('[Caja] Resultado insert gasto:', JSON.stringify(result))
     if (!result.success) {
@@ -608,6 +667,9 @@ async function obtenerResumenCierre() {
   const totalEntradas = entradas.reduce((sum, item) => sum + Number(item.monto || 0), 0)
   const totalRetiros = retiros.reduce((sum, item) => sum + Number(item.monto || 0), 0)
   const totalGastos = gastosLista.value.reduce((sum, item) => sum + Number(item.cantidad || item.monto || 0), 0)
+  const totalGastosEfectivo = gastosLista.value
+    .filter(item => String(item.metodo_pago || 'EFECTIVO').toUpperCase() !== 'TRANSFERENCIA')
+    .reduce((sum, item) => sum + Number(item.cantidad || item.monto || 0), 0)
   const cerradoEn = new Date().toISOString()
 
   return {
@@ -623,7 +685,8 @@ async function obtenerResumenCierre() {
     totalEntradas,
     totalRetiros,
     totalGastos,
-    efectivoEsperado: Number(turno.monto_inicial || 0) + resumen.efectivo + totalEntradas - totalGastos - totalRetiros,
+    totalGastosEfectivo,
+    efectivoEsperado: Number(turno.monto_inicial || 0) + resumen.efectivo + totalEntradas - totalGastosEfectivo - totalRetiros,
     cerradoEn,
     duracion: calcularDuracion(turno.created_at, cerradoEn),
     conteo: { ...conteo.value },

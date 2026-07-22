@@ -23,7 +23,7 @@ import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
 const router = useRouter()
-const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
+const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
 const telefonos = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
@@ -56,6 +56,11 @@ const tokenCorto = ref('')
 const form = ref({ nombre: '', imagen: '' })
 const fileInput = ref<HTMLInputElement | null>(null)
 const subiendoImagen = ref(false)
+const dialogMoverAlmacen = ref(false)
+const almacenDestino = ref<any>(null)
+const almacenesDestino = ref<any[]>([])
+const moviendoAlmacen = ref(false)
+const cantidadImeisATrasladar = ref(0)
 const modoImei = ref<'individual' | 'lote'>('individual')
 const modosImei = [
   { label: 'Individual', value: 'individual' },
@@ -183,6 +188,74 @@ async function borrarTelefono() {
     toast.add({ severity: 'success', summary: 'Eliminado', detail: 'Telefono eliminado', life: 2000 })
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al eliminar', life: 4000 })
+  }
+}
+
+async function abrirMoverAlmacen(telefono?: any) {
+  const seleccionado = telefono || selectedTelefono.value
+  if (!seleccionado) return
+  selectedTelefono.value = seleccionado
+  almacenDestino.value = null
+  cantidadImeisATrasladar.value = 0
+
+  try {
+    const [, imeiRes] = await Promise.all([
+      almacenStore.load(),
+      window.db.getAll('imei'),
+    ])
+    const almacenOrigenUid = String(seleccionado.almacen_uid || almacenStore.activeUid || '')
+    almacenesDestino.value = almacenStore.almacenes.filter((almacen: any) => String(almacen.uid || '') !== almacenOrigenUid)
+    if (imeiRes.success) {
+      cantidadImeisATrasladar.value = (imeiRes.data || []).filter((imei: any) =>
+        Number(imei.id_equi) === Number(seleccionado.id) && String(imei.estado || '').toUpperCase() === 'DISPONIBLE').length
+    }
+    dialogMoverAlmacen.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron cargar los almacenes', life: 4000 })
+  }
+}
+
+async function moverTelefonoAlmacen() {
+  if (!selectedTelefono.value || !almacenDestino.value || moviendoAlmacen.value) return
+  const telefono = selectedTelefono.value
+  const destinoId = Number(almacenDestino.value.id || almacenDestino.value)
+  const destinoUid = String(almacenDestino.value.uid || '')
+  moviendoAlmacen.value = true
+
+  try {
+    const imeiRes = await window.db.getAll('imei')
+    if (!imeiRes.success) throw new Error(imeiRes.error || 'No se pudieron consultar los IMEI asociados')
+
+    const imeisDisponiblesTelefono = (imeiRes.data || []).filter((imei: any) =>
+      Number(imei.id_equi) === Number(telefono.id) && String(imei.estado || '').toUpperCase() === 'DISPONIBLE')
+
+    const telefonoRes = await window.db.update('telefonos', telefono.id, { almacen_id: destinoId, almacen_uid: destinoUid })
+    if (!telefonoRes.success) throw new Error(telefonoRes.error || 'No se pudo mover el telefono')
+
+    for (const imei of imeisDisponiblesTelefono) {
+      const res = await window.db.update('imei', imei.id, {
+        almacen_id: destinoId,
+        almacen_uid: destinoUid,
+        id_equi: telefono.id,
+        telefono_uid: telefono.uid || imei.telefono_uid || '',
+        equipo: telefono.nombre || imei.equipo || '',
+      })
+      if (!res.success) throw new Error(res.error || `No se pudo mover el IMEI ${imei.nombre || imei.id}`)
+    }
+
+    dialogMoverAlmacen.value = false
+    detalleDialogVisible.value = false
+    toast.add({
+      severity: 'success',
+      summary: 'Telefono trasladado',
+      detail: `${telefono.nombre} y ${imeisDisponiblesTelefono.length} IMEI(s) disponibles fueron movidos a ${almacenDestino.value.nombre}`,
+      life: 4000,
+    })
+    await cargarTelefonos()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo trasladar el telefono', life: 4000 })
+  } finally {
+    moviendoAlmacen.value = false
   }
 }
 
@@ -533,7 +606,7 @@ onMounted(async () => {
         >
           <Column field="id" header="ID" style="width: 4rem" headerClass="hide-on-mobile" bodyClass="hide-on-mobile" />
           <Column field="nombre" header="Nombre" sortable style="min-width: 12rem" />
-          <Column header="Acciones" style="width: 7rem">
+          <Column header="Acciones" style="width: 10rem">
             <template #body="{ data }">
               <div class="flex gap-1 justify-end">
                 <Button
@@ -543,6 +616,14 @@ onMounted(async () => {
                   rounded
                   @click.stop="abrirEditar(data)"
                   v-tooltip="'Editar'"
+                />
+                <Button
+                  icon="pi pi-warehouse"
+                  severity="success"
+                  text
+                  rounded
+                  @click.stop="abrirMoverAlmacen(data)"
+                  v-tooltip="'Mover a otro almacen'"
                 />
                 <Button
                   icon="pi pi-trash"
@@ -656,7 +737,7 @@ onMounted(async () => {
             <p class="text-xs text-surface-500">{{ imeisDelTelefonoFiltrados.length }} IMEI(s) disponibles</p>
           </div>
         </div>
-        <div class="grid grid-cols-3 gap-2">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <Button
             label="Editar"
             icon="pi pi-pencil"
@@ -670,6 +751,13 @@ onMounted(async () => {
             severity="success"
             outlined
             @click="abrirAgregarImei"
+          />
+          <Button
+            label="Mover"
+            icon="pi pi-warehouse"
+            severity="success"
+            outlined
+            @click="abrirMoverAlmacen()"
           />
           <Button
             label="Eliminar"
@@ -742,6 +830,27 @@ onMounted(async () => {
           </DataTable>
         </div>
       </div>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogMoverAlmacen" header="Mover Telefono a otro Almacen" modal :style="{ width: 'min(30rem, 95vw)' }">
+      <div class="space-y-4 pt-2">
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 p-3">
+          <p class="font-semibold">{{ selectedTelefono?.nombre }}</p>
+          <p class="text-xs text-surface-500 mt-1">
+            Tambien se moveran {{ cantidadImeisATrasladar }} IMEI(s) disponibles asociados a este telefono.
+          </p>
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-sm font-semibold">Almacen destino</label>
+          <Select v-model="almacenDestino" :options="almacenesDestino" optionLabel="nombre" placeholder="Seleccionar otro almacen" fluid />
+          <p v-if="almacenesDestino.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacen disponible para realizar el traslado.</p>
+        </div>
+        <p class="text-xs text-surface-500">Los IMEI vendidos conservaran su almacen historico.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacen" @click="dialogMoverAlmacen = false" />
+        <Button label="Mover Telefono" icon="pi pi-warehouse" severity="success" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="moverTelefonoAlmacen" />
+      </template>
     </Dialog>
 
     <Dialog v-model:visible="imeiAccionesVisible" header="Acciones del IMEI" modal :style="{ width: 'min(27rem, 95vw)' }">
@@ -868,7 +977,16 @@ onMounted(async () => {
         <div class="flex flex-col gap-1 sm:col-span-2">
           <label class="font-semibold text-sm">Proveedor</label>
           <div class="flex gap-2">
-            <Select v-model="imeiForm.proveedor" :options="proveedores.map(p => p.nombre)" placeholder="Seleccionar proveedor" class="flex-1" fluid />
+                <Select
+                  v-model="imeiForm.proveedor"
+                  :options="proveedores.map(p => p.nombre)"
+                  placeholder="Seleccionar proveedor"
+                  filter
+                  filterPlaceholder="Buscar proveedor..."
+                  showClear
+                  class="flex-1"
+                  fluid
+                />
             <Button icon="pi pi-plus" severity="info" text rounded size="small" @click="dialogNuevoProveedor = true" v-tooltip="'Nuevo proveedor'" />
           </div>
         </div>
@@ -926,7 +1044,16 @@ onMounted(async () => {
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Proveedor</label>
           <div class="flex gap-2">
-            <Select v-model="imeiForm.proveedor" :options="proveedores.map(p => p.nombre)" placeholder="Seleccionar proveedor" class="flex-1" fluid />
+                <Select
+                  v-model="imeiForm.proveedor"
+                  :options="proveedores.map(p => p.nombre)"
+                  placeholder="Seleccionar proveedor"
+                  filter
+                  filterPlaceholder="Buscar proveedor..."
+                  showClear
+                  class="flex-1"
+                  fluid
+                />
             <Button icon="pi pi-plus" severity="info" text rounded size="small" @click="dialogNuevoProveedor = true" v-tooltip="'Nuevo proveedor'" />
           </div>
         </div>

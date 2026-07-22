@@ -13,10 +13,11 @@ import './assets/main.css'
 
 async function initApp() {
   const isCapacitor = typeof (window as any).Capacitor !== 'undefined' && (window as any).Capacitor.isNativePlatform()
+  let capacitorApp: typeof import('@/capacitor/index') | undefined
 
   if (isCapacitor) {
-    const { initCapacitorApp } = await import('@/capacitor/index')
-    await initCapacitorApp()
+    capacitorApp = await import('@/capacitor/index')
+    await capacitorApp.initCapacitorApp()
   }
 
   const app = createApp(App)
@@ -48,6 +49,12 @@ async function initApp() {
   app.directive('tooltip', Tooltip)
 
   app.mount('#app')
+
+  // Apply the legacy WebView overrides after Vue and PrimeVue have inserted
+  // their styles. This also forces the ELO compositor to repaint the WebView.
+  if (isCapacitor) {
+    capacitorApp?.applyAndroidRenderingCompatibility()
+  }
 
   import('@/services/tmCloudSyncService')
     .then(syncService => syncService.initAutoSyncFromConfig())

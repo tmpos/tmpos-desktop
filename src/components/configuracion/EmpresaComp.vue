@@ -1,20 +1,28 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
 import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
 import Fieldset from 'primevue/fieldset'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import { useEmpresa } from '@/composables/useEmpresa'
 import { useAlmacenStore } from '@/stores/almacen.store'
+import { useAuthStore } from '@/stores/auth.store'
 import { uploadImage, getImageUrl, deleteImage } from '@/services/tmCloudClient'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 
 const toast = useToast()
 const almacenStore = useAlmacenStore()
+const auth = useAuthStore()
 const { empresa, cargar: cargarEmpresa, guardar: guardarEmpresa, nombre } = useEmpresa()
 const loading = ref(false)
 const guardando = ref(false)
+const cambiandoTienda = ref(false)
+const tiendaSeleccionada = ref<number | null>(null)
+const deleteDialogVisible = ref(false)
+const eliminandoEmpresa = ref(false)
 
 const logoInput = ref<HTMLInputElement | null>(null)
 const logoPreview = ref('')
@@ -34,6 +42,7 @@ async function cargar() {
   loading.value = true
   try {
     await cargarEmpresa()
+    tiendaSeleccionada.value = almacenStore.activeId || null
     if (empresa.value) {
       form.value = {
         nombre: empresa.value.nombre || '',
@@ -53,13 +62,59 @@ async function cargar() {
   }
 }
 
+async function cambiarTienda() {
+  if ((!auth.isAdmin && !auth.isSoporte) || !tiendaSeleccionada.value || tiendaSeleccionada.value === almacenStore.activeId) return
+  cambiandoTienda.value = true
+  try {
+    const seleccionada = almacenStore.almacenes.find((item: any) => item.id === tiendaSeleccionada.value)
+    if (!seleccionada || !almacenStore.setDefault(tiendaSeleccionada.value)) return
+    await (window as any).config.set('empresa_id', String(seleccionada.empresa_id || seleccionada.id))
+    toast.add({ severity: 'success', summary: 'Tienda cambiada', detail: seleccionada.nombre, life: 2000 })
+    setTimeout(() => window.location.reload(), 400)
+  } finally {
+    setTimeout(() => { cambiandoTienda.value = false }, 500)
+  }
+}
+
+function confirmarEliminarEmpresa() {
+  if ((!auth.isAdmin && !auth.isSoporte) || !empresa.value?.id) return
+  if (almacenStore.almacenes.length <= 1) {
+    toast.add({ severity: 'warn', summary: 'No se puede eliminar', detail: 'Debe existir al menos una empresa en el sistema', life: 3500 })
+    return
+  }
+  deleteDialogVisible.value = true
+}
+
+async function eliminarEmpresa() {
+  if ((!auth.isAdmin && !auth.isSoporte) || !empresa.value?.id || almacenStore.almacenes.length <= 1) return
+  eliminandoEmpresa.value = true
+  try {
+    const empresaId = Number(empresa.value.id)
+    const siguiente = almacenStore.almacenes.find((item: any) => Number(item.empresa_id || item.id) !== empresaId)
+    if (!siguiente) throw new Error('No hay otra empresa disponible')
+
+    const res = await window.db.delete('empresa', empresaId)
+    if (!res.success) throw new Error(res.error || 'No se pudo eliminar la empresa')
+
+    almacenStore.setDefault(Number(siguiente.id))
+    await (window as any).config.set('empresa_id', String(siguiente.empresa_id || siguiente.id))
+    deleteDialogVisible.value = false
+    toast.add({ severity: 'success', summary: 'Empresa eliminada', detail: 'Se activará la siguiente empresa disponible', life: 2500 })
+    setTimeout(() => window.location.reload(), 500)
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo eliminar la empresa', life: 4000 })
+  } finally {
+    eliminandoEmpresa.value = false
+  }
+}
+
 function seleccionarLogo() {
   logoInput.value?.click()
 }
 
 async function guardarLogoInmediatamente(logo: string) {
   if (!empresa.value?.id) return
-  await guardarEmpresa({ logo, almacen_id: almacenStore.activeId || 0 })
+  await guardarEmpresa({ logo, almacen_id: almacenStore.activeId || 0, almacen_uid: almacenStore.activeUid || empresa.value?.uid || '' })
   if (isOnline()) {
     const syncResult = await pushLocalRowToCloud('empresa', empresa.value.id)
     if (!syncResult.success) throw new Error(syncResult.error || 'No se pudo sincronizar el logo con TM Cloud')
@@ -127,6 +182,7 @@ async function guardar() {
       direccion: form.value.direccion.trim().toUpperCase(),
       logo: form.value.logo || '',
       almacen_id: almacenStore.activeId || 0,
+      almacen_uid: almacenStore.activeUid || empresa.value?.uid || '',
     }
 
     await guardarEmpresa(data)
@@ -160,6 +216,23 @@ onMounted(async () => {
     </div>
 
     <div v-else class="max-w-3xl mx-auto space-y-6">
+      <div v-if="almacenStore.hasMultiple" class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-primary-200 dark:border-primary-800 bg-primary-50 dark:bg-primary-900/20 p-4">
+        <div>
+          <p class="font-semibold text-sm">Empresa / tienda activa</p>
+          <p class="text-xs text-surface-500">Los registros de Empresa se utilizan como almacenes del sistema.</p>
+        </div>
+        <Select
+          v-model="tiendaSeleccionada"
+          :options="almacenStore.almacenes"
+          optionLabel="nombre"
+          optionValue="id"
+          class="w-full sm:w-64"
+          :disabled="(!auth.isAdmin && !auth.isSoporte) || cambiandoTienda"
+          @change="cambiarTienda"
+        />
+        <small v-if="!auth.isAdmin && !auth.isSoporte" class="text-amber-600">Solo Administrador o Soporte pueden cambiarla.</small>
+      </div>
+
       <div class="flex items-center gap-3 pb-2 border-b border-surface-200 dark:border-surface-700">
         <div class="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center">
           <i class="pi pi-building text-primary text-lg"></i>
@@ -246,8 +319,31 @@ onMounted(async () => {
       </div>
 
       <div class="flex items-center justify-end gap-3 pt-4 border-t border-surface-200 dark:border-surface-700">
+        <Button
+          v-if="auth.isAdmin || auth.isSoporte"
+          label="Eliminar Empresa"
+          icon="pi pi-trash"
+          severity="danger"
+          text
+          :disabled="almacenStore.almacenes.length <= 1"
+          @click="confirmarEliminarEmpresa"
+        />
         <Button label="Guardar Cambios" icon="pi pi-check" :loading="guardando" @click="guardar" />
       </div>
     </div>
+
+    <Dialog v-model:visible="deleteDialogVisible" header="Eliminar Empresa" modal :style="{ width: 'min(26rem, 92vw)' }">
+      <div class="flex items-start gap-3">
+        <i class="pi pi-exclamation-triangle text-red-500 text-2xl mt-1"></i>
+        <div>
+          <p class="font-semibold">¿Eliminar {{ empresa?.nombre }}?</p>
+          <p class="text-sm text-surface-500 mt-1">Esta acción eliminará el registro de empresa. Otra empresa quedará activa automáticamente.</p>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="eliminandoEmpresa" @click="deleteDialogVisible = false" />
+        <Button label="Sí, eliminar" icon="pi pi-trash" severity="danger" :loading="eliminandoEmpresa" @click="eliminarEmpresa" />
+      </template>
+    </Dialog>
   </div>
 </template>

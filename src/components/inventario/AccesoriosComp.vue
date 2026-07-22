@@ -20,8 +20,10 @@ import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected 
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useEmpresa } from '@/composables/useEmpresa'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 const toast = useToast()
+const systemMode = useSystemModeStore()
 const { nombre: nombreEmpresa, cargar: cargarEmpresa } = useEmpresa()
 const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
 const accesorios = ref<any[]>([])
@@ -493,12 +495,12 @@ async function guardar() {
     if (isEditing.value) {
       const res = await window.db.update('accesorios', selectedAccesorio.value.id, data)
       if (res.success) {
-        toast.add({ severity: 'success', summary: 'Exito', detail: 'Accesorio actualizado', life: 3000 })
+      toast.add({ severity: 'success', summary: 'Exito', detail: `${systemMode.isGeneralStore ? 'Producto' : 'Accesorio'} actualizado`, life: 3000 })
       }
     } else {
       const res = await window.db.insert('accesorios', addAlmacenId(data))
       if (res.success) {
-        toast.add({ severity: 'success', summary: 'Exito', detail: 'Accesorio creado', life: 3000 })
+      toast.add({ severity: 'success', summary: 'Exito', detail: `${systemMode.isGeneralStore ? 'Producto' : 'Accesorio'} creado`, life: 3000 })
       }
     }
     dialogVisible.value = false
@@ -519,7 +521,7 @@ async function borrarMultiple() {
   }
   selectedAccesorios.value = []
   deleteDialogVisible.value = false
-  toast.add({ severity: 'success', summary: 'Eliminados', detail: 'Accesorios eliminados', life: 2000 })
+    toast.add({ severity: 'success', summary: 'Eliminados', detail: `${systemMode.productLabel} eliminados`, life: 2000 })
   await cargarAccesorios()
 }
 
@@ -543,7 +545,7 @@ async function borrar() {
   try {
     const res = await window.db.delete('accesorios', selectedAccesorio.value.id)
     if (res.success) {
-      toast.add({ severity: 'success', summary: 'Exito', detail: 'Accesorio eliminado', life: 3000 })
+      toast.add({ severity: 'success', summary: 'Exito', detail: `${systemMode.isGeneralStore ? 'Producto' : 'Accesorio'} eliminado`, life: 3000 })
     }
     deleteDialogVisible.value = false
     await cargarAccesorios()
@@ -667,11 +669,11 @@ onMounted(async () => {
   <div>
     <Toast />
 
-    <Fieldset legend="Accesorios">
+    <Fieldset :legend="systemMode.productLabel">
       <div class="toolbar-mobile">
         <IconField>
           <InputIcon class="pi pi-search" />
-          <InputText v-model="busqueda" placeholder="Buscar accesorio..." />
+          <InputText v-model="busqueda" :placeholder="systemMode.isGeneralStore ? 'Buscar producto...' : 'Buscar accesorio...'" />
         </IconField>
         <div class="flex items-center gap-2">
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
@@ -694,7 +696,7 @@ onMounted(async () => {
               <i class="pi pi-th-large"></i>
             </button>
           </div>
-          <Button label="Nuevo Accesorio" icon="pi pi-plus" @click="abrirCrear" />
+          <Button :label="systemMode.isGeneralStore ? 'Nuevo Producto' : 'Nuevo Accesorio'" icon="pi pi-plus" @click="abrirCrear" />
         </div>
       </div>
 
@@ -807,13 +809,13 @@ onMounted(async () => {
         </Column>
 
         <template #empty>
-          <div class="text-center py-6 text-surface-500">No hay accesorios registrados.</div>
+          <div class="text-center py-6 text-surface-500">No hay {{ systemMode.isGeneralStore ? 'productos' : 'accesorios' }} registrados.</div>
         </template>
       </DataTable>
 
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
-        <div v-else-if="accesoriosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay accesorios registrados.</div>
+        <div v-else-if="accesoriosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay {{ systemMode.isGeneralStore ? 'productos' : 'accesorios' }} registrados.</div>
         <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
           <div
             v-for="acc in accesoriosFiltrados"
@@ -899,14 +901,14 @@ onMounted(async () => {
 
     <Dialog
       v-model:visible="dialogVisible"
-      :header="isEditing ? 'Editar Accesorio' : 'Nuevo Accesorio'"
+      :header="`${isEditing ? 'Editar' : 'Nuevo'} ${systemMode.isGeneralStore ? 'Producto' : 'Accesorio'}`"
       modal
       :style="{ width: '32rem' }"
     >
       <div class="flex flex-col gap-4 pt-2">
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Nombre</label>
-          <InputText v-model="form.nombre" placeholder="Nombre del accesorio" fluid class="uppercase" style="text-transform: uppercase;" />
+          <InputText v-model="form.nombre" :placeholder="systemMode.isGeneralStore ? 'Nombre del producto' : 'Nombre del accesorio'" fluid class="uppercase" style="text-transform: uppercase;" />
         </div>
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Codigo de Barra</label>
@@ -989,7 +991,7 @@ onMounted(async () => {
     >
       <div class="flex items-center gap-3">
         <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span v-if="selectedAccesorios.length > 1">Seguro que deseas eliminar los <strong>{{ selectedAccesorios.length }}</strong> accesorios seleccionados?</span>
+          <span v-if="selectedAccesorios.length > 1">Seguro que deseas eliminar los <strong>{{ selectedAccesorios.length }}</strong> {{ systemMode.isGeneralStore ? 'productos' : 'accesorios' }} seleccionados?</span>
         <span v-else>Seguro que deseas eliminar <strong>{{ selectedAccesorio?.nombre }}</strong>?</span>
       </div>
       <template #footer>
@@ -1086,7 +1088,7 @@ onMounted(async () => {
 
     <Dialog v-model:visible="dialogCambioProveedorMulti" header="Cambiar Proveedor" modal :style="{ width: '28rem' }">
       <div class="space-y-4 pt-2">
-        <p class="text-sm">Asignar proveedor a <strong>{{ selectedAccesorios.length }}</strong> accesorio(s):</p>
+        <p class="text-sm">Asignar proveedor a <strong>{{ selectedAccesorios.length }}</strong> {{ systemMode.isGeneralStore ? 'producto(s)' : 'accesorio(s)' }}:</p>
         <div class="flex gap-2">
           <Select v-model="proveedorMultiSel" :options="proveedores" optionLabel="nombre" placeholder="Seleccionar proveedor..." class="flex-1" fluid>
             <template #value="{ value }">

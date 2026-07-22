@@ -9,9 +9,11 @@ import Chip from 'primevue/chip'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
 import { useAuthStore } from '@/stores/auth.store'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 const toast = useToast()
 const auth = useAuthStore()
+const systemMode = useSystemModeStore()
 const usuarios = ref<any[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
@@ -20,7 +22,7 @@ const permisosSeleccionados = ref<string[]>([])
 const deleteDialogVisible = ref(false)
 const selectedDeleteUser = ref<any>(null)
 
-const opcionesPermisos = [
+const opcionesPermisosBase = [
   { label: 'Inicio', key: 'home', grupo: 'General' },
   { label: 'Vender', key: 'vender', grupo: 'Ventas' },
   { label: 'Inventario', key: 'inventario', grupo: 'Inventario' },
@@ -77,6 +79,12 @@ const opcionesPermisos = [
   { label: 'Configuracion', key: 'configuracion', grupo: 'Configuracion' },
 ]
 
+const opcionesPermisos = computed(() => opcionesPermisosBase
+  .filter(option => !systemMode.isGeneralStore || !['telefonos', 'imei', 'cambiazo', 'recibidos'].includes(option.key))
+  .map(option => option.key === 'accesorios' && systemMode.isGeneralStore
+    ? { ...option, label: 'Productos' }
+    : option))
+
 async function cargarUsuarios() {
   loading.value = true
   try {
@@ -125,7 +133,7 @@ async function guardarPermisos() {
 const gruposPermisos = ['General', 'Ventas', 'Inventario', 'Taller', 'Contactos', 'Contabilidad', 'Reportes', 'Configuracion']
 
 function opcionesPorGrupo(grupo: string) {
-  return opcionesPermisos.filter(o => o.grupo === grupo)
+  return opcionesPermisos.value.filter(o => o.grupo === grupo)
 }
 
 function togglePermiso(key: string) {

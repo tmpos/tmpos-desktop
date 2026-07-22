@@ -3,7 +3,7 @@ import * as sb from './supabaseClient'
 const SYNC_TABLES = [
   'usuarios', 'empresa', 'clientes', 'proveedores', 'categorias', 'marcas',
   'accesorios', 'telefonos', 'imei', 'electrodomesticos', 'serial',
-  'facturas', 'piezas', 'tecnicos', 'ordenes_taller', 'correo',
+  'facturas', 'piezas', 'tecnicos', 'ordenes_taller',
   'gastos', 'gastos_fijos', 'impresoras_config', 'cuentas_cobrar',
   'cuentas_pagar', 'comprobantes_fiscales', 'notas', 'plantillas_etiquetas',
 ]
@@ -247,6 +247,12 @@ async function upsertLocal(tabla: string, row: any): Promise<boolean> {
     const existing = (localRes.data || []).find((r: any) => r.uid === uid)
     const data: any = { ...row }
     delete data.id
+    if (tabla === 'serial' && data.equipo_uid) {
+      const equiposRes = await (window as any).db.getAll('electrodomesticos')
+      const equipo = (equiposRes.data || []).find((item: any) => String(item.uid || '') === String(data.equipo_uid))
+      data.id_equi = equipo?.id || null
+      if (!data.equipo && equipo) data.equipo = equipo.nombre || ''
+    }
     data.updated_at = nowISO()
     if (existing) {
       const res = await (window as any).db.update(tabla, existing.id, data)
@@ -268,6 +274,7 @@ async function upsertCloud(tabla: string, row: any): Promise<boolean> {
     if (checkError === 'NOT_FOUND') return false
     const data: any = { ...row }
     delete data.id
+    if (tabla === 'serial') delete data.id_equi
     data.updated_at = nowISO()
     if (existing && Array.isArray(existing) && existing.length > 0) {
       const { error } = await patchToCloud(`${tabla}?uid=eq.${encodeURIComponent(uid)}`, data)
@@ -311,7 +318,7 @@ export async function syncTable(tabla: string, mode?: SyncMode, fullSync?: boole
   let inserts = 0, updates = 0, errors = 0
 
   function dataIgual(a: any, b: any) {
-    const ignored = ['id', 'created_at', 'updated_at']
+    const ignored = ['id', 'created_at', 'updated_at', ...(tabla === 'serial' ? ['id_equi'] : [])]
     const sa = JSON.stringify(a, (k, v) => ignored.includes(k) ? undefined : v)
     const sb = JSON.stringify(b, (k, v) => ignored.includes(k) ? undefined : v)
     return sa === sb

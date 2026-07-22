@@ -20,12 +20,13 @@ export function useEmpresa() {
   async function cargar() {
     try {
       let emp = null
-      // La empresa activa es siempre el primer registro de la tabla. Esto
-      // evita que una configuracion antigua de almacen/empresa_id muestre
-      // datos diferentes a los que se ven en Configuracion > Empresa.
+      await almacenStore.load()
       const empresas = await (window as any).electron.invoke('db:getAll', 'empresa')
       if (empresas?.success && Array.isArray(empresas.data) && empresas.data.length > 0) {
-        emp = empresas.data[0]
+        emp = empresas.data.find((item: any) =>
+          (almacenStore.activeUid && String(item.uid || item.almacen_uid) === String(almacenStore.activeUid)) ||
+          Number(item.almacen_id || item.id) === Number(almacenStore.activeId)
+        ) || empresas.data[0]
       }
 
       if (!emp) {
@@ -33,6 +34,7 @@ export function useEmpresa() {
         const r = await (window as any).electron.invoke('db:insert', 'empresa', {
           nombre: 'MI EMPRESA',
           almacen_id: almacenId,
+          almacen_uid: almacenStore.activeUid || '',
         })
         if (r.success) {
           const r2 = await (window as any).electron.invoke('db:getById', 'empresa', r.data.id)
@@ -41,6 +43,7 @@ export function useEmpresa() {
       }
       if (emp) {
         empresa.value = emp
+        await (window as any).config?.set?.('empresa_id', String(emp.id))
         ;(window as any).__empresaNombre = emp.nombre || 'MI EMPRESA'
         ;(window as any).__empresaDireccion = emp.direccion || ''
         ;(window as any).__empresaTelefono = emp.telefono || ''

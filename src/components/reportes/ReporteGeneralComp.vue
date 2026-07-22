@@ -104,9 +104,57 @@ function labelEstadoTaller(estado: string): string {
   return labels[estado] || estado.replace(/_/g, ' ')
 }
 
+function fechaLocalIso(fecha: Date): string {
+  return `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}-${String(fecha.getDate()).padStart(2, '0')}`
+}
+
+function normalizarFechaRegistro(valor: any): string {
+  const texto = String(valor || '').trim()
+  const iso = texto.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (iso) return iso[1]
+  const local = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+  if (local) return `${local[3]}-${local[2].padStart(2, '0')}-${local[1].padStart(2, '0')}`
+  return ''
+}
+
+function fechaEfectivaFactura(factura: any): string {
+  const fechaGuardada = normalizarFechaRegistro(factura?.fecha_emision)
+  const creadoRaw = String(factura?.created_at || '').trim()
+  if (!creadoRaw) return fechaGuardada
+  const tieneZona = /(?:z|[+-]\d{2}:?\d{2})$/i.test(creadoRaw)
+  const creado = new Date(`${creadoRaw.replace(' ', 'T')}${tieneZona ? '' : 'Z'}`)
+  if (Number.isNaN(creado.getTime())) return fechaGuardada
+  const fechaCreadaDb = creadoRaw.slice(0, 10)
+  const fechaCreadaLocal = fechaLocalIso(creado)
+  return fechaGuardada === fechaCreadaDb && fechaCreadaLocal < fechaGuardada
+    ? fechaCreadaLocal
+    : (fechaGuardada || fechaCreadaLocal)
+}
+
+function esFacturaVenta(factura: any): boolean {
+  const tipo = String(factura?.tipo_factura || '').trim().toUpperCase()
+  const estado = String(factura?.estado_factura || '').trim().toUpperCase()
+  if (tipo.includes('COTIZACION') || tipo.includes('NOTA_CREDITO') || tipo.includes('NOTA CREDITO') || tipo.includes('RECIBIDO')) return false
+  return estado === 'PAGADA' || estado === 'COBRADO'
+}
+
+function getGastoFecha(gasto: any): string {
+  const fechaGuardada = normalizarFechaRegistro(gasto?.fecha)
+  const creadoRaw = String(gasto?.created_at || '').trim()
+  if (!creadoRaw) return fechaGuardada
+  const tieneZona = /(?:z|[+-]\d{2}:?\d{2})$/i.test(creadoRaw)
+  const creado = new Date(`${creadoRaw.replace(' ', 'T')}${tieneZona ? '' : 'Z'}`)
+  if (Number.isNaN(creado.getTime())) return fechaGuardada
+  const fechaCreadaDb = creadoRaw.slice(0, 10)
+  const fechaCreadaLocal = fechaLocalIso(creado)
+  return fechaGuardada === fechaCreadaDb && fechaCreadaLocal < fechaGuardada
+    ? fechaCreadaLocal
+    : (fechaGuardada || fechaCreadaLocal)
+}
+
 function getRango(key: string): { inicio: string; fin: string } {
   const now = new Date()
-  const y = (d: Date) => d.toISOString().split('T')[0]
+  const y = (d: Date) => fechaLocalIso(d)
 
   switch (key) {
     case 'hoy': return { inicio: y(now), fin: y(now) }
@@ -161,11 +209,14 @@ const tallerFiltrado = computed(() => {
 })
 
 const totales = computed(() => {
-  let total = 0, ganancia = 0, descuento = 0, count = 0, tallerIngresos = 0, tallerGanancia = 0, tallerOrdenes = 0, totalGastos = 0
+  let total = 0, ganancia = 0, descuento = 0, porcentajeTarjeta = 0, facturasTarjeta = 0, count = 0, tallerIngresos = 0, tallerGanancia = 0, tallerOrdenes = 0, totalGastos = 0, totalGastosEfectivo = 0, totalGastosTransferencia = 0
   for (const f of facturasFiltradas.value) {
     total += toNumber(f.total)
     ganancia += toNumber(f.ganancia)
     descuento += toNumber(f.descuento)
+    const montoTarjeta = calcularRecargoTarjetaFactura(f)
+    porcentajeTarjeta += montoTarjeta
+    if (montoTarjeta > 0) facturasTarjeta++
     count++
   }
   for (const t of tallerFiltrado.value) {
@@ -174,18 +225,24 @@ const totales = computed(() => {
     tallerOrdenes++
   }
   for (const g of gastos.value) {
-    totalGastos += toNumber(g.cantidad)
+    const montoGasto = toNumber(g.cantidad || g.monto)
+    const metodoGasto = String(g.metodo_pago || 'EFECTIVO').trim().toUpperCase()
+    totalGastos += montoGasto
+    if (metodoGasto.includes('TRANSFERENCIA')) totalGastosTransferencia += montoGasto
+    else totalGastosEfectivo += montoGasto
   }
   let costo = 0, itemsCount = 0
   for (const f of facturasFiltradas.value) {
     costo += calcularCostoFactura(f)
     itemsCount += parseProductos(f.productos).length
   }
-  const margen = total > 0 ? ((total - costo) / total) * 100 : 0
+  const ventasSinRecargoTarjeta = Math.max(0, total - porcentajeTarjeta)
+  const margen = ventasSinRecargoTarjeta > 0 ? (ganancia / ventasSinRecargoTarjeta) * 100 : 0
   const ticketPromedio = count > 0 ? total / count : 0
   const itemsPorFactura = count > 0 ? itemsCount / count : 0
   const gananciaTotal = ganancia + tallerGanancia
-  return { total, ganancia, gananciaTotal, descuento, count, tallerIngresos, tallerGanancia, tallerOrdenes, totalGastos, costo, margen, ticketPromedio, itemsPorFactura, itemsCount }
+  const gananciaNeta = total - totalGastosEfectivo
+  return { total, ganancia, gananciaTotal, gananciaNeta, descuento, porcentajeTarjeta, facturasTarjeta, count, tallerIngresos, tallerGanancia, tallerOrdenes, totalGastos, totalGastosEfectivo, totalGastosTransferencia, costo, margen, ticketPromedio, itemsPorFactura, itemsCount }
 })
 
 function parseProductos(productos: any): any[] {
@@ -221,6 +278,21 @@ function calcularCostoProductos(productos: any[]): number {
 function calcularCostoFactura(factura: any): number {
   const prods = parseProductos(factura.productos)
   return calcularCostoProductos(prods)
+}
+
+function calcularRecargoTarjetaFactura(factura: any): number {
+  const guardado = toNumber(factura?.monto_porcentaje_tarjeta)
+  if (guardado > 0) return guardado
+  if (!String(factura?.metodo_pago || '').toUpperCase().includes('TARJETA')) return 0
+  try {
+    const financiera = typeof factura?.financiera === 'string' ? JSON.parse(factura.financiera || '{}') : factura?.financiera || {}
+    const financieraMonto = toNumber(financiera?.monto_comision)
+    if (financieraMonto > 0) return financieraMonto
+  } catch {}
+  const subtotalProductos = parseProductos(factura?.productos).reduce((sum: number, producto: any) => (
+    sum + (toNumber(producto?.precio ?? producto?.precio_venta) * getProductoCantidad(producto))
+  ), 0)
+  return Math.max(0, toNumber(factura?.total) - subtotalProductos + toNumber(factura?.descuento) - toNumber(factura?.impuesto))
 }
 
 const topProductos = computed(() => {
@@ -308,7 +380,7 @@ const datosPorDia = computed(() => {
   }
 
   for (const f of facturas.value) {
-    const fecha = f.fecha_emision
+    const fecha = fechaEfectivaFactura(f)
     if (mapa.has(fecha)) {
       const existing = mapa.get(fecha)!
       existing.ventas += f.total || 0
@@ -409,6 +481,7 @@ const topClientes = computed(() => {
 
 async function cargarDatos() {
   if (rangoActivo.value === 'personalizado' && rangoPersonalizado.value.length !== 2) return
+  if (!almacenStore.activeUid) await almacenStore.load()
 
   const rango = getRango(rangoActivo.value)
   if (!rango.inicio || !rango.fin) return
@@ -430,11 +503,11 @@ async function cargarDatos() {
     }
     clientesMap.value = cm
 
-    const almacenId = almacenStore.activeId || 0
+    const almacenUid = almacenStore.activeUid || ''
     if (resFact.success) {
       facturas.value = (resFact.data || []).filter((f: any) =>
-        f.fecha_emision >= rango.inicio && f.fecha_emision <= rango.fin &&
-        (!almacenId || Number(f.almacen_id) === almacenId)
+        fechaEfectivaFactura(f) >= rango.inicio && fechaEfectivaFactura(f) <= rango.fin &&
+        Boolean(almacenUid) && String(f.almacen_uid || '') === almacenUid && esFacturaVenta(f)
       )
     }
     if (resTaller.success) {
@@ -445,7 +518,8 @@ async function cargarDatos() {
     }
     if (resGastos.success) {
       gastos.value = (resGastos.data || []).filter((g: any) =>
-        g.fecha >= rango.inicio && g.fecha <= rango.fin
+        getGastoFecha(g) >= rango.inicio && getGastoFecha(g) <= rango.fin &&
+        Boolean(almacenUid) && String(g.almacen_uid || '') === almacenUid
       )
     }
   } catch (error) {
@@ -721,14 +795,18 @@ async function generarReportePDF() {
   const cards = [
     { label: 'Ventas', value: `RD$ ${formatCurrency(totales.value.total)}`, color: [37, 99, 235] as [number, number, number] },
     { label: 'Ganancia Total', value: `RD$ ${formatCurrency(totales.value.gananciaTotal)}`, color: [20, 184, 166] as [number, number, number] },
+    { label: 'Ganancia Neta', value: `RD$ ${formatCurrency(totales.value.gananciaNeta)}`, color: [8, 145, 178] as [number, number, number] },
     { label: 'Ganancia', value: `RD$ ${formatCurrency(totales.value.ganancia)}`, color: [5, 150, 105] as [number, number, number] },
     { label: 'Costo Ventas', value: `RD$ ${formatCurrency(totales.value.costo)}`, color: [251, 146, 60] as [number, number, number] },
     { label: 'Descuentos', value: `RD$ ${formatCurrency(totales.value.descuento)}`, color: [245, 158, 11] as [number, number, number] },
+    { label: 'Recargos Tarjeta', value: `RD$ ${formatCurrency(totales.value.porcentajeTarjeta)}`, color: [37, 99, 235] as [number, number, number] },
     { label: 'Facturas', value: `${totales.value.count}`, color: [124, 58, 237] as [number, number, number] },
     { label: 'Taller Ingresos', value: `RD$ ${formatCurrency(totales.value.tallerIngresos)}`, color: [6, 182, 212] as [number, number, number] },
     { label: 'Taller Ganancia', value: `RD$ ${formatCurrency(totales.value.tallerGanancia)}`, color: [225, 29, 72] as [number, number, number] },
     { label: 'Ordenes Taller', value: `${totales.value.tallerOrdenes}`, color: [14, 165, 233] as [number, number, number] },
     { label: 'Gastos', value: `RD$ ${formatCurrency(totales.value.totalGastos)}`, color: [220, 38, 38] as [number, number, number] },
+    { label: 'Gastos Efectivo', value: `RD$ ${formatCurrency(totales.value.totalGastosEfectivo)}`, color: [234, 88, 12] as [number, number, number] },
+    { label: 'Gastos Transfer.', value: `RD$ ${formatCurrency(totales.value.totalGastosTransferencia)}`, color: [147, 51, 234] as [number, number, number] },
     { label: 'Margen %', value: `${totales.value.margen.toFixed(1)}%`, color: [13, 148, 136] as [number, number, number] },
     { label: 'Ticket Prom.', value: `RD$ ${formatCurrency(totales.value.ticketPromedio)}`, color: [79, 70, 229] as [number, number, number] },
     { label: 'Items/Fact.', value: `${totales.value.itemsPorFactura.toFixed(1)}`, color: [190, 24, 93] as [number, number, number] },
@@ -781,7 +859,7 @@ async function generarReportePDF() {
     head: [['Factura', 'Fecha', 'Cliente', 'Pago', 'Costo', 'Total', 'Ganancia']],
     body: facturasFiltradas.value.slice(0, cols).map((f: any) => [
       f.no_factura || '',
-      f.fecha_emision || '',
+      fechaEfectivaFactura(f),
       f.nombre_cliente || '',
       f.metodo_pago || '',
       `RD$ ${formatCurrency(calcularCostoFactura(f))}`,
@@ -899,7 +977,6 @@ onMounted(() => cargarDatos())
           size="small"
           @click="seleccionarRango(item.key)"
         />
-        <Select v-if="almacenStore.hasMultiple" v-model="almacenStore.activeId" :options="almacenStore.almacenes" optionLabel="nombre" optionValue="id" placeholder="Almacen" class="w-44" size="small" @change="cargarDatos" />
         <Button label="Generar PDF" icon="pi pi-file-pdf" severity="danger" size="small" @click="generarReportePDF" class="ml-auto" />
       </div>
 
@@ -925,6 +1002,11 @@ onMounted(() => cargarDatos())
           <p class="text-amber-100 text-xs font-semibold">Descuentos</p>
           <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.descuento) }}</p>
         </div>
+        <div class="rounded-xl bg-gradient-to-br from-blue-600 to-indigo-800 p-4 text-white shadow">
+          <p class="text-blue-100 text-xs font-semibold">Recargos de Tarjeta</p>
+          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.porcentajeTarjeta) }}</p>
+          <p class="text-[10px] text-blue-100 mt-1">{{ totales.facturasTarjeta }} factura(s)</p>
+        </div>
         <div class="rounded-xl bg-gradient-to-br from-violet-500 to-violet-700 p-4 text-white shadow">
           <p class="text-violet-100 text-xs font-semibold">Facturas</p>
           <p class="text-xl font-bold">{{ totales.count }}</p>
@@ -945,6 +1027,14 @@ onMounted(() => cargarDatos())
           <p class="text-red-100 text-xs font-semibold">Gastos</p>
           <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.totalGastos) }}</p>
         </div>
+        <div class="rounded-xl bg-gradient-to-br from-orange-500 to-orange-700 p-4 text-white shadow">
+          <p class="text-orange-100 text-xs font-semibold">Gastos Efectivo</p>
+          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.totalGastosEfectivo) }}</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-purple-500 to-purple-700 p-4 text-white shadow">
+          <p class="text-purple-100 text-xs font-semibold">Gastos Transferencia</p>
+          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.totalGastosTransferencia) }}</p>
+        </div>
         <div class="rounded-xl bg-gradient-to-br from-teal-500 to-teal-700 p-4 text-white shadow">
           <p class="text-teal-100 text-xs font-semibold">Margen %</p>
           <p class="text-xl font-bold">{{ totales.margen.toFixed(1) }}%</p>
@@ -961,6 +1051,11 @@ onMounted(() => cargarDatos())
           <p class="text-teal-100 text-xs font-semibold">Ganancia Total</p>
           <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.gananciaTotal) }}</p>
           <p class="text-[10px] text-teal-100 mt-1">Ventas + Taller</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-cyan-600 to-cyan-800 p-4 text-white shadow">
+          <p class="text-cyan-100 text-xs font-semibold">Ganancia Neta</p>
+          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.gananciaNeta) }}</p>
+          <p class="text-[10px] text-cyan-100 mt-1">Ventas - Gastos efectivo</p>
         </div>
       </div>
 
@@ -1089,7 +1184,9 @@ onMounted(() => cargarDatos())
         :sortOrder="-1"
       >
         <Column field="no_factura" header="Factura" sortable style="width: 8rem" />
-        <Column field="fecha_emision" header="Fecha" sortable style="width: 7rem" />
+        <Column field="fecha_emision" header="Fecha" sortable style="width: 7rem">
+          <template #body="{ data }">{{ fechaEfectivaFactura(data) }}</template>
+        </Column>
         <Column field="nombre_cliente" header="Cliente" sortable />
         <Column field="metodo_pago" header="Pago" sortable style="width: 7rem" />
         <Column field="descuento" header="Desc." sortable style="width: 6rem">

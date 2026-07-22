@@ -21,7 +21,7 @@ import TicketFacturaPrint from '@/components/ventas/TicketFacturaPrint.vue'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
-const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
+const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
 const seriales = ref<any[]>([])
 const electrodomesticos = ref<any[]>([])
 const loading = ref(false)
@@ -74,6 +74,8 @@ const estadosFiltro = [
 const camposArray = [
   'nombre',
   'id_equi',
+  'equipo_uid',
+  'equipo',
   'costo',
   'precio_venta',
   'precio_min',
@@ -95,6 +97,7 @@ const camposArray = [
 const form = ref({
   nombre: '',
   id_equi: null as number | null,
+  equipo_uid: '',
   costo: 0,
   precio_venta: 0,
   precio_min: 0,
@@ -155,7 +158,7 @@ async function cargarElectrodomesticos() {
   try {
     const res = await window.db.getAll('electrodomesticos')
     if (res.success) {
-      electrodomesticos.value = res.data || []
+      electrodomesticos.value = filterByAlmacen(res.data || [])
     }
   } catch (error) {
     console.error(error)
@@ -187,13 +190,16 @@ async function cargarSeriales() {
       window.db.getAll('proveedores'),
     ])
 
-    if (resElect.success) electrodomesticos.value = resElect.data || []
+    if (resElect.success) electrodomesticos.value = filterByAlmacen(resElect.data || [])
     if (resProv.success) proveedores.value = resProv.data || []
     if (resSerial.success) {
-      const telMap = new Map((resElect.data || []).map((t: any) => [t.id, t.nombre]))
+      const equiposLocales = filterByAlmacen(resElect.data || [])
+      const equiposPorId = new Map(equiposLocales.map((t: any) => [Number(t.id), t]))
+      const equiposPorUid = new Map(equiposLocales.map((t: any) => [String(t.uid || ''), t]))
       seriales.value = filterByAlmacen(resSerial.data || []).map((i: any) => ({
         ...i,
-        electrodomestico_nombre: telMap.get(i.id_equi) || '',
+        id_equi: (i.equipo_uid && equiposPorUid.get(String(i.equipo_uid))?.id) || i.id_equi,
+        electrodomestico_nombre: (i.equipo_uid && equiposPorUid.get(String(i.equipo_uid))?.nombre) || equiposPorId.get(Number(i.id_equi))?.nombre || i.equipo || '',
       }))
     }
   } catch (error) {
@@ -207,6 +213,7 @@ function formDefault() {
   return {
     nombre: '',
     id_equi: null as number | null,
+    equipo_uid: '',
     costo: 0,
     precio_venta: 0,
     precio_min: 0,
@@ -238,9 +245,12 @@ function abrirEditar(serial: any) {
   isEditing.value = true
   selectedSerial.value = serial
   serialDuplicado.value = false
+  const equipoLocal = electrodomesticos.value.find((equipo: any) =>
+    serial.equipo_uid ? String(equipo.uid || '') === String(serial.equipo_uid) : Number(equipo.id) === Number(serial.id_equi))
   form.value = {
     nombre: serial.nombre || '',
-    id_equi: serial.id_equi || null,
+    id_equi: equipoLocal?.id || serial.id_equi || null,
+    equipo_uid: serial.equipo_uid || equipoLocal?.uid || '',
     costo: serial.costo || 0,
     precio_venta: serial.precio_venta || 0,
     precio_min: serial.precio_min || 0,
@@ -277,11 +287,14 @@ async function guardar() {
   }
 
   const nombreMayus = form.value.nombre.trim().toUpperCase()
+  const equipo = electrodomesticos.value.find((item: any) => Number(item.id) === Number(form.value.id_equi))
 
   try {
     const data: any = {
       nombre: nombreMayus,
       id_equi: form.value.id_equi,
+      equipo_uid: equipo?.uid || form.value.equipo_uid || '',
+      equipo: equipo?.nombre || '',
       costo: form.value.costo || 0,
       precio_venta: form.value.precio_venta || 0,
       precio_min: form.value.precio_min || 0,
@@ -323,6 +336,12 @@ const nuevoEstadoMultiple = ref('DISPONIBLE')
 const dialogCambioEquipoMultiple = ref(false)
 const busquedaEquipoMultiple = ref('')
 const equipoSeleccionadoMultiple = ref<any>(null)
+const dialogCambioAlmacenMultiple = ref(false)
+const almacenesLista = ref<any[]>([])
+const almacenDestinoMultiple = ref<any>(null)
+const equipoDestinoAlmacen = ref<any>(null)
+const equiposTodosAlmacenes = ref<any[]>([])
+const moviendoSerialesAlmacen = ref(false)
 const proveedores = ref<any[]>([])
 const dialogCambioProveedorMultiple = ref(false)
 const busquedaProveedorMultiple = ref('')
@@ -359,6 +378,21 @@ const equiposFiltradosMultiple = computed(() => {
   return electrodomesticos.value.filter((t: any) => t.nombre?.toLowerCase().includes(texto))
 })
 
+const equiposAlmacenDestino = computed(() => {
+  const destinoId = Number(almacenDestinoMultiple.value?.id || almacenDestinoMultiple.value || 0)
+  const destinoUid = String(almacenDestinoMultiple.value?.uid || '')
+  if (!destinoId) return []
+  return equiposTodosAlmacenes.value
+    .filter((equipo: any) => equipo.almacen_uid
+      ? String(equipo.almacen_uid) === destinoUid
+      : Number(equipo.almacen_id) === destinoId || (!equipo.almacen_id && destinoId === 1))
+    .sort((a: any, b: any) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'))
+})
+
+function cambiarAlmacenDestinoSeleccionado() {
+  equipoDestinoAlmacen.value = null
+}
+
 function abrirCambiarEquipoMultiple() {
   busquedaEquipoMultiple.value = ''
   equipoSeleccionadoMultiple.value = null
@@ -368,12 +402,61 @@ function abrirCambiarEquipoMultiple() {
 async function aplicarCambioEquipoMultiple() {
   if (!equipoSeleccionadoMultiple.value) return
   for (const serial of selectedSeriales.value) {
-    await window.db.update('serial', serial.id, { id_equi: equipoSeleccionadoMultiple.value.id })
+    await window.db.update('serial', serial.id, {
+      id_equi: equipoSeleccionadoMultiple.value.id,
+      equipo_uid: equipoSeleccionadoMultiple.value.uid || '',
+      equipo: equipoSeleccionadoMultiple.value.nombre || '',
+    })
   }
   dialogCambioEquipoMultiple.value = false
   selectedSeriales.value = []
   toast.add({ severity: 'success', summary: 'Actualizados', detail: 'Equipo cambiado', life: 2000 })
   await cargarSeriales()
+}
+
+async function abrirCambiarAlmacenMultiple() {
+  const [, equiposRes] = await Promise.all([
+    almacenStore.load(),
+    window.db.getAll('electrodomesticos'),
+  ])
+  equiposTodosAlmacenes.value = equiposRes.success ? (equiposRes.data || []) : []
+  const almacenesOrigenUid = new Set(selectedSeriales.value.map((serial: any) =>
+    String(serial.almacen_uid || almacenStore.activeUid || '')))
+  almacenesLista.value = almacenStore.almacenes.filter((almacen: any) =>
+    !almacenesOrigenUid.has(String(almacen.uid || '')))
+  almacenDestinoMultiple.value = null
+  equipoDestinoAlmacen.value = null
+  dialogCambioAlmacenMultiple.value = true
+}
+
+async function cambiarAlmacenMultiple() {
+  if (!almacenDestinoMultiple.value || !equipoDestinoAlmacen.value || selectedSeriales.value.length === 0 || moviendoSerialesAlmacen.value) return
+  const destinoId = Number(almacenDestinoMultiple.value.id || almacenDestinoMultiple.value)
+  const destinoUid = String(almacenDestinoMultiple.value.uid || '')
+  const equipoDestino = equipoDestinoAlmacen.value
+  const cantidad = selectedSeriales.value.length
+  moviendoSerialesAlmacen.value = true
+
+  try {
+    for (const serial of selectedSeriales.value) {
+      const res = await window.db.update('serial', serial.id, {
+        almacen_id: destinoId,
+        almacen_uid: destinoUid,
+        id_equi: Number(equipoDestino.id),
+        equipo_uid: equipoDestino.uid || '',
+        equipo: equipoDestino.nombre || '',
+      })
+      if (!res.success) throw new Error(res.error || `No se pudo mover el serial ${serial.nombre || serial.id}`)
+    }
+    dialogCambioAlmacenMultiple.value = false
+    selectedSeriales.value = []
+    toast.add({ severity: 'success', summary: 'Almacen y equipo actualizados', detail: `${cantidad} serial(es) asignados a ${equipoDestino.nombre}`, life: 3000 })
+    await cargarSeriales()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'Error al cambiar almacen y equipo', life: 4000 })
+  } finally {
+    moviendoSerialesAlmacen.value = false
+  }
 }
 
 function abrirCambiarColorMultiple() {
@@ -803,6 +886,7 @@ onMounted(async () => {
         <span class="text-sm font-medium">{{ selectedSeriales.length }} seleccionado(s)</span>
         <Button label="Cambiar Estado" icon="pi pi-refresh" severity="info" size="small" @click="abrirCambiarEstadoMultiple" />
         <Button label="Cambiar Equipo" icon="pi pi-sitemap" severity="warn" size="small" @click="abrirCambiarEquipoMultiple" />
+        <Button label="Almacen" icon="pi pi-warehouse" severity="success" size="small" @click="abrirCambiarAlmacenMultiple" />
         <Button label="Color" icon="pi pi-palette" severity="help" size="small" @click="abrirCambiarColorMultiple" />
         <Button label="Capacidad" icon="pi pi-database" severity="info" size="small" @click="abrirCambiarCapacidadMultiple" />
         <Button label="Prov." icon="pi pi-truck" severity="info" size="small" @click="abrirCambiarProveedorMultiple" />
@@ -1023,7 +1107,15 @@ onMounted(async () => {
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Proveedor</label>
             <div class="flex gap-2">
-              <Select v-model="form.proveedor" :options="proveedores.map(p => p.nombre)" placeholder="Seleccionar proveedor" class="flex-1" fluid />
+              <Select
+                v-model="form.proveedor"
+                :options="proveedores.map(p => p.nombre)"
+                placeholder="Seleccionar proveedor"
+                filter
+                filterPlaceholder="Buscar proveedor..."
+                class="flex-1"
+                fluid
+              />
               <Button icon="pi pi-plus" severity="info" text rounded size="small" @click="dialogNuevoProveedor = true" v-tooltip="'Nuevo proveedor'" />
             </div>
           </div>
@@ -1129,6 +1221,51 @@ onMounted(async () => {
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogCambioEquipoMultiple = false" />
         <Button label="Asignar" icon="pi pi-check" :disabled="!equipoSeleccionadoMultiple" @click="aplicarCambioEquipoMultiple" />
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="dialogCambioAlmacenMultiple"
+      header="Cambiar Almacen y Equipo"
+      modal
+      :style="{ width: '30rem' }"
+    >
+      <div class="space-y-4 pt-2">
+        <p class="text-sm">Mover <strong>{{ selectedSeriales.length }}</strong> serial(es) a otro almacen y asignarlos a uno de sus electrodomesticos:</p>
+        <div class="space-y-1.5">
+          <label class="text-sm font-semibold">Almacen destino</label>
+          <Select
+            v-model="almacenDestinoMultiple"
+            :options="almacenesLista"
+            optionLabel="nombre"
+            placeholder="Seleccionar almacen"
+            fluid
+            @change="cambiarAlmacenDestinoSeleccionado"
+          />
+          <p v-if="almacenesLista.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacen disponible para realizar el traslado.</p>
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-sm font-semibold">Electrodomestico del almacen destino</label>
+          <Select
+            v-model="equipoDestinoAlmacen"
+            :options="equiposAlmacenDestino"
+            optionLabel="nombre"
+            placeholder="Seleccionar electrodomestico"
+            :disabled="!almacenDestinoMultiple || equiposAlmacenDestino.length === 0"
+            filter
+            fluid
+          />
+          <p v-if="almacenDestinoMultiple && equiposAlmacenDestino.length === 0" class="text-xs text-amber-600 dark:text-amber-400">
+            Este almacen no tiene electrodomesticos registrados. Crea primero el equipo en ese almacen.
+          </p>
+          <p v-else-if="equipoDestinoAlmacen" class="text-xs text-surface-500">
+            Los seriales quedaran asignados a <strong>{{ equipoDestinoAlmacen.nombre }}</strong> mediante su UID.
+          </p>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoSerialesAlmacen" @click="dialogCambioAlmacenMultiple = false" />
+        <Button label="Mover y Asignar" icon="pi pi-warehouse" :loading="moviendoSerialesAlmacen" :disabled="!almacenDestinoMultiple || !equipoDestinoAlmacen" @click="cambiarAlmacenMultiple" />
       </template>
     </Dialog>
 

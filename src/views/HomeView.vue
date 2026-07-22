@@ -8,6 +8,7 @@ import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 import { useToast } from 'primevue/usetoast'
+import { useSystemModeStore } from '@/stores/systemMode'
 import Toast from 'primevue/toast'
 
 const router = useRouter()
@@ -15,12 +16,19 @@ const auth = useAuthStore()
 const almacenStore = useAlmacenStore()
 const appName = ref('ArgentPOS')
 const toast = useToast()
+const systemMode = useSystemModeStore()
 
 let _loadedAppName = false
 
 const serverUrl = ref('')
 const qrDataUrl = ref('')
 const dialogRed = ref(false)
+const dialogGasto = ref(false)
+const guardandoGasto = ref(false)
+const cargandoBancosGasto = ref(false)
+const bancosGasto = ref<any[]>([])
+const gastoForm = ref({ categoria: '', descripcion: '', monto: 0, metodo_pago: 'EFECTIVO', banco_id: null as number | null })
+const categoriasGasto = ['Alimentos', 'Servicios', 'Suministros', 'Nomina', 'Mantenimiento', 'Transporte', 'Otros']
 
 const dialogImei = ref(false)
 const imeiInput = ref('')
@@ -28,13 +36,84 @@ const imeiConsultando = ref(false)
 const imeiResultado = ref<any>(null)
 const imeiServicio = ref(55)
 
-const hoy = ref(new Date().toISOString().split('T')[0])
-const inicioMes = ref(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0])
+type ResultadoBusquedaImei = {
+  clave: string
+  origen: string
+  icono: string
+  color: string
+  titulo: string
+  detalle: string
+  ruta: string
+}
+
+const dialogBuscadorImei = ref(false)
+const imeiBusquedaGeneral = ref('')
+const buscandoImeiGeneral = ref(false)
+const resultadosImeiGeneral = ref<ResultadoBusquedaImei[]>([])
+const busquedaImeiRealizada = ref(false)
+
+function fechaLocalIso(fecha: Date): string {
+  const year = fecha.getFullYear()
+  const month = String(fecha.getMonth() + 1).padStart(2, '0')
+  const day = String(fecha.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function normalizarFechaRegistro(valor: any): string {
+  const texto = String(valor || '').trim()
+  const iso = texto.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (iso) return iso[1]
+  const local = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+  if (local) return `${local[3]}-${local[2].padStart(2, '0')}-${local[1].padStart(2, '0')}`
+  return ''
+}
+
+function fechaEfectivaFactura(factura: any): string {
+  const fechaGuardada = normalizarFechaRegistro(factura?.fecha_emision)
+  const creadoRaw = String(factura?.created_at || '').trim()
+  if (!creadoRaw) return fechaGuardada
+  const tieneZona = /(?:z|[+-]\d{2}:?\d{2})$/i.test(creadoRaw)
+  const creado = new Date(`${creadoRaw.replace(' ', 'T')}${tieneZona ? '' : 'Z'}`)
+  if (Number.isNaN(creado.getTime())) return fechaGuardada
+  const fechaCreadaDb = creadoRaw.slice(0, 10)
+  const fechaCreadaLocal = fechaLocalIso(creado)
+  return fechaGuardada === fechaCreadaDb && fechaCreadaLocal < fechaGuardada
+    ? fechaCreadaLocal
+    : (fechaGuardada || fechaCreadaLocal)
+}
+
+function esFacturaVenta(factura: any): boolean {
+  const tipo = String(factura?.tipo_factura || '').trim().toUpperCase()
+  const estado = String(factura?.estado_factura || '').trim().toUpperCase()
+  if (tipo.includes('COTIZACION') || tipo.includes('NOTA_CREDITO') || tipo.includes('NOTA CREDITO') || tipo.includes('RECIBIDO')) return false
+  return estado === 'PAGADA' || estado === 'COBRADO'
+}
+
+function fechaEfectivaGasto(gasto: any): string {
+  const fechaGuardada = String(gasto?.fecha || '').slice(0, 10)
+  const creadoRaw = String(gasto?.created_at || '').trim()
+  if (!creadoRaw) return fechaGuardada
+
+  const tieneZona = /(?:z|[+-]\d{2}:?\d{2})$/i.test(creadoRaw)
+  const creado = new Date(`${creadoRaw.replace(' ', 'T')}${tieneZona ? '' : 'Z'}`)
+  if (Number.isNaN(creado.getTime())) return fechaGuardada
+
+  const fechaCreadaDb = creadoRaw.slice(0, 10)
+  const fechaCreadaLocal = fechaLocalIso(creado)
+  // Caja guardaba la fecha en UTC. Corrige los registros creados de noche que
+  // quedaron con la fecha del dia siguiente, sin alterar fechas manuales.
+  if (fechaGuardada === fechaCreadaDb && fechaCreadaLocal < fechaGuardada) return fechaCreadaLocal
+  return fechaGuardada || fechaCreadaLocal
+}
+
+const hoy = ref(fechaLocalIso(new Date()))
+const inicioMes = ref(fechaLocalIso(new Date(new Date().getFullYear(), new Date().getMonth(), 1)))
 
 const periodoDashboard = ref<'dia' | 'mes'>('dia')
 const ventasPeriodo = ref(0)
 const cantidadPeriodo = ref(0)
 const gananciaPeriodo = ref(0)
+const gastosPeriodo = ref(0)
 const stockBajo = ref<any[]>([])
 const productosTop = ref<any[]>([])
 const turnoActivo = ref<any>(null)
@@ -55,12 +134,11 @@ function formatoInicioTurno(turno: any): string {
 async function cargarDashboard() {
   loadingDashboard.value = true
   try {
-    const now = new Date()
-    const inicioHoy = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const inicioMes = new Date(now.getFullYear(), now.getMonth(), 1)
+    if (!almacenStore.activeUid) await almacenStore.load()
 
-    const [resFacturas, resTel, resAcc, resElec, resPiezas, resTurno] = await Promise.all([
+    const [resFacturas, resGastos, resTel, resAcc, resElec, resPiezas, resTurno] = await Promise.all([
       window.db.getAll('facturas'),
+      window.db.getAll('gastos'),
       window.db.getAll('telefonos'),
       window.db.getAll('accesorios'),
       window.db.getAll('electrodomesticos'),
@@ -69,17 +147,33 @@ async function cargarDashboard() {
     ])
 
     const almacenId = almacenStore.activeId || 0
-    const filtrarAlmacen = (items: any[]) => items.filter((i: any) => !almacenId || Number(i.almacen_id) === almacenId || almacenId === 1)
+    const almacenUid = almacenStore.activeUid || ''
+    const perteneceAlAlmacen = (item: any) => !almacenUid || (item.almacen_uid ? String(item.almacen_uid) === almacenUid : Number(item.almacen_id) === almacenId || (!item.almacen_id && almacenId === 1))
+    const perteneceAlAlmacenPorUid = (item: any) => Boolean(almacenUid) && String(item?.almacen_uid || '') === almacenUid
+    const filtrarAlmacen = (items: any[]) => items.filter(perteneceAlAlmacen)
 
     const facturas = (resFacturas.success ? resFacturas.data || [] : []).filter((f: any) =>
-      f.estado_factura === 'PAGADA' && (!almacenId || Number(f.almacen_id) === almacenId)
+      esFacturaVenta(f) && perteneceAlAlmacenPorUid(f)
     )
 
-    const inicioPeriodo = periodoDashboard.value === 'dia' ? inicioHoy : inicioMes
-    const facturasPeriodo = facturas.filter((f: any) => new Date(f.created_at) >= inicioPeriodo)
+    const fechaInicioPeriodo = periodoDashboard.value === 'dia' ? hoy.value : inicioMes.value
+    const facturasPeriodo = facturas.filter((f: any) => {
+      const fechaEmision = fechaEfectivaFactura(f)
+      return fechaEmision >= fechaInicioPeriodo && fechaEmision <= hoy.value
+    })
     ventasPeriodo.value = facturasPeriodo.reduce((s: number, f: any) => s + Number(f.total || 0), 0)
     cantidadPeriodo.value = facturasPeriodo.length
     gananciaPeriodo.value = facturasPeriodo.reduce((s: number, f: any) => s + Number(f.ganancia || 0), 0)
+
+    const gastos = (resGastos.success ? resGastos.data || [] : []).filter(perteneceAlAlmacenPorUid)
+    const gastosDelPeriodo = gastos.filter((gasto: any) => {
+      const fecha = fechaEfectivaGasto(gasto)
+      if (!fecha) return false
+      return periodoDashboard.value === 'dia'
+        ? fecha === hoy.value
+        : fecha >= inicioMes.value && fecha <= hoy.value
+    })
+    gastosPeriodo.value = gastosDelPeriodo.reduce((total: number, gasto: any) => total + Number(gasto.cantidad || gasto.monto || 0), 0)
 
     const contarProducto = (items: any[], campoNombre: string, campoPrecio: string) => {
       const map = new Map<string, { nombre: string; total: number; cantidad: number }>()
@@ -138,7 +232,7 @@ async function cargarDashboard() {
       .slice(0, 10)
 
     const allInv = [
-      ...(resTel.success ? resTel.data || [] : []),
+      ...(systemMode.isCellphoneStore && resTel.success ? resTel.data || [] : []),
       ...(resAcc.success ? resAcc.data || [] : []),
       ...(resElec.success ? resElec.data || [] : []),
       ...(resPiezas.success ? resPiezas.data || [] : []),
@@ -198,6 +292,136 @@ async function consultarImei() {
   }
 }
 
+function normalizarImei(valor: any): string {
+  return String(valor || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function parseJsonSeguro(valor: any, defecto: any = []) {
+  if (typeof valor !== 'string') return valor ?? defecto
+  try { return JSON.parse(valor) } catch { return defecto }
+}
+
+function contieneImeiEnObjeto(valor: any, termino: string): boolean {
+  if (Array.isArray(valor)) return valor.some(item => contieneImeiEnObjeto(item, termino))
+  if (!valor || typeof valor !== 'object') return false
+  return Object.entries(valor).some(([clave, contenido]) => {
+    if (clave.toLowerCase().includes('imei') && normalizarImei(contenido).includes(termino)) return true
+    return typeof contenido === 'object' && contieneImeiEnObjeto(contenido, termino)
+  })
+}
+
+function imeiDesdeNotas(valor: any): string {
+  const texto = String(valor || '')
+  return texto.match(/IMEI\s*:\s*([^|,;\n]+)/i)?.[1]?.trim() || ''
+}
+
+function esRecibidoImei(item: any): boolean {
+  const estado = String(item?.estado || '').toUpperCase()
+  if (['RECIBIDO', 'EN_GARANTIA'].includes(estado)) return true
+  const nota = parseJsonSeguro(item?.nota, {})
+  return Boolean(nota && typeof nota === 'object' && (
+    Object.prototype.hasOwnProperty.call(nota, 'customer_name') ||
+    Object.prototype.hasOwnProperty.call(nota, 'customer_phone') ||
+    Object.prototype.hasOwnProperty.call(nota, 'credit_note_id') ||
+    Object.prototype.hasOwnProperty.call(nota, 'cliente_id')
+  ))
+}
+
+async function buscarImeiGeneral() {
+  const termino = normalizarImei(imeiBusquedaGeneral.value)
+  if (termino.length < 3) {
+    toast.add({ severity: 'warn', summary: 'Busqueda incompleta', detail: 'Escribe al menos 3 caracteres del IMEI', life: 3000 })
+    return
+  }
+
+  buscandoImeiGeneral.value = true
+  busquedaImeiRealizada.value = true
+  resultadosImeiGeneral.value = []
+  try {
+    const [resImeis, resApartados, resFacturas, resTaller] = await Promise.all([
+      window.db.getAll('imei'),
+      window.db.getAll('cuentas_cobrar'),
+      window.db.getAll('facturas'),
+      window.db.getAll('ordenes_taller'),
+    ])
+    const resultados: ResultadoBusquedaImei[] = []
+    const coincide = (valor: any) => normalizarImei(valor).includes(termino)
+
+    for (const item of (resImeis.success ? resImeis.data || [] : [])) {
+      if (!coincide(item.nombre || item.imei)) continue
+      const imei = String(item.nombre || item.imei || '')
+      resultados.push({
+        clave: `imei-${item.uid || item.id}`,
+        origen: 'Inventario IMEI', icono: 'pi pi-barcode', color: 'text-indigo-500',
+        titulo: imei,
+        detalle: `${item.estado || 'SIN ESTADO'}${item.comprador ? ` · ${item.comprador}` : ''}${item.no_factura ? ` · Factura ${item.no_factura}` : ''}`,
+        ruta: `/inventario?tab=imei&search=${encodeURIComponent(imei)}&estado=todos`,
+      })
+      if (esRecibidoImei(item)) {
+        resultados.push({
+          clave: `recibido-${item.uid || item.id}`,
+          origen: 'Recibidos', icono: 'pi pi-download', color: 'text-cyan-500',
+          titulo: imei,
+          detalle: `Equipo recibido · ${item.estado || 'RECIBIDO'}`,
+          ruta: `/ventas?tab=recibidos&search=${encodeURIComponent(imei)}&estado=todos`,
+        })
+      }
+    }
+
+    for (const apartado of (resApartados.success ? resApartados.data || [] : [])) {
+      const contenido = [apartado.imei, apartado.imei_nombre, imeiDesdeNotas(apartado.notas)].join(' ')
+      if (!coincide(contenido)) continue
+      resultados.push({
+        clave: `apartado-${apartado.uid || apartado.id}`,
+        origen: 'Apartados', icono: 'pi pi-bookmark', color: 'text-amber-500',
+        titulo: apartado.no_factura || apartado.no_apartado || 'Apartado',
+        detalle: `${apartado.nombre_cliente || 'SIN CLIENTE'} · ${apartado.notas || ''}`,
+        ruta: `/ventas?tab=apartados&search=${encodeURIComponent(imeiBusquedaGeneral.value.trim())}`,
+      })
+    }
+
+    for (const factura of (resFacturas.success ? resFacturas.data || [] : [])) {
+      const productos = parseJsonSeguro(factura.productos, [])
+      if (!coincide(factura.imei) && !contieneImeiEnObjeto(productos, termino)) continue
+      resultados.push({
+        clave: `factura-${factura.uid || factura.id}`,
+        origen: 'Facturas', icono: 'pi pi-file', color: 'text-blue-500',
+        titulo: `Factura ${factura.no_factura || factura.id}`,
+        detalle: `${factura.nombre_cliente || 'CONSUMIDOR FINAL'} · RD$ ${formatCurrency(factura.total)}`,
+        ruta: `/ventas/editar/${factura.id}`,
+      })
+    }
+
+    for (const orden of (resTaller.success ? resTaller.data || [] : [])) {
+      if (!coincide(orden.imei)) continue
+      resultados.push({
+        clave: `taller-${orden.uid || orden.id}`,
+        origen: 'Taller', icono: 'pi pi-wrench', color: 'text-violet-500',
+        titulo: orden.no_orden || `Orden #${orden.id}`,
+        detalle: `${orden.nombre || 'SIN CLIENTE'} · ${orden.equipo || 'Equipo'} · ${orden.estado || ''}`,
+        ruta: `/taller?tab=ordenes&search=${encodeURIComponent(imeiBusquedaGeneral.value.trim())}`,
+      })
+    }
+
+    resultadosImeiGeneral.value = resultados
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error.message || 'No se pudo realizar la busqueda', life: 4000 })
+  } finally {
+    buscandoImeiGeneral.value = false
+  }
+}
+
+function abrirResultadoImei(resultado: ResultadoBusquedaImei) {
+  dialogBuscadorImei.value = false
+  router.push(resultado.ruta)
+}
+
+function limpiarBusquedaImeiGeneral() {
+  imeiBusquedaGeneral.value = ''
+  resultadosImeiGeneral.value = []
+  busquedaImeiRealizada.value = false
+}
+
 async function copiarUrl() {
   try {
     await navigator.clipboard.writeText(serverUrl.value)
@@ -215,6 +439,79 @@ function cambiarPeriodo(periodo: 'dia' | 'mes') {
   if (periodoDashboard.value === periodo) return
   periodoDashboard.value = periodo
   cargarDashboard()
+}
+
+async function cargarBancosGasto() {
+  cargandoBancosGasto.value = true
+  try {
+    const res = await window.db.getAll('bancos')
+    bancosGasto.value = (res.success ? res.data || [] : []).filter((banco: any) =>
+      almacenStore.activeUid && banco.almacen_uid
+        ? String(banco.almacen_uid) === almacenStore.activeUid
+        : !Number(banco.almacen_id) || Number(banco.almacen_id) === almacenStore.activeId
+    )
+  } catch {
+    bancosGasto.value = []
+  } finally {
+    cargandoBancosGasto.value = false
+  }
+}
+
+async function abrirGasto() {
+  if (!turnoActivo.value) {
+    toast.add({ severity: 'warn', summary: 'Sin turno activo', detail: 'Abre un turno en Caja antes de registrar el gasto', life: 3500 })
+    return
+  }
+  gastoForm.value = { categoria: '', descripcion: '', monto: 0, metodo_pago: 'EFECTIVO', banco_id: null }
+  dialogGasto.value = true
+  await cargarBancosGasto()
+}
+
+async function guardarGasto() {
+  const monto = Number(gastoForm.value.monto || 0)
+  const descripcion = gastoForm.value.descripcion.trim()
+  if (!turnoActivo.value) {
+    dialogGasto.value = false
+    toast.add({ severity: 'warn', summary: 'Sin turno activo', detail: 'El turno fue cerrado. Abre uno nuevo en Caja.', life: 3500 })
+    await cargarDashboard()
+    return
+  }
+  if (!descripcion || monto <= 0 || guardandoGasto.value) return
+  if (gastoForm.value.metodo_pago === 'TRANSFERENCIA' && !gastoForm.value.banco_id) {
+    toast.add({ severity: 'warn', summary: 'Banco requerido', detail: 'Selecciona el banco de donde saldra el dinero', life: 3000 })
+    return
+  }
+
+  guardandoGasto.value = true
+  try {
+    const ahora = new Date()
+    const comentario = gastoForm.value.categoria
+      ? `${gastoForm.value.categoria}: ${descripcion}`
+      : descripcion
+    const banco = bancosGasto.value.find((item: any) => Number(item.id) === Number(gastoForm.value.banco_id || 0))
+    const result = await window.electron.invoke('gastos:guardarConPago', {
+      cantidad: monto,
+      comentario,
+      metodo_pago: gastoForm.value.metodo_pago,
+      banco_id: banco?.id || 0,
+      banco_uid: banco?.uid || '',
+      turno_id: turnoActivo.value.id,
+      fecha: fechaLocalIso(ahora),
+      hora: `${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`,
+      almacen_id: almacenStore.activeId || 0,
+      almacen_uid: almacenStore.activeUid || '',
+      usuario: auth.user?.usuario || auth.user?.nombre || '',
+    }) as any
+    if (!result.success) throw new Error(result.error || 'No se pudo guardar el gasto')
+
+    dialogGasto.value = false
+    await cargarDashboard()
+    toast.add({ severity: 'success', summary: 'Gasto registrado', detail: `Se agregaron RD$ ${formatCurrency(monto)}`, life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo guardar el gasto', life: 3500 })
+  } finally {
+    guardandoGasto.value = false
+  }
 }
 
 function irA(ruta: string) {
@@ -250,7 +547,7 @@ onMounted(() => {
         <p class="text-surface-500 mt-1">{{ new Date().toLocaleDateString('es-DO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) }}</p>
       </div>
       <div class="hidden sm:flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-100 dark:border-blue-800/30">
-        <i class="pi pi-mobile text-blue-500 text-lg"></i>
+        <i :class="systemMode.isGeneralStore ? 'pi pi-shop' : 'pi pi-mobile'" class="text-blue-500 text-lg"></i>
         <span class="text-sm font-medium text-blue-700 dark:text-blue-300">{{ appName }}</span>
       </div>
     </div>
@@ -290,8 +587,8 @@ onMounted(() => {
           <span class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">${{ formatCurrency(gananciaPeriodo) }}</span>
         </div>
         <div class="dashboard-kpi rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-1">
-          <span class="text-xs font-medium text-surface-400 uppercase tracking-wide">Facturas · {{ etiquetaPeriodo }}</span>
-          <span class="text-2xl font-bold text-violet-600 dark:text-violet-400">{{ cantidadPeriodo }}</span>
+          <span class="text-xs font-medium text-surface-400 uppercase tracking-wide">Gastos · {{ etiquetaPeriodo }}</span>
+          <span class="text-2xl font-bold text-rose-600 dark:text-rose-400">${{ formatCurrency(gastosPeriodo) }}</span>
         </div>
         <div class="dashboard-kpi rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 flex flex-col gap-1">
           <span class="text-xs font-medium text-surface-400 uppercase tracking-wide">Stock Bajo</span>
@@ -312,7 +609,7 @@ onMounted(() => {
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-box text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Inventario</span><span class="text-[10px] text-surface-400 -mt-1">Productos y stock</span>
           </button>
-          <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-violet-300 dark:hover:border-violet-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/taller')">
+          <button v-if="systemMode.isCellphoneStore" class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-violet-300 dark:hover:border-violet-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/taller')">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500 to-violet-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-wrench text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Taller</span><span class="text-[10px] text-surface-400 -mt-1">Reparaciones</span>
           </button>
@@ -324,6 +621,10 @@ onMounted(() => {
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-rose-500 to-rose-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-calculator text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Contabilidad</span><span class="text-[10px] text-surface-400 -mt-1">Finanzas</span>
           </button>
+          <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-orange-300 dark:hover:border-orange-600 hover:shadow-md transition-all cursor-pointer group" @click="abrirGasto">
+            <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-receipt text-white text-xl"></i></div>
+            <span class="text-sm font-semibold">Agregar Gasto</span><span class="text-[10px] text-surface-400 -mt-1">Caja actual</span>
+          </button>
           <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-sky-300 dark:hover:border-sky-600 hover:shadow-md transition-all cursor-pointer group" @click="irA('/ventas')">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-sky-500 to-sky-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-file text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Facturas</span><span class="text-[10px] text-surface-400 -mt-1">Historial</span>
@@ -332,9 +633,13 @@ onMounted(() => {
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-primary-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-globe text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Red Local</span><span class="text-[10px] text-surface-400 -mt-1">Acceso por QR</span>
           </button>
-          <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-md transition-all cursor-pointer group" @click="dialogImei = true">
+          <button v-if="systemMode.isCellphoneStore" class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-md transition-all cursor-pointer group" @click="dialogImei = true">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-search text-white text-xl"></i></div>
             <span class="text-sm font-semibold">Consultar IMEI</span><span class="text-[10px] text-surface-400 -mt-1">Busqueda externa</span>
+          </button>
+          <button v-if="systemMode.isCellphoneStore" class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-fuchsia-300 dark:hover:border-fuchsia-600 hover:shadow-md transition-all cursor-pointer group" @click="dialogBuscadorImei = true">
+            <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-fuchsia-500 to-purple-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-search-plus text-white text-xl"></i></div>
+            <span class="text-sm font-semibold text-center">Buscador General de IMEI</span><span class="text-[10px] text-surface-400 -mt-1">Todo el sistema</span>
           </button>
           <button class="dashboard-action flex flex-col items-center gap-2 p-4 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 hover:border-red-300 dark:hover:border-red-600 hover:shadow-md transition-all cursor-pointer group" @click="cerrarSesion">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow"><i class="pi pi-sign-out text-white text-xl"></i></div>
@@ -391,7 +696,99 @@ onMounted(() => {
       </div>
     </template>
 
-    <Dialog v-model:visible="dialogImei" header="Consultar IMEI" modal :style="{ width: '28rem' }" @after-hide="imeiResultado = null; imeiInput = ''">
+    <Dialog v-model:visible="dialogGasto" header="Registrar Gasto" modal :style="{ width: 'min(24rem, 92vw)' }" :closable="!guardandoGasto">
+      <div class="space-y-4">
+        <div>
+          <label class="text-xs font-semibold mb-1.5 block">Categoria</label>
+          <select v-model="gastoForm.categoria" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm outline-none focus:ring-2 focus:ring-primary-500">
+            <option value="">Seleccionar</option>
+            <option v-for="categoria in categoriasGasto" :key="categoria" :value="categoria">{{ categoria }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs font-semibold mb-1.5 block">Descripcion <span class="text-red-500">*</span></label>
+          <InputText v-model="gastoForm.descripcion" placeholder="Ej: Compra de hielo" fluid autofocus @keydown.enter="guardarGasto" />
+        </div>
+        <div>
+          <label class="text-xs font-semibold mb-1.5 block">Monto <span class="text-red-500">*</span></label>
+          <div class="flex items-center rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 overflow-hidden focus-within:ring-2 focus-within:ring-primary-500">
+            <span class="px-3 py-2.5 text-sm font-semibold bg-surface-100 dark:bg-surface-800 border-r border-surface-300 dark:border-surface-600">RD$</span>
+            <input v-model.number="gastoForm.monto" type="number" step="0.01" min="0" class="flex-1 min-w-0 px-3 py-2.5 text-sm font-bold outline-none bg-transparent" placeholder="0.00" @keydown.enter="guardarGasto" />
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-semibold mb-1.5 block">Metodo de pago</label>
+          <select v-model="gastoForm.metodo_pago" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm outline-none focus:ring-2 focus:ring-primary-500" @change="gastoForm.banco_id = null">
+            <option value="EFECTIVO">Efectivo</option>
+            <option value="TRANSFERENCIA">Transferencia</option>
+          </select>
+        </div>
+        <div v-if="gastoForm.metodo_pago === 'TRANSFERENCIA'">
+          <label class="text-xs font-semibold mb-1.5 block">Banco de origen <span class="text-red-500">*</span></label>
+          <select v-model="gastoForm.banco_id" :disabled="cargandoBancosGasto" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm outline-none focus:ring-2 focus:ring-primary-500">
+            <option :value="null">{{ cargandoBancosGasto ? 'Cargando bancos...' : 'Seleccionar banco' }}</option>
+            <option v-for="banco in bancosGasto" :key="banco.uid || banco.id" :value="banco.id">{{ banco.nombre }} · RD$ {{ formatCurrency(banco.saldo) }}</option>
+          </select>
+          <p v-if="!cargandoBancosGasto && bancosGasto.length === 0" class="text-xs text-amber-500 mt-1">No hay bancos disponibles en este almacen.</p>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="guardandoGasto" @click="dialogGasto = false" />
+        <Button label="Guardar Gasto" icon="pi pi-check" severity="warn" :loading="guardandoGasto" :disabled="!gastoForm.descripcion.trim() || Number(gastoForm.monto) <= 0 || (gastoForm.metodo_pago === 'TRANSFERENCIA' && !gastoForm.banco_id)" @click="guardarGasto" />
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-if="systemMode.isCellphoneStore"
+      v-model:visible="dialogBuscadorImei"
+      header="Buscador General de IMEI"
+      modal
+      :style="{ width: 'min(42rem, 95vw)' }"
+      @after-hide="limpiarBusquedaImeiGeneral"
+    >
+      <div class="flex flex-col gap-4 py-2">
+        <p class="text-sm text-surface-500">Busca un IMEI completo o una parte en inventario, apartados, recibidos, taller y facturas.</p>
+        <div class="flex items-center gap-2">
+          <InputText v-model="imeiBusquedaGeneral" placeholder="Escribe al menos 3 caracteres del IMEI" class="flex-1" fluid autofocus @keydown.enter="buscarImeiGeneral" />
+          <Button label="Buscar" icon="pi pi-search" :loading="buscandoImeiGeneral" @click="buscarImeiGeneral" />
+        </div>
+
+        <div v-if="buscandoImeiGeneral" class="flex items-center justify-center gap-2 py-10 text-surface-400">
+          <i class="pi pi-spin pi-spinner"></i><span>Buscando en todo el sistema...</span>
+        </div>
+        <div v-else-if="resultadosImeiGeneral.length" class="flex flex-col gap-2 max-h-[25rem] overflow-y-auto pr-1">
+          <button
+            v-for="resultado in resultadosImeiGeneral"
+            :key="resultado.clave"
+            type="button"
+            class="w-full flex items-center gap-3 p-3 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 text-left hover:border-primary-400 hover:bg-surface-50 dark:hover:bg-surface-700 transition-colors cursor-pointer"
+            @click="abrirResultadoImei(resultado)"
+          >
+            <div class="w-10 h-10 rounded-lg bg-surface-100 dark:bg-surface-700 flex items-center justify-center shrink-0">
+              <i :class="[resultado.icono, resultado.color]"></i>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-semibold uppercase tracking-wide text-surface-400">{{ resultado.origen }}</span>
+                <span class="font-semibold truncate">{{ resultado.titulo }}</span>
+              </div>
+              <p class="text-xs text-surface-500 truncate mt-0.5">{{ resultado.detalle }}</p>
+            </div>
+            <i class="pi pi-arrow-right text-surface-400 shrink-0"></i>
+          </button>
+        </div>
+        <div v-else-if="busquedaImeiRealizada" class="text-center py-10 text-surface-400">
+          <i class="pi pi-search text-2xl block mb-2"></i>
+          <p>No se encontró ese IMEI en el sistema.</p>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Limpiar" severity="secondary" text :disabled="!imeiBusquedaGeneral" @click="limpiarBusquedaImeiGeneral" />
+        <Button label="Cerrar" severity="secondary" text @click="dialogBuscadorImei = false" />
+      </template>
+    </Dialog>
+
+    <Dialog v-if="systemMode.isCellphoneStore" v-model:visible="dialogImei" header="Consultar IMEI" modal :style="{ width: '28rem' }" @after-hide="imeiResultado = null; imeiInput = ''">
       <div class="flex flex-col gap-4 py-2">
         <div class="flex items-center gap-2">
           <InputText v-model="imeiInput" placeholder="IMEI (15 digitos)" class="flex-1" fluid maxlength="15" @keydown.enter="consultarImei" />

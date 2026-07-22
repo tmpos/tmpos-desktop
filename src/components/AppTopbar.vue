@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth.store'
+import { useSystemModeStore } from '@/stores/systemMode'
 import { useAlmacenStore } from '@/stores/almacen.store'
 import { useAlertas } from '@/composables/useAlertas'
 import { ensureConfigLoaded, getImageUrl } from '@/services/tmCloudClient'
@@ -13,16 +14,33 @@ const router = useRouter()
 const route = useRoute()
 const themeStore = useThemeStore()
 const auth = useAuthStore()
+const systemMode = useSystemModeStore()
 const almacenStore = useAlmacenStore()
-const cambiandoAlmacen = ref(false)
 
 const { alertas, verificarAlertas, descartarAlerta, descartarTodas } = useAlertas()
 const alertasPanelVisible = ref(false)
+const userMenuVisible = ref(false)
+const userMenuRef = ref<HTMLElement | null>(null)
 
-function cambiarAlmacen() {
-  localStorage.setItem('almacen_id', String(almacenStore.activeId))
-  cambiandoAlmacen.value = true
-  setTimeout(() => window.location.reload(), 300)
+const usuarioNombre = computed(() => (auth.user as any)?.nombre || (auth.user as any)?.usuario || 'USUARIO')
+const usuarioCuenta = computed(() => (auth.user as any)?.usuario || (auth.user as any)?.email || '')
+const usuarioRol = computed(() => (auth.user as any)?.nivel_seguridad || (auth.user as any)?.rol || 'Usuario')
+const usuarioImagen = computed(() => getImageUrl((auth.user as any)?.imagen || '') || (auth.user as any)?.imagen || '')
+const usuarioIniciales = computed(() => usuarioNombre.value
+  .split(/\s+/)
+  .filter(Boolean)
+  .slice(0, 2)
+  .map((parte: string) => parte.charAt(0))
+  .join('')
+  .toUpperCase())
+
+function toggleUserMenu() {
+  userMenuVisible.value = !userMenuVisible.value
+  alertasPanelVisible.value = false
+}
+
+function cerrarMenusAlHacerClickFuera(event: MouseEvent) {
+  if (userMenuRef.value && !userMenuRef.value.contains(event.target as Node)) userMenuVisible.value = false
 }
 
 const empresaNombre = ref('')
@@ -33,8 +51,9 @@ async function cargarEmpresa() {
     await ensureConfigLoaded()
     const res = await window.db.getAll('empresa')
     if (res.success && res.data?.length > 0) {
-      // Empresa siempre corresponde al primer registro, no al último ni al almacén activo.
-      const e = res.data[0]
+      // La identidad visible corresponde a la empresa/tienda activa.
+      await almacenStore.load()
+      const e = res.data.find((item: any) => String(item.uid || item.almacen_uid || '') === String(almacenStore.activeUid || '')) || res.data.find((item: any) => Number(item.almacen_id || item.id) === Number(almacenStore.activeId)) || res.data[0]
       empresaNombre.value = e.nombre || ''
       empresaLogo.value = getImageUrl(e.logo || '') || e.logo || ''
       ;(window as any).__empresaNombre = e.nombre || 'MI EMPRESA'
@@ -76,8 +95,7 @@ async function verificarLicenciaPeriodicamente() {
   licenciaVerificando = true
   try {
     console.log('[AppTopbar] Verificando licencia...')
-    const offlineOnly = navigator.onLine === false
-    const res = await (window as any).electron.invoke('licencia:verificar', { offlineOnly })
+    const res = await (window as any).electron.invoke('licencia:verificar')
     console.log('[AppTopbar] Resultado licencia:', JSON.stringify(res))
     if (licenciaAceptada(res)) return
     if (licenciaDebeCerrarSesion(res)) {
@@ -152,13 +170,13 @@ async function descargarAhora() {
 onMounted(() => {
   cargarEmpresa()
   window.addEventListener('empresa:actualizada', refrescarEmpresa)
-  almacenStore.load()
   verificarAlertas()
   setInterval(verificarAlertas, 600000)
   verificarLicenciaPeriodicamente()
   licenciaInterval = setInterval(verificarLicenciaPeriodicamente, 300000)
   revisarActualizacion()
   updateInterval = setInterval(revisarActualizacion, 1800000)
+  document.addEventListener('mousedown', cerrarMenusAlHacerClickFuera)
 })
 
 function applyTopbarBg(color: string) {
@@ -217,7 +235,9 @@ const navItems: { label: string; icon: string; to: string; permiso: string }[] =
   { label: 'Soporte', icon: 'pi pi-headset', to: '/soporte', permiso: 'soporte' },
 ]
 
-const navItemsFiltrados = computed(() => navItems.filter(item => auth.tienePermiso(item.permiso)))
+const navItemsFiltrados = computed(() => navItems
+  .filter(item => !systemMode.isGeneralStore || item.to !== '/taller')
+  .filter(item => auth.tienePermiso(item.permiso)))
 
 function navigate(path: string) {
   router.push(path)
@@ -267,6 +287,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', checkWidth)
   if (licenciaInterval) { clearInterval(licenciaInterval); licenciaInterval = null }
   if (updateInterval) { clearInterval(updateInterval); updateInterval = null }
+  document.removeEventListener('mousedown', cerrarMenusAlHacerClickFuera)
 })
 </script>
 
@@ -335,26 +356,42 @@ onUnmounted(() => {
           <button class="action-btn" @click="themeStore.toggleTheme()" :title="themeStore.isDark ? 'Modo claro' : 'Modo oscuro'">
             <i :class="themeStore.isDark ? 'pi pi-sun' : 'pi pi-moon'" class="action-icon"></i>
           </button>
-          <div v-if="almacenStore.hasMultiple && (auth.isAdmin || auth.isSoporte)" class="relative flex items-center">
-            <select v-model="almacenStore.activeId" @change="cambiarAlmacen" class="appearance-none bg-transparent text-xs font-medium text-surface-600 dark:text-surface-300 border border-surface-200 dark:border-surface-600 rounded-lg px-2 py-1.5 pr-6 cursor-pointer hover:border-surface-400 focus:outline-none focus:ring-2 focus:ring-primary-500">
-              <option v-for="a in almacenStore.almacenes" :key="a.id" :value="a.id">{{ a.nombre }}</option>
-            </select>
-            <i class="pi pi-chevron-down absolute right-2 pointer-events-none text-xs text-surface-400"></i>
+          <div ref="userMenuRef" class="relative">
+            <button class="user-menu-trigger" type="button" :aria-expanded="userMenuVisible" aria-haspopup="menu" @click="toggleUserMenu">
+              <span class="user-avatar">
+                <img v-if="usuarioImagen" :src="usuarioImagen" :alt="usuarioNombre" />
+                <span v-else>{{ usuarioIniciales || 'U' }}</span>
+              </span>
+              <span class="user-trigger-info hidden sm:flex">
+                <strong>{{ usuarioNombre }}</strong>
+                <small>{{ usuarioRol }}</small>
+              </span>
+              <i class="pi pi-chevron-down user-trigger-chevron" :class="{ 'rotate-180': userMenuVisible }"></i>
+            </button>
+
+            <div v-if="userMenuVisible" class="user-dropdown" role="menu" @click.stop>
+              <div class="user-card">
+                <span class="user-card-avatar">
+                  <img v-if="usuarioImagen" :src="usuarioImagen" :alt="usuarioNombre" />
+                  <span v-else>{{ usuarioIniciales || 'U' }}</span>
+                </span>
+                <div class="min-w-0">
+                  <p class="user-card-name">{{ usuarioNombre }}</p>
+                  <p v-if="usuarioCuenta" class="user-card-account">@{{ usuarioCuenta }}</p>
+                  <span class="user-card-role">{{ usuarioRol }}</span>
+                </div>
+              </div>
+              <div class="user-dropdown-divider"></div>
+              <button class="user-logout-btn" type="button" role="menuitem" @click="userMenuVisible = false; cerrarSesion()">
+                <i class="pi pi-sign-out"></i>
+                <span>Cerrar sesión</span>
+              </button>
+            </div>
           </div>
-          <button class="action-btn action-btn-exit" @click="cerrarSesion" title="Cerrar sesion">
-            <i class="pi pi-sign-out action-icon"></i>
-            <span class="action-label">Salir</span>
-          </button>
         </div>
       </div>
     </div>
   </header>
-
-  <!-- Overlay de cambio de almacen -->
-  <div v-if="cambiandoAlmacen" class="fixed inset-0 z-[9999] flex flex-col items-center justify-center gap-4" style="background:rgba(0,0,0,0.7);backdrop-filter:blur(4px)">
-    <i class="pi pi-spin pi-spinner text-4xl text-white"></i>
-    <p class="text-white text-sm font-medium">Cambiando de almacen...</p>
-  </div>
 
   <!-- Modal de actualizacion disponible -->
   <Dialog v-model:visible="updateDialogVisible" header="Actualizacion disponible" modal :style="{ width: 'min(24rem, 90vw)' }" :closable="true">
@@ -635,6 +672,188 @@ onUnmounted(() => {
 .action-label {
   font-size: 0.875rem;
   font-weight: 500;
+}
+
+.user-menu-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2.5rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid rgba(203, 213, 225, 0.88);
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--p-slate-700);
+  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.user-menu-trigger:hover {
+  background: rgba(248, 250, 252, 0.96);
+  border-color: rgba(148, 163, 184, 0.9);
+  box-shadow: 0 10px 22px -18px rgba(15, 23, 42, 0.6);
+}
+
+.user-avatar,
+.user-card-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, var(--p-primary-500), var(--p-primary-700));
+  color: white;
+  font-weight: 700;
+}
+
+.user-avatar {
+  width: 2rem;
+  height: 2rem;
+  font-size: 0.7rem;
+}
+
+.user-card-avatar {
+  width: 3rem;
+  height: 3rem;
+  font-size: 0.9rem;
+}
+
+.user-avatar img,
+.user-card-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-trigger-info {
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  max-width: 8.5rem;
+  line-height: 1.15;
+}
+
+.user-trigger-info strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
+.user-trigger-info small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--p-slate-500);
+  font-size: 0.625rem;
+}
+
+.user-trigger-chevron {
+  color: var(--p-slate-400);
+  font-size: 0.65rem;
+  transition: transform 0.18s ease;
+}
+
+.user-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  z-index: 60;
+  width: 17rem;
+  overflow: hidden;
+  border: 1px solid rgba(203, 213, 225, 0.92);
+  border-radius: 0.9rem;
+  background: #ffffff;
+  color: #1e293b;
+  box-shadow: 0 22px 50px -24px rgba(15, 23, 42, 0.55);
+}
+
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 1rem;
+}
+
+.user-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.user-card-account {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #64748b;
+  font-size: 0.7rem;
+}
+
+.user-card-role {
+  display: inline-flex;
+  margin-top: 0.35rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 9999px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.user-dropdown-divider {
+  height: 1px;
+  background: #e2e8f0;
+}
+
+.user-logout-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.8rem 1rem;
+  color: #dc2626;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.user-logout-btn:hover {
+  background: #fef2f2;
+}
+
+:global(.dark) .user-menu-trigger {
+  border-color: rgba(71, 85, 105, 0.9);
+  background: rgba(30, 41, 59, 0.72);
+  color: #f8fafc;
+}
+
+:global(.dark) .user-menu-trigger:hover {
+  background: rgba(51, 65, 85, 0.86);
+  border-color: rgba(100, 116, 139, 0.95);
+}
+
+:global(.dark) .user-dropdown {
+  border-color: #334155;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+:global(.dark) .user-card-account,
+:global(.dark) .user-trigger-info small {
+  color: #94a3b8;
+}
+
+:global(.dark) .user-dropdown-divider {
+  background: #334155;
+}
+
+:global(.dark) .user-logout-btn:hover {
+  background: rgba(127, 29, 29, 0.3);
 }
 
 .alertas-panel {

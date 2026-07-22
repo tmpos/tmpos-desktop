@@ -1,8 +1,10 @@
 import { ref } from 'vue'
+import { useAlmacenStore } from '@/stores/almacen.store'
 
 export interface TurnoCaja {
   id: number
   almacen_id: number
+  almacen_uid?: string
   usuario: string
   monto_inicial: number
   monto_final?: number
@@ -26,6 +28,7 @@ export interface MovimientoCaja {
 }
 
 export function useCaja() {
+  const almacenStore = useAlmacenStore()
   const turnoActivo = ref<TurnoCaja | null>(null)
   const dialogAperturaCaja = ref(false)
   const dialogCierreCaja = ref(false)
@@ -41,7 +44,7 @@ export function useCaja() {
 
   async function verificarTurno() {
     try {
-      const res = await (window as any).electron.invoke('caja:getTurnoActivo')
+      const res = await (window as any).electron.invoke('caja:getTurnoActivo', almacenStore.activeUid || '')
       if (res.success && res.data) {
         turnoActivo.value = res.data
         hayTurnoAbierto.value = true
@@ -65,6 +68,8 @@ export function useCaja() {
         fecha_apertura: now.toISOString().split('T')[0],
         hora_apertura: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
         estado: 'ABIERTO',
+        almacen_id: almacenStore.activeId || 0,
+        almacen_uid: almacenStore.activeUid || '',
       }
       const res = await (window as any).electron.invoke('caja:abrirTurno', data)
       if (res.success) {
@@ -113,6 +118,8 @@ export function useCaja() {
         fecha: now.toISOString().split('T')[0],
         hora: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
         usuario: 'POS',
+        almacen_id: almacenStore.activeId || 0,
+        almacen_uid: almacenStore.activeUid || '',
       }
       const res = await (window as any).electron.invoke('caja:registrarMovimiento', data)
       if (res.success) {

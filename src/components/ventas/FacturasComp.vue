@@ -748,7 +748,7 @@ async function solicitarOtpEliminarFactura() {
     }) as any
     if (res.success) {
       for (const factura of facturas) await registrarAuditoria('solicitar_otp_eliminar', factura, { cantidad: facturas.length }, 'OK')
-      deleteOtpEmail.value = res.data?.email || ''
+    deleteOtpEmail.value = res.data?.networkUrl || ''
       deleteOtpEnviado.value = true
       toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
     } else {
@@ -860,22 +860,44 @@ async function borrar() {
     }
 
     let eliminadas = 0
+    let inventariosConError = 0
     for (const factura of facturas) {
-      if (String(factura.tipo_factura || '').toUpperCase() === 'FACTURA_VENTA') {
-        await reintegrarInventarioFactura(factura.productos)
+      let res = await window.db.delete('facturas', factura.id)
+      let verificacion = res.success ? await window.db.getById('facturas', factura.id) : null
+      if (res.success && verificacion?.success && verificacion.data) {
+        res = await window.db.delete('facturas', factura.id)
+        verificacion = await window.db.getById('facturas', factura.id)
       }
-      const res = await window.db.delete('facturas', factura.id)
-      if (res.success) {
-        eliminadas++
-        await registrarAuditoria('eliminar_factura', factura, {}, 'OK')
-      }
-      else {
+
+      if (!res.success || !verificacion?.success || verificacion.data) {
         await registrarAuditoria('eliminar_factura', factura, { error: res.error || '' }, 'ERROR')
-        toast.add({ severity: 'error', summary: 'Error', detail: res.error || `No se pudo eliminar ${factura.no_factura || factura.id}`, life: 3000 })
+        toast.add({ severity: 'error', summary: 'Error', detail: res.error || verificacion?.error || `No se pudo eliminar ${factura.no_factura || factura.id}`, life: 3000 })
         return
       }
+
+      eliminadas++
+      let inventarioRestaurado = true
+      if (String(factura.tipo_factura || '').toUpperCase() === 'FACTURA_VENTA') {
+        try {
+          await reintegrarInventarioFactura(factura.productos)
+        } catch (error: any) {
+          inventarioRestaurado = false
+          inventariosConError++
+          await registrarAuditoria('error_reintegrar_inventario_factura_eliminada', factura, {
+            error: error?.message || 'No se pudo restaurar el inventario',
+          }, 'ERROR')
+        }
+      }
+      await registrarAuditoria('eliminar_factura', factura, { inventario_restaurado: inventarioRestaurado }, 'OK')
     }
-    toast.add({ severity: 'success', summary: 'Exito', detail: `${eliminadas} factura(s) eliminada(s)`, life: 3000 })
+    toast.add({
+      severity: inventariosConError ? 'warn' : 'success',
+      summary: 'Exito',
+      detail: inventariosConError
+        ? `${eliminadas} factura(s) eliminada(s); ${inventariosConError} requiere(n) revision de inventario`
+        : `${eliminadas} factura(s) eliminada(s)`,
+      life: inventariosConError ? 5000 : 3000,
+    })
     deleteDialogVisible.value = false
     selectedFacturas.value = []
     selectedFactura.value = null
@@ -1146,7 +1168,7 @@ onMounted(async () => {
         </div>
         <div v-if="deleteOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
           <p class="text-xs text-surface-500 text-center">
-            Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la licencia' }}.
+            Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.
           </p>
           <InputOtp v-model="deleteOtp" :length="4" integerOnly />
         </div>

@@ -10,10 +10,12 @@ import Select from 'primevue/select'
 import Textarea from 'primevue/textarea'
 import { useToast } from 'primevue/usetoast'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 const toast = useToast()
+const systemMode = useSystemModeStore()
 const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
-const tipoActivo = ref('imei')
+const tipoActivo = ref(systemMode.isGeneralStore ? 'accesorio' : 'imei')
 const busqueda = ref('')
 const imeis = ref<any[]>([])
 const seriales = ref<any[]>([])
@@ -27,11 +29,11 @@ const itemSeleccionado = ref<any>(null)
 const cantidadPerdida = ref(1)
 const motivo = ref('DANADO')
 
-const tipos = [
-  { label: 'IMEI', value: 'imei' },
-  { label: 'Accesorios', value: 'accesorio' },
+const tipos = computed(() => [
+  ...(systemMode.isCellphoneStore ? [{ label: 'IMEI', value: 'imei' }] : []),
+  { label: systemMode.productLabel, value: 'accesorio' },
   { label: 'Electrodomesticos', value: 'serial' },
-]
+])
 
 const nombresTelefonos = computed(() => new Map(telefonos.value.map((item: any) => [Number(item.id), item.nombre])))
 const nombresElectro = computed(() => new Map(electrodomesticos.value.map((item: any) => [Number(item.id), item.nombre])))
@@ -49,7 +51,14 @@ const itemsDisponibles = computed(() => {
   return data.filter((item: any) => [item.nombre, item.codigo_barra, item.equipo, item.color, item.capacidad].some(v => String(v || '').toLowerCase().includes(texto)))
 })
 
-const perdidasFiltradas = computed(() => perdidas.value.filter((item: any) => String(item.estado).toUpperCase() === 'ACTIVA'))
+const perdidasFiltradas = computed(() => perdidas.value.filter((item: any) =>
+  String(item.estado).toUpperCase() === 'ACTIVA' &&
+  (systemMode.isCellphoneStore || String(item.tipo).toUpperCase() !== 'IMEI')))
+
+function tipoVisible(tipo: string) {
+  if (systemMode.isGeneralStore && String(tipo).toUpperCase() === 'ACCESORIO') return 'PRODUCTO'
+  return tipo
+}
 
 function moneda(valor: any) {
   return Number(valor || 0).toFixed(2)
@@ -157,7 +166,7 @@ onMounted(cargarDatos)
       <section class="rounded-xl border border-surface-200 dark:border-surface-700 p-4">
         <h3 class="font-semibold mb-4">Registro de pérdidas activas</h3>
         <DataTable :value="perdidasFiltradas" :loading="cargando" paginator :rows="8" size="small" dataKey="id" responsiveLayout="scroll">
-          <Column field="nombre" header="Articulo"><template #body="{ data }"><p class="font-medium">{{ data.nombre }}</p><p class="text-xs text-surface-400">{{ data.tipo }} · {{ data.fecha }} · {{ data.motivo }}</p></template></Column>
+          <Column field="nombre" header="Articulo"><template #body="{ data }"><p class="font-medium">{{ data.nombre }}</p><p class="text-xs text-surface-400">{{ tipoVisible(data.tipo) }} · {{ data.fecha }} · {{ data.motivo }}</p></template></Column>
           <Column field="cantidad" header="Cant." style="width: 5rem" />
           <Column header="Costo" style="width: 6rem"><template #body="{ data }">${{ moneda(Number(data.costo || 0) * Number(data.cantidad || 1)) }}</template></Column>
           <Column header="Accion" style="width: 7rem"><template #body="{ data }"><Button label="Restaurar" icon="pi pi-replay" severity="success" text size="small" @click="restaurarPerdida(data)" /></template></Column>

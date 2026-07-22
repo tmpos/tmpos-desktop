@@ -1,4 +1,5 @@
 import { uuidv4 } from './util'
+import { dbExecuteSQL } from './capacitorDb'
 
 function obtenerMacAddress(): string {
   return uuidv4().replace(/-/g, '').toUpperCase().slice(0, 12)
@@ -33,6 +34,86 @@ export async function initLicencia() {
 
 export async function handleElectronInvoke(channel: string, ...args: any[]): Promise<any> {
   switch (channel) {
+    case 'db:getAll':
+      return (window as any).db.getAll(args[0])
+
+    case 'db:getWhere':
+      return (window as any).db.getWhere(args[0], args[1], args[2] || [])
+
+    case 'db:getModified':
+      return (window as any).db.getModified(args[0], args[1] || '')
+
+    case 'db:getById':
+      return (window as any).db.getById(args[0], args[1])
+
+    case 'db:insert':
+      return (window as any).db.insert(args[0], args[1] || {})
+
+    case 'db:update':
+      return (window as any).db.update(args[0], args[1], args[2] || {})
+
+    case 'db:delete':
+      return (window as any).db.delete(args[0], args[1])
+
+    case 'db:exec':
+      return dbExecuteSQL(String(args[0] || ''))
+
+    case 'config:get':
+      return (window as any).config.get(args[0])
+
+    case 'config:set':
+      return (window as any).config.set(args[0], args[1])
+
+    case 'tmcloud:getConfig': {
+      const res = await (window as any).db.getById('tmcloud_config', 1)
+      return { success: true, data: res?.data || { url: '', public_key: '', secret_key: '' } }
+    }
+
+    case 'tmcloud:saveConfig': {
+      const payload = args[0] || {}
+      const actual = await (window as any).db.getById('tmcloud_config', 1)
+      const data = {
+        url: String(payload.url || '').trim().replace(/\/+$/, ''),
+        public_key: String(payload.public_key || '').trim(),
+        secret_key: String(payload.secret_key || '').trim(),
+      }
+      const res = actual?.success && actual.data
+        ? await (window as any).db.update('tmcloud_config', 1, data)
+        : await (window as any).db.insert('tmcloud_config', { id: 1, ...data })
+      return res.success ? { success: true, data } : res
+    }
+
+    case 'caja:getTurnoActivo':
+    case 'caja:getTurnoAbierto': {
+      const res = await (window as any).db.getAll('caja_turnos')
+      const almacenUid = String(args[0] || localStorage.getItem('almacen_uid') || localStorage.getItem('almacen_default_uid') || '')
+      const almacenId = Number(localStorage.getItem('almacen_id') || localStorage.getItem('almacen_default_id') || 0)
+      const turno = (res.data || []).find((item: any) => {
+        if (String(item.estado || '').toLowerCase() !== 'abierto') return false
+        if (almacenUid && item.almacen_uid) return String(item.almacen_uid) === almacenUid
+        return !almacenId || !Number(item.almacen_id) || Number(item.almacen_id) === almacenId
+      }) || null
+      return { success: true, data: turno }
+    }
+
+    case 'caja:abrirTurno': {
+      const data = args[0] || {}
+      return (window as any).db.insert('caja_turnos', {
+        monto_inicial: Number(data.monto_inicial || 0),
+        entradas: 0,
+        retiros: 0,
+        estado: 'abierto',
+        observacion: data.observacion || '',
+        usuario_id: Number(data.usuario_id || 0),
+        usuario_nombre: data.usuario_nombre || '',
+        almacen_id: Number(data.almacen_id || localStorage.getItem('almacen_id') || 0),
+        almacen_uid: String(data.almacen_uid || localStorage.getItem('almacen_uid') || ''),
+      })
+    }
+
+    case 'caja:cerrarTurno':
+      return (window as any).db.update('caja_turnos', args[0], { estado: 'cerrado' })
+
     case 'getServerUrl':
       return { success: true, url: window.location.origin }
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import Button from 'primevue/button'
+import { useSystemModeStore } from '@/stores/systemMode'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
@@ -18,6 +19,7 @@ import { encryptarPassword } from '@/funciones/funciones.js'
 import { getImageUrl, uploadImageSource, deleteImage } from '@/services/tmCloudClient'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 
+const systemMode = useSystemModeStore()
 const props = defineProps<{ orderId?: number | null; visible: boolean; initialData?: Record<string, any> | null }>()
 const emit = defineEmits<{ close: []; saved: [payload?: any] }>()
 
@@ -625,7 +627,7 @@ onMounted(async () => {
                   <label class="font-semibold text-sm">Equipo</label>
                   <InputText v-model="form.equipo" placeholder="Tipo de equipo" fluid class="uppercase" style="text-transform: uppercase;" />
                 </div>
-                <div class="flex flex-col gap-1">
+                <div v-if="systemMode.isCellphoneStore" class="flex flex-col gap-1">
                   <label class="font-semibold text-sm">IMEI</label>
                   <InputText v-model="form.imei" placeholder="IMEI" fluid />
                 </div>

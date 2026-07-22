@@ -273,6 +273,7 @@ export function useDevoluciones() {
         nota: `DEVOLUCION: ${factura.no_factura} | ${state.motivoDevolucion}`,
         metodo_pago: 'NOTA_CREDITO',
         almacen_id: factura.almacen_id || 0,
+        almacen_uid: factura.almacen_uid || '',
         usuario: 'POS',
       }
 

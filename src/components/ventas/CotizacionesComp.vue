@@ -161,7 +161,7 @@ async function solicitarOtpEliminarCotizacion() {
       entidadPlural: 'cotizaciones',
     }) as any
     if (res.success) {
-      deleteOtpEmail.value = res.data?.email || ''
+    deleteOtpEmail.value = res.data?.networkUrl || ''
       deleteOtpEnviado.value = true
       toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
     } else {
@@ -462,7 +462,7 @@ onMounted(cargarCotizaciones)
         </div>
         <div v-if="deleteOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
           <p class="text-xs text-surface-500 text-center">
-            Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la licencia' }}.
+            Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.
           </p>
           <InputOtp v-model="deleteOtp" :length="4" integerOnly />
         </div>

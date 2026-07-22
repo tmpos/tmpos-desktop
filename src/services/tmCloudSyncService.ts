@@ -1,7 +1,9 @@
 import * as tmc from './tmCloudClient'
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
-const LOCAL_SYSTEM_TABLES = ['configuracion', 'tmcloud_config', 'sync_deletes', 'bitacora', 'licencia']
+// Las credenciales SMTP son configuracion sensible de cada instalacion. No se
+// descargan ni se sobrescriben mediante sincronizacion o realtime.
+const LOCAL_SYSTEM_TABLES = ['configuracion', 'tmcloud_config', 'sync_deletes', 'bitacora', 'licencia', 'correo', 'otp_local_config']
 
 const SYSTEM_TABLE_DEFS: Record<string, string[]> = {
   configuracion: ['id INTEGER PRIMARY KEY AUTOINCREMENT', 'clave TEXT UNIQUE NOT NULL', 'valor TEXT DEFAULT ""', 'tipo TEXT DEFAULT "string"', 'categoria TEXT DEFAULT "general"', 'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP', 'updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP'],
@@ -127,6 +129,17 @@ async function setConfigValue(key: string, value: string): Promise<void> {
 
 async function ensureCloudApi(): Promise<boolean> {
   if (tmc.isConnected()) return true
+  const config = await tmc.loadConfig()
+  if (!config.url || !config.key) return false
+  try {
+    tmc.init(config)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function reloadCloudApi(): Promise<boolean> {
   const config = await tmc.loadConfig()
   if (!config.url || !config.key) return false
   try {
@@ -275,7 +288,18 @@ async function recreateLocalTable(tabla: string, columns: ServerColumn[]): Promi
 
 async function upsertLocal(tabla: string, cloudRow: any): Promise<'inserted' | 'updated' | 'skipped'> {
   const localRows = await getLocalRows(tabla)
-  const existing = localRows.find((row: any) => row.uid === cloudRow.uid)
+  let existing = localRows.find((row: any) => row.uid === cloudRow.uid)
+  // Una instalacion nueva crea usuarios iniciales con UID local. Al recibir los
+  // definitivos desde la API se reconcilian por email/usuario para no duplicar
+  // cuentas ni dejar que el registro inicial oculte al registro remoto.
+  if (!existing && tabla === 'usuarios') {
+    const email = String(cloudRow.email || '').trim().toLowerCase()
+    const usuario = String(cloudRow.usuario || '').trim().toLowerCase()
+    existing = localRows.find((row: any) =>
+      (email && String(row.email || '').trim().toLowerCase() === email) ||
+      (usuario && String(row.usuario || '').trim().toLowerCase() === usuario)
+    )
+  }
   const cleanRow = { ...cloudRow }
   if (tabla === 'imei') {
     const telefonoUid = String(cleanRow.id_equi || '').trim()
@@ -286,13 +310,22 @@ async function upsertLocal(tabla: string, cloudRow: any): Promise<'inserted' | '
       cleanRow.id_equi = telefono ? telefono.id : null
     }
   }
+  if (tabla === 'serial') {
+    const equipoUid = String(cleanRow.equipo_uid || '').trim()
+    if (equipoUid) {
+      const equipos = await getLocalRows('electrodomesticos')
+      const equipo = equipos.find((item: any) => String(item.uid || '') === equipoUid)
+      cleanRow.id_equi = equipo ? equipo.id : null
+      if (!cleanRow.equipo && equipo) cleanRow.equipo = equipo.nombre || ''
+    }
+  }
   delete cleanRow.id
   if (!existing) {
     const result = await (window as any).db.insert(tabla, cleanRow)
     if (!result.success) throw new Error(result.error || `No se pudo insertar en ${tabla}`)
     return 'inserted'
   }
-  if (sameData(existing, cleanRow) || timestamp(existing) >= timestamp(cleanRow)) return 'skipped'
+  if (sameData(existing, cleanRow) || (existing.uid === cleanRow.uid && timestamp(existing) >= timestamp(cleanRow))) return 'skipped'
   const result = await (window as any).db.update(tabla, existing.id, cleanRow)
   if (!result.success) throw new Error(result.error || `No se pudo actualizar ${tabla}`)
   return 'updated'
@@ -385,6 +418,7 @@ async function upsertCloud(tabla: string, rows: any[]): Promise<{ inserted: numb
         if (record.telefono_uid) record.id_equi = record.telefono_uid
         delete record.telefono_uid
       }
+      if (tabla === 'serial') delete record.id_equi
       return record
     })
     const res = await fetch(`${api.url}/${encodeURIComponent(tabla)}/upsert`, {
@@ -527,21 +561,22 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
 
   // --- DOWNLOAD from cloud (single call for ALL tables) ---
   if (incremental) {
-    const lastSync = await getConfigValue('ultimo_sync_tm')
-    if (lastSync) {
-      const changes = await fetchCloudSyncAll(lastSync)
+    // En la primera sincronizacion no existe marca local. Consultar desde el
+    // inicio permite descargar el proyecto antes de intentar subir defaults.
+    const lastSync = await getConfigValue('ultimo_sync_tm') || '1970-01-01 00:00:00'
+    const changes = await fetchCloudSyncAll(lastSync)
       if (changes !== null) {
         for (const [tabla, change] of Object.entries(changes)) {
           if (LOCAL_SYSTEM_TABLES.includes(tabla)) continue
           let tabDownloaded = 0
           let tabErrors = 0
-          for (const row of change.updated) {
+          for (const row of (Array.isArray(change?.updated) ? change.updated : [])) {
             try {
               const action = await upsertLocal(tabla, row)
               if (action !== 'skipped') tabDownloaded++
             } catch { tabErrors++ }
           }
-          for (const uid of change.deleted) {
+          for (const uid of (Array.isArray(change?.deleted) ? change.deleted : [])) {
             try {
               const local = (await getLocalRows(tabla)).find((r: any) => r.uid === uid)
               if (local) await (window as any).db.delete(tabla, local.id)
@@ -558,7 +593,6 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
         // bulk endpoint not available (404) — skip download entirely
         notify({ running: true, progreso: 'Bulk sync no disponible', mode })
       }
-    }
   }
 
   // --- UPLOAD local→cloud (only tables with local modifications) ---
@@ -616,6 +650,24 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
   }
   notify({ running: false, lastSync: completedAt, mode, result, details })
   return result
+}
+
+export async function refreshLoginUsers(): Promise<{ success: boolean; downloaded: number; error?: string }> {
+  try {
+    // La verificacion de licencia puede cambiar proyecto y llaves con la app
+    // abierta. Se recarga la configuracion para evitar credenciales en cache.
+    if (!await reloadCloudApi()) return { success: false, downloaded: 0, error: 'TM Cloud no configurado' }
+    const rows = await fetchCloudRows('usuarios')
+    let downloaded = 0
+    for (const row of rows) {
+      if (!row?.uid) continue
+      const action = await upsertLocal('usuarios', row)
+      if (action !== 'skipped') downloaded++
+    }
+    return { success: true, downloaded }
+  } catch (error: any) {
+    return { success: false, downloaded: 0, error: error?.message || 'No se pudieron descargar los usuarios' }
+  }
 }
 
 async function repairSystemTables(): Promise<void> {
@@ -721,6 +773,7 @@ export async function pushLocalRowToCloud(tabla: string, id: number): Promise<{ 
       if (row.telefono_uid) fila.id_equi = row.telefono_uid
       delete fila.telefono_uid
     }
+    if (tabla === 'serial') delete fila.id_equi
     if (row.uid && fila.uid === undefined) fila.uid = row.uid
     const result = await upsertCloud(tabla, [fila])
     if (result.errors > 0) return { success: false, error: 'TMPBase rechazo el registro' }

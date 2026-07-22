@@ -14,8 +14,10 @@ import Tag from 'primevue/tag'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import Swal from 'sweetalert2'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 const toast = useToast()
+const systemMode = useSystemModeStore()
 const dialogNuevoProveedor = ref(false)
 const nuevoProveedor = ref({ nombre: '', telefono: '', email: '', direccion: '' })
 
@@ -41,7 +43,7 @@ const accSearch = ref('')
 const accCantidad = ref(1)
 const accNuevo = ref({ nombre: '', costo: 0, precio_venta: 0, cantidad: 1, marca: null as number | null, categoria: null as number | null })
 const elecSearch = ref('')
-const serialData = ref({ nombre: '', id_equi: null as number | null, electrodomestico_nombre: '', color: '', capacidad: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0 })
+const serialData = ref({ nombre: '', id_equi: null as number | null, equipo_uid: '', electrodomestico_nombre: '', color: '', capacidad: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0 })
 
 const modo = ref<'registrar' | 'historial'>('registrar')
 const historialCompras = ref<any[]>([])
@@ -79,7 +81,7 @@ async function cargarHistorial() {
       window.db.getAll('accesorios'),
     ])
     const items: any[] = []
-    if (resImei.success) for (const i of (resImei.data || [])) items.push({ ...i, _tipo: 'IMEI' })
+    if (systemMode.isCellphoneStore && resImei.success) for (const i of (resImei.data || [])) items.push({ ...i, _tipo: 'IMEI' })
     if (resSerial.success) for (const s of (resSerial.data || [])) items.push({ ...s, _tipo: 'SERIAL' })
     if (resAcc.success) for (const a of (resAcc.data || [])) {
       if (a.no_compra) items.push({ ...a, _tipo: 'ACC', nombre: a.nombre, color: '', capacidad: '' })
@@ -378,6 +380,7 @@ function agregarSerialAlCarrito() {
     tipo: 'serial',
     serial: serialData.value.nombre.trim(),
     id_equi: serialData.value.id_equi,
+    equipo_uid: serialData.value.equipo_uid,
     electrodomestico_nombre: serialData.value.electrodomestico_nombre,
     color: serialData.value.color.trim().toUpperCase(),
     capacidad: serialData.value.capacidad.trim().toUpperCase(),
@@ -388,7 +391,7 @@ function agregarSerialAlCarrito() {
     proveedor: form.value.proveedor_nombre || '',
     no_compra: form.value.no_factura || '',
   })
-  serialData.value = { nombre: '', id_equi: null, electrodomestico_nombre: '', color: '', capacidad: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0 }
+  serialData.value = { nombre: '', id_equi: null, equipo_uid: '', electrodomestico_nombre: '', color: '', capacidad: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0 }
   elecSearch.value = ''
   toast.add({ severity: 'success', summary: 'Agregado', detail: 'Serial agregado a la compra', life: 2000 })
 }
@@ -434,6 +437,8 @@ async function completarCompra() {
         const res = await window.db.insert('serial', {
           nombre: item.serial,
           id_equi: item.id_equi,
+          equipo_uid: item.equipo_uid || '',
+          equipo: item.electrodomestico_nombre || '',
           costo: item.costo,
           precio_venta: item.precio_venta,
           precio_min: item.precio_min,
@@ -572,7 +577,7 @@ onMounted(cargarDatos)
       <div v-if="modo === 'registrar'" class="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-4">
         <div class="rounded-xl border border-surface-200/50 dark:border-surface-700/30 bg-surface-0 dark:bg-surface-800 p-4">
           <TabView>
-            <TabPanel header="Celulares (IMEI)">
+            <TabPanel v-if="systemMode.isCellphoneStore" header="Celulares (IMEI)">
               <div class="space-y-3">
                 <div class="relative">
                   <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-surface-400 text-xs"></i>
@@ -616,11 +621,11 @@ onMounted(cargarDatos)
               </div>
             </TabPanel>
 
-            <TabPanel header="Accesorios">
+            <TabPanel :header="systemMode.productLabel">
               <div class="space-y-3">
                 <div class="relative">
                   <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-surface-400 text-xs"></i>
-                  <InputText v-model="accSearch" placeholder="Buscar accesorio existente..." fluid class="!pl-8 h-9 text-sm" />
+                  <InputText v-model="accSearch" :placeholder="systemMode.isGeneralStore ? 'Buscar producto existente...' : 'Buscar accesorio existente...'" fluid class="!pl-8 h-9 text-sm" />
                 </div>
                 <div v-if="accSearch && accFiltrados.length > 0" class="flex flex-col gap-1 max-h-40 overflow-y-auto">
                   <div
@@ -639,10 +644,10 @@ onMounted(cargarDatos)
                   </div>
                 </div>
                 <div class="border-t border-surface-200/50 dark:border-surface-700/30 pt-3">
-                  <p class="text-xs font-semibold text-surface-500 mb-2">O crear nuevo accesorio:</p>
+                  <p class="text-xs font-semibold text-surface-500 mb-2">O crear {{ systemMode.isGeneralStore ? 'un nuevo producto' : 'un nuevo accesorio' }}:</p>
                   <div class="grid grid-cols-2 gap-2">
                     <div class="space-y-1 col-span-2">
-                      <InputText v-model="accNuevo.nombre" placeholder="Nombre del nuevo accesorio" fluid class="text-sm uppercase" style="text-transform: uppercase;" />
+                      <InputText v-model="accNuevo.nombre" :placeholder="systemMode.isGeneralStore ? 'Nombre del nuevo producto' : 'Nombre del nuevo accesorio'" fluid class="text-sm uppercase" style="text-transform: uppercase;" />
                     </div>
                     <div class="space-y-1">
                       <InputNumber v-model="accNuevo.costo" :min="0" placeholder="Costo" fluid class="text-sm" @focus="(e) => e.target.select()" />
@@ -657,7 +662,7 @@ onMounted(cargarDatos)
                       <Select v-model="accNuevo.marca" :options="marcas" optionLabel="nombre" optionValue="id" placeholder="Marca" fluid class="text-sm" />
                     </div>
                   </div>
-                  <Button label="Agregar Nuevo Accesorio" icon="pi pi-plus" class="w-full mt-2" size="small" severity="info" @click="agregarAccNuevoAlCarrito" />
+                  <Button :label="systemMode.isGeneralStore ? 'Agregar Nuevo Producto' : 'Agregar Nuevo Accesorio'" icon="pi pi-plus" class="w-full mt-2" size="small" severity="info" @click="agregarAccNuevoAlCarrito" />
                 </div>
               </div>
             </TabPanel>
@@ -673,7 +678,7 @@ onMounted(cargarDatos)
                     v-for="e in elecFiltrados" :key="e.id"
                     class="text-xs px-2 py-1 rounded-md border transition-colors cursor-pointer"
                     :class="serialData.id_equi === e.id ? 'bg-primary text-primary-contrast border-primary' : 'border-surface-200 dark:border-surface-600 hover:border-primary-300'"
-                    @click="serialData.id_equi = e.id; serialData.electrodomestico_nombre = e.nombre; elecSearch = e.nombre"
+            @click="serialData.id_equi = e.id; serialData.equipo_uid = e.uid || ''; serialData.electrodomestico_nombre = e.nombre; elecSearch = e.nombre"
                   >{{ e.nombre }}</button>
                 </div>
                 <div class="grid grid-cols-2 gap-2">

@@ -17,6 +17,76 @@ import { getMachineId, getMachineIdLegacy } from './machine-id'
 let mainWindow: BrowserWindow | null = null
 let db: InstanceType<typeof Database> | null = null
 
+type OtpLocalMode = 'fixed' | 'variable'
+
+function ensureOtpLocalTable(): void {
+  db!.exec(`CREATE TABLE IF NOT EXISTS otp_local_config (
+    id INTEGER PRIMARY KEY,
+    mode TEXT NOT NULL DEFAULT 'variable',
+    fixed_code TEXT NOT NULL DEFAULT '0000',
+    interval_seconds INTEGER NOT NULL DEFAULT 60,
+    send_email INTEGER NOT NULL DEFAULT 0,
+    secret TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+  const columns = db!.prepare(`PRAGMA table_info(otp_local_config)`).all() as any[]
+  if (!columns.some((column: any) => column.name === 'send_email')) {
+    db!.exec(`ALTER TABLE otp_local_config ADD COLUMN send_email INTEGER NOT NULL DEFAULT 0`)
+  }
+  const row = db!.prepare(`SELECT id, secret FROM otp_local_config WHERE id = 1`).get() as any
+  if (!row) {
+    db!.prepare(`INSERT INTO otp_local_config (id, mode, fixed_code, interval_seconds, secret) VALUES (1, 'variable', '0000', 60, ?)`).run(crypto.randomBytes(32).toString('hex'))
+  } else if (!row.secret) {
+    db!.prepare(`UPDATE otp_local_config SET secret = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(crypto.randomBytes(32).toString('hex'))
+  }
+}
+
+function getOtpLocalConfig(): { mode: OtpLocalMode; fixedCode: string; intervalSeconds: number; sendEmail: boolean; secret: string } {
+  ensureOtpLocalTable()
+  const row = db!.prepare(`SELECT * FROM otp_local_config WHERE id = 1`).get() as any
+  return {
+    mode: row?.mode === 'fixed' ? 'fixed' : 'variable',
+    fixedCode: /^\d{4}$/.test(String(row?.fixed_code || '')) ? String(row.fixed_code) : '0000',
+    intervalSeconds: Math.min(3600, Math.max(30, Number(row?.interval_seconds || 60))),
+    sendEmail: Number(row?.send_email || 0) === 1,
+    secret: String(row?.secret || ''),
+  }
+}
+
+function calculateVariableOtp(secret: string, intervalSeconds: number, timestamp = Date.now()): string {
+  const windowNumber = Math.floor(timestamp / 1000 / intervalSeconds)
+  const digest = crypto.createHmac('sha256', secret).update(String(windowNumber)).digest()
+  return String(digest.readUInt32BE(0) % 10000).padStart(4, '0')
+}
+
+function getOtpLocalStatus() {
+  const config = getOtpLocalConfig()
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const code = config.mode === 'fixed'
+    ? config.fixedCode
+    : calculateVariableOtp(config.secret, config.intervalSeconds)
+  const secondsRemaining = config.mode === 'fixed'
+    ? 0
+    : config.intervalSeconds - (nowSeconds % config.intervalSeconds)
+  return {
+    mode: config.mode,
+    fixedCode: config.fixedCode,
+    intervalSeconds: config.intervalSeconds,
+    sendEmail: config.sendEmail,
+    code,
+    secondsRemaining,
+    networkUrl: serverUrl ? `${serverUrl}/otp` : '',
+  }
+}
+
+function validateLocalOtp(code: string): boolean {
+  const config = getOtpLocalConfig()
+  if (config.mode === 'fixed') return code === config.fixedCode
+  const current = calculateVariableOtp(config.secret, config.intervalSeconds)
+  const previous = calculateVariableOtp(config.secret, config.intervalSeconds, Date.now() - config.intervalSeconds * 1000)
+  return code === current || code === previous
+}
+
 function getDbPath(): string {
   const dbDir = path.join(app.getPath('userData'), 'database')
   if (!fs.existsSync(dbDir)) {
@@ -52,6 +122,220 @@ async function pruneBackups(maxBackups = 5): Promise<void> {
 
 function generarUid(): string {
   return crypto.randomUUID()
+}
+
+type PortableSchemaColumn = {
+  name: string
+  type: string
+  notNull: boolean
+  defaultValue: string | number | null
+  primaryKey: boolean
+}
+
+type PortableSchemaTable = { name: string; columns: PortableSchemaColumn[] }
+
+type PortableSeed = {
+  table: string
+  match: Record<string, string | number | null>
+  data: Record<string, string | number | null>
+}
+
+type PortableConfiguration = {
+  format: 'tmpos-portable-configuration'
+  formatVersion: number
+  generatedAt: string
+  appVersion: string
+  schema: { tables: PortableSchemaTable[] }
+  defaults: { version: number; seeds: PortableSeed[] }
+  settings: Array<{ clave: string; valor: string; tipo: string; categoria: string }>
+}
+
+const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
+const PORTABLE_SEED_TABLES = new Set(['clientes', 'usuarios', 'metodos_pago', 'correo'])
+
+function quoteIdentifier(value: string): string {
+  if (!SAFE_IDENTIFIER.test(value)) throw new Error(`Identificador no valido: ${value}`)
+  return `"${value}"`
+}
+
+function normalizeSqliteType(value: unknown): string {
+  const raw = String(value || 'TEXT').trim().toUpperCase()
+  if (raw.includes('INT')) return 'INTEGER'
+  if (raw.includes('REAL') || raw.includes('FLOA') || raw.includes('DOUB')) return 'REAL'
+  if (raw.includes('BLOB')) return 'BLOB'
+  if (raw.includes('NUM') || raw.includes('DEC') || raw.includes('BOOL')) return 'NUMERIC'
+  if (raw.includes('DATE') || raw.includes('TIME')) return 'TIMESTAMP'
+  return 'TEXT'
+}
+
+function safeDefaultSql(value: unknown): string {
+  if (value === null || value === undefined || value === '') return ''
+  const raw = String(value).trim()
+  if (/^-?\d+(\.\d+)?$/.test(raw)) return ` DEFAULT ${raw}`
+  if (/^NULL$/i.test(raw)) return ' DEFAULT NULL'
+  if (/^CURRENT_(TIMESTAMP|DATE|TIME)$/i.test(raw)) return ` DEFAULT ${raw.toUpperCase()}`
+  if (/^'.*'$/.test(raw) && !raw.slice(1, -1).includes("'")) return ` DEFAULT ${raw}`
+  if (/^".*"$/.test(raw) && !raw.slice(1, -1).includes('"')) return ` DEFAULT '${raw.slice(1, -1).replace(/'/g, "''")}'`
+  return ''
+}
+
+function builtInDefaultSeeds(): PortableSeed[] {
+  return [
+    { table: 'clientes', match: { nombre: 'CONSUMIDOR FINAL' }, data: { uid: '00000000-0000-4000-8000-000000000001', nombre: 'CONSUMIDOR FINAL', cedula: '00000000000', codigo: 'CF-0001', activo: 'ACTIVO' } },
+    { table: 'usuarios', match: { email: 'admin' }, data: { uid: '00000000-0000-4000-8000-000000000101', nombre: 'ADMINISTRADOR', email: 'admin', password: '', pin: '1234', nivel_seguridad: 'Administrador', estado: 'ACTIVADO', rol: 'admin' } },
+    { table: 'usuarios', match: { email: 'cajero' }, data: { uid: '00000000-0000-4000-8000-000000000102', nombre: 'CAJERO', email: 'cajero', password: '', pin: '0000', nivel_seguridad: 'Cajero', estado: 'ACTIVADO', rol: 'cajero' } },
+    { table: 'usuarios', match: { email: 'usuario' }, data: { uid: '00000000-0000-4000-8000-000000000103', nombre: 'USUARIO', email: 'usuario', password: '', pin: '1111', nivel_seguridad: 'Usuario', estado: 'ACTIVADO', rol: 'vendedor' } },
+    { table: 'usuarios', match: { email: 'soporte' }, data: { uid: '00000000-0000-4000-8000-000000000104', nombre: 'SOPORTE', email: 'soporte', password: '', pin: '2222', nivel_seguridad: 'Soporte', estado: 'ACTIVADO', rol: 'soporte' } },
+    { table: 'metodos_pago', match: { nombre: 'EFECTIVO' }, data: { uid: '00000000-0000-4000-8000-000000000201', nombre: 'EFECTIVO', porcentaje: 0, estado: 'ACTIVO' } },
+    { table: 'metodos_pago', match: { nombre: 'TARJETA' }, data: { uid: '00000000-0000-4000-8000-000000000202', nombre: 'TARJETA', porcentaje: 2.5, estado: 'ACTIVO' } },
+    { table: 'metodos_pago', match: { nombre: 'TRANSFERENCIA' }, data: { uid: '00000000-0000-4000-8000-000000000203', nombre: 'TRANSFERENCIA', porcentaje: 0, estado: 'ACTIVO' } },
+    { table: 'correo', match: { id: 1 }, data: { id: 1, uid: '00000000-0000-4000-8000-000000000301', host: 'smtp.gmail.com', puerto: '587', seguridad: 'STARTTLS', activo: 0 } },
+  ]
+}
+
+function createPortableConfiguration(): PortableConfiguration {
+  if (!db) throw new Error('Base de datos no disponible')
+  const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations' ORDER BY name`).all() as any[]
+  const configTableExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='configuracion'`).get()
+  const sensitiveSetting = /(secret|token|password|clave_api|api_key|licencia|smtp|correo_password)/i
+  const settings = configTableExists
+    ? (db.prepare(`SELECT clave, valor, tipo, categoria FROM configuracion ORDER BY clave`).all() as any[])
+        .filter(row => !sensitiveSetting.test(String(row.clave || '')))
+        .map(row => ({ clave: String(row.clave || ''), valor: String(row.valor ?? ''), tipo: String(row.tipo || 'string'), categoria: String(row.categoria || '') }))
+    : []
+  return {
+    format: 'tmpos-portable-configuration',
+    formatVersion: 1,
+    generatedAt: new Date().toISOString(),
+    appVersion: app.getVersion(),
+    schema: {
+      tables: tables.map(table => ({
+        name: String(table.name),
+        columns: (db!.prepare(`PRAGMA table_info(${quoteIdentifier(String(table.name))})`).all() as any[]).map(column => ({
+          name: String(column.name),
+          type: normalizeSqliteType(column.type),
+          notNull: Boolean(column.notnull),
+          defaultValue: column.dflt_value ?? null,
+          primaryKey: Boolean(column.pk),
+        })),
+      })),
+    },
+    defaults: { version: 1, seeds: builtInDefaultSeeds() },
+    settings,
+  }
+}
+
+function validatePortableConfiguration(input: any): PortableConfiguration {
+  if (!input || input.format !== 'tmpos-portable-configuration' || Number(input.formatVersion) !== 1 || !Array.isArray(input.schema?.tables)) {
+    throw new Error('El archivo no es una configuracion portable valida de TMPOS')
+  }
+  if (input.schema.tables.length > 500) throw new Error('La configuracion contiene demasiadas tablas')
+  for (const table of input.schema.tables) {
+    quoteIdentifier(String(table?.name || ''))
+    if (!Array.isArray(table.columns) || table.columns.length === 0 || table.columns.length > 500) throw new Error(`Estructura invalida en ${table.name}`)
+    for (const column of table.columns) quoteIdentifier(String(column?.name || ''))
+  }
+  return input as PortableConfiguration
+}
+
+function applyPortableConfiguration(input: any) {
+  if (!db) throw new Error('Base de datos no disponible')
+  const pack = validatePortableConfiguration(input)
+  const result = { tablesCreated: [] as string[], columnsAdded: [] as string[], tablesUnchanged: [] as string[] }
+  const transaction = db.transaction(() => {
+    for (const table of pack.schema.tables) {
+      const tableName = quoteIdentifier(table.name)
+      const exists = db!.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table.name)
+      if (!exists) {
+        const definitions = table.columns.map((column, index) => {
+          const name = quoteIdentifier(column.name)
+          const type = normalizeSqliteType(column.type)
+          if (column.primaryKey && type === 'INTEGER') return `${name} INTEGER PRIMARY KEY AUTOINCREMENT`
+          const primary = column.primaryKey ? ' PRIMARY KEY' : ''
+          const notNull = column.notNull && safeDefaultSql(column.defaultValue) ? ' NOT NULL' : ''
+          return `${name} ${type}${primary}${notNull}${safeDefaultSql(column.defaultValue)}`
+        })
+        db!.exec(`CREATE TABLE ${tableName} (${definitions.join(', ')})`)
+        result.tablesCreated.push(table.name)
+        continue
+      }
+      const existing = new Set((db!.prepare(`PRAGMA table_info(${tableName})`).all() as any[]).map(column => String(column.name)))
+      let added = false
+      for (const column of table.columns) {
+        if (existing.has(column.name)) continue
+        const rawDefault = safeDefaultSql(column.defaultValue)
+        const alterDefault = /CURRENT_(TIMESTAMP|DATE|TIME)/i.test(rawDefault) ? '' : rawDefault
+        const definition = `${quoteIdentifier(column.name)} ${normalizeSqliteType(column.type)}${alterDefault}`
+        db!.exec(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`)
+        result.columnsAdded.push(`${table.name}.${column.name}`)
+        added = true
+      }
+      if (!added) result.tablesUnchanged.push(table.name)
+    }
+    const settings = Array.isArray(pack.settings) ? pack.settings.slice(0, 500) : []
+    const hasConfiguration = db!.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='configuracion'`).get()
+    if (hasConfiguration) {
+      const columns = new Set((db!.prepare(`PRAGMA table_info("configuracion")`).all() as any[]).map(column => String(column.name)))
+      if (columns.has('clave') && columns.has('valor')) {
+        const sensitiveSetting = /(secret|token|password|clave_api|api_key|licencia|smtp|correo_password)/i
+        for (const setting of settings) {
+          const clave = String(setting?.clave || '').trim()
+          if (!clave || sensitiveSetting.test(clave)) continue
+          const current = db!.prepare(`SELECT id FROM configuracion WHERE clave = ? LIMIT 1`).get(clave) as any
+          const data: Record<string, any> = { valor: String(setting.valor ?? '') }
+          if (columns.has('tipo')) data.tipo = String(setting.tipo || 'string')
+          if (columns.has('categoria')) data.categoria = String(setting.categoria || '')
+          if (current?.id) {
+            const keys = Object.keys(data)
+            db!.prepare(`UPDATE configuracion SET ${keys.map(key => `${quoteIdentifier(key)} = ?`).join(', ')} WHERE id = ?`).run(...keys.map(key => data[key]), current.id)
+          } else {
+            const insert = { clave, ...data }
+            const keys = Object.keys(insert)
+            db!.prepare(`INSERT INTO configuracion (${keys.map(quoteIdentifier).join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...keys.map(key => (insert as any)[key]))
+          }
+        }
+      }
+    }
+  })
+  transaction()
+  return result
+}
+
+function seedPortableDefaults(input?: any) {
+  if (!db) throw new Error('Base de datos no disponible')
+  const rawSeeds = Array.isArray(input?.seeds) ? input.seeds : builtInDefaultSeeds()
+  const seeds = rawSeeds.slice(0, 100).filter((seed: any) => PORTABLE_SEED_TABLES.has(String(seed?.table || '')))
+  const result = { inserted: [] as string[], existing: [] as string[], skipped: [] as string[] }
+  const hasEmpresa = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='empresa'`).get()
+  const principal = hasEmpresa ? db.prepare(`SELECT id, uid FROM empresa ORDER BY id LIMIT 1`).get() as any : null
+  const transaction = db.transaction(() => {
+    for (const seed of seeds) {
+      try {
+        const table = String(seed.table)
+        const exists = db!.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table)
+        if (!exists) { result.skipped.push(table); continue }
+        const columns = new Set((db!.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as any[]).map(column => String(column.name)))
+        const matchEntries = Object.entries(seed.match || {}).filter(([key]) => columns.has(key) && SAFE_IDENTIFIER.test(key))
+        if (!matchEntries.length) { result.skipped.push(table); continue }
+        const where = matchEntries.map(([key]) => `${quoteIdentifier(key)} = ?`).join(' AND ')
+        if (db!.prepare(`SELECT 1 FROM ${quoteIdentifier(table)} WHERE ${where} LIMIT 1`).get(...matchEntries.map(([, value]) => value))) {
+          result.existing.push(`${table}:${String(matchEntries[0][1])}`)
+          continue
+        }
+        const data: Record<string, any> = {}
+        for (const [key, value] of Object.entries(seed.data || {})) if (columns.has(key) && SAFE_IDENTIFIER.test(key) && (value === null || ['string', 'number'].includes(typeof value))) data[key] = value
+        if (columns.has('uid') && !data.uid) data.uid = generarUid()
+        if (columns.has('almacen_id') && data.almacen_id === undefined) data.almacen_id = Number(principal?.id || 0)
+        if (columns.has('almacen_uid') && data.almacen_uid === undefined) data.almacen_uid = String(principal?.uid || '')
+        const keys = Object.keys(data)
+        if (!keys.length) { result.skipped.push(table); continue }
+        db!.prepare(`INSERT INTO ${quoteIdentifier(table)} (${keys.map(quoteIdentifier).join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...keys.map(key => data[key]))
+        result.inserted.push(`${table}:${String(matchEntries[0][1])}`)
+      } catch { result.skipped.push(String(seed?.table || 'desconocida')) }
+    }
+  })
+  transaction()
+  return result
 }
 
 function initDatabase(): void {
@@ -103,7 +387,7 @@ function initDatabase(): void {
     empresa: { encargado: "TEXT DEFAULT ''", logo: "TEXT DEFAULT ''", impuesto: 'REAL DEFAULT 18', impuesto_incluido: 'INTEGER DEFAULT 0', moneda: "TEXT DEFAULT 'RD$'", tipo_documento_defecto: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     telefonos: { imagen: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     imei: { id_equi: 'INTEGER', telefono_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', color: "TEXT DEFAULT ''", capacidad: "TEXT DEFAULT ''", bateria: "TEXT DEFAULT ''", estado: "TEXT DEFAULT 'DISPONIBLE'", fecha_venta: "TEXT DEFAULT ''", comprador: "TEXT DEFAULT ''", proveedor: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", precio_vendido: 'REAL DEFAULT 0', hora_venta: "TEXT DEFAULT ''", no_factura: "TEXT DEFAULT ''", nota: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
-    serial: { id_equi: 'INTEGER', costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', color: "TEXT DEFAULT ''", capacidad: "TEXT DEFAULT ''", bateria: "TEXT DEFAULT ''", estado: "TEXT DEFAULT 'DISPONIBLE'", almacen_id: 'INTEGER DEFAULT 0' },
+    serial: { id_equi: 'INTEGER', equipo_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', color: "TEXT DEFAULT ''", capacidad: "TEXT DEFAULT ''", bateria: "TEXT DEFAULT ''", estado: "TEXT DEFAULT 'DISPONIBLE'", almacen_id: 'INTEGER DEFAULT 0' },
     accesorios: { codigo_barra: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', cantidad: 'INTEGER DEFAULT 1', alerta: 'INTEGER DEFAULT 10', proveedor_id: 'INTEGER DEFAULT 0', imagen: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     facturas: { costo: 'REAL DEFAULT 0', ganancia: 'REAL DEFAULT 0', financiera: "TEXT DEFAULT ''", turno_id: 'INTEGER DEFAULT 0', canal_venta: "TEXT DEFAULT ''", ncf: "TEXT DEFAULT ''", tipo_comprobante: "TEXT DEFAULT ''", comprobante_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
     clientes: { imagen: "TEXT DEFAULT ''", rnc: "TEXT DEFAULT ''", nota: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
@@ -112,6 +396,7 @@ function initDatabase(): void {
     cuentas_pagar: { pagos: "TEXT DEFAULT '[]'", fecha_vencimiento: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     gastos: { turno_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
     perdidas: { detalle: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    transferencias: { origen_uid: "TEXT DEFAULT ''", destino_uid: "TEXT DEFAULT ''", almacen_uid: "TEXT DEFAULT ''" },
   }
 
   function auditarEsquemaLocal(): void {
@@ -128,6 +413,7 @@ function initDatabase(): void {
       if (tabla.name === 'schema_migrations') continue
       const existentes = new Set(tableColumns(tabla.name))
       if (!existentes.has('almacen_id')) db!.exec(`ALTER TABLE "${tabla.name}" ADD COLUMN almacen_id INTEGER DEFAULT 0`)
+      if (!existentes.has('almacen_uid')) db!.exec(`ALTER TABLE "${tabla.name}" ADD COLUMN almacen_uid TEXT DEFAULT ''`)
       if (!existentes.has('uid')) db!.exec(`ALTER TABLE "${tabla.name}" ADD COLUMN uid TEXT DEFAULT ''`)
       if (!existentes.has('created_at')) db!.exec(`ALTER TABLE "${tabla.name}" ADD COLUMN created_at TEXT DEFAULT ''`)
       if (!existentes.has('updated_at')) db!.exec(`ALTER TABLE "${tabla.name}" ADD COLUMN updated_at TEXT DEFAULT ''`)
@@ -135,8 +421,33 @@ function initDatabase(): void {
       const asignarUid = db!.prepare(`UPDATE "${tabla.name}" SET uid = ? WHERE id = ?`)
       for (const fila of sinUid) asignarUid.run(generarUid(), fila.id)
     }
+    // almacen_id solo es valido dentro de esta base local. almacen_uid es la
+    // referencia estable que viaja entre computadoras y la API.
+    if (tableExists('empresa')) {
+      const empresas = db!.prepare(`SELECT id, almacen_id, uid FROM empresa WHERE uid IS NOT NULL AND uid <> '' ORDER BY id`).all() as any[]
+      const uidPrincipal = String(empresas[0]?.uid || '')
+      for (const tabla of tablas) {
+        if (tabla.name === 'schema_migrations') continue
+        const columnas = new Set(tableColumns(tabla.name))
+        if (!columnas.has('almacen_uid')) continue
+        if (tabla.name === 'empresa') {
+          db!.exec(`UPDATE empresa SET almacen_uid = uid WHERE almacen_uid IS NULL OR almacen_uid = ''`)
+          continue
+        }
+        if (columnas.has('almacen_id')) {
+          const asignar = db!.prepare(`UPDATE "${tabla.name}" SET almacen_uid = ? WHERE (almacen_uid IS NULL OR almacen_uid = '') AND almacen_id = ?`)
+          for (const empresa of empresas) asignar.run(String(empresa.uid), Number(empresa.almacen_id) || Number(empresa.id))
+          if (uidPrincipal) db!.prepare(`UPDATE "${tabla.name}" SET almacen_uid = ? WHERE (almacen_uid IS NULL OR almacen_uid = '') AND (almacen_id IS NULL OR almacen_id = 0)`).run(uidPrincipal)
+        }
+      }
+    }
+    if (tableExists('serial') && tableExists('electrodomesticos')) {
+      db!.exec(`UPDATE serial SET equipo_uid = (SELECT uid FROM electrodomesticos WHERE electrodomesticos.id = serial.id_equi) WHERE (equipo_uid IS NULL OR equipo_uid = '') AND id_equi IS NOT NULL`)
+      db!.exec(`UPDATE serial SET equipo = (SELECT nombre FROM electrodomesticos WHERE electrodomesticos.id = serial.id_equi) WHERE (equipo IS NULL OR equipo = '') AND id_equi IS NOT NULL`)
+      db!.exec(`UPDATE serial SET id_equi = (SELECT id FROM electrodomesticos WHERE electrodomesticos.uid = serial.equipo_uid) WHERE equipo_uid IS NOT NULL AND equipo_uid <> '' AND EXISTS (SELECT 1 FROM electrodomesticos WHERE electrodomesticos.uid = serial.equipo_uid)`)
+    }
     db!.prepare(`INSERT OR REPLACE INTO schema_migrations (version, detalle) VALUES (?, ?)`)
-      .run(20260714, 'Auditoria automatica de columnas')
+      .run(20260721, 'Relacion estable de almacenes mediante almacen_uid')
   }
 
   function ensureProveedoresTable(): void {
@@ -284,8 +595,8 @@ function initDatabase(): void {
       const columns = tableColumns('gastos')
       if (!columns.includes('id')) {
         db!.exec(`ALTER TABLE gastos RENAME TO gastos_old`)
-        db!.exec(`CREATE TABLE gastos (id INTEGER PRIMARY KEY AUTOINCREMENT,cantidad REAL DEFAULT 0,fecha TEXT DEFAULT '',hora TEXT DEFAULT '',comentario TEXT DEFAULT '',turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
-        const copyColumns = ['cantidad', 'fecha', 'hora', 'comentario', 'turno_id', 'created_at', 'updated_at'].filter(c => columns.includes(c))
+        db!.exec(`CREATE TABLE gastos (id INTEGER PRIMARY KEY AUTOINCREMENT,cantidad REAL DEFAULT 0,fecha TEXT DEFAULT '',hora TEXT DEFAULT '',comentario TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',banco_id INTEGER DEFAULT 0,banco_uid TEXT DEFAULT '',banco_nombre TEXT DEFAULT '',turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+        const copyColumns = ['cantidad', 'fecha', 'hora', 'comentario', 'metodo_pago', 'banco_id', 'banco_uid', 'banco_nombre', 'turno_id', 'created_at', 'updated_at'].filter(c => columns.includes(c))
         if (copyColumns.length > 0) {
           const columnsSql = copyColumns.map(column => `"${column}"`).join(', ')
           db!.exec(`INSERT INTO gastos (${columnsSql}) SELECT ${columnsSql} FROM gastos_old`)
@@ -296,19 +607,23 @@ function initDatabase(): void {
       for (const column of ['cantidad', 'fecha', 'hora', 'comentario', 'created_at', 'updated_at']) {
         if (!columns.includes(column)) db!.exec(`ALTER TABLE gastos ADD COLUMN "${column}" TEXT DEFAULT ''`)
       }
+      if (!columns.includes('metodo_pago')) db!.exec(`ALTER TABLE gastos ADD COLUMN metodo_pago TEXT DEFAULT 'EFECTIVO'`)
+      if (!columns.includes('banco_id')) db!.exec(`ALTER TABLE gastos ADD COLUMN banco_id INTEGER DEFAULT 0`)
+      if (!columns.includes('banco_uid')) db!.exec(`ALTER TABLE gastos ADD COLUMN banco_uid TEXT DEFAULT ''`)
+      if (!columns.includes('banco_nombre')) db!.exec(`ALTER TABLE gastos ADD COLUMN banco_nombre TEXT DEFAULT ''`)
       if (!columns.includes('turno_id')) db!.exec(`ALTER TABLE gastos ADD COLUMN turno_id INTEGER DEFAULT 0`)
       return
     }
-    db!.exec(`CREATE TABLE gastos (id INTEGER PRIMARY KEY AUTOINCREMENT,cantidad REAL DEFAULT 0,fecha TEXT DEFAULT '',hora TEXT DEFAULT '',comentario TEXT DEFAULT '',turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+    db!.exec(`CREATE TABLE gastos (id INTEGER PRIMARY KEY AUTOINCREMENT,cantidad REAL DEFAULT 0,fecha TEXT DEFAULT '',hora TEXT DEFAULT '',comentario TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',banco_id INTEGER DEFAULT 0,banco_uid TEXT DEFAULT '',banco_nombre TEXT DEFAULT '',turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   }
 
   function ensureFacturasTable(): void {
-    const requiredColumns = ['cheque', 'token', 'cajero', 'no_factura', 'tipo_factura', 'comprobante', 'cod_cliente', 'nombre_cliente', 'telefono_cliente', 'productos', 'vendedor', 'metodo_pago', 'tarjeta', 'transferencia', 'efectivo', 'canal_venta', 'fecha_emision', 'impuesto', 'descuento', 'subtotal', 'costo', 'total', 'ganancia', 'financiera', 'estado_factura', 'fecha_estado', 'mes', 'year', 'hora', 'otro', 'nota', 'usuario', 'identificadordb', 'total_institucion', 'total_cliente', 'ncf', 'tipo_comprobante', 'comprobante_id', 'turno_id', 'created_at', 'updated_at']
+    const requiredColumns = ['cheque', 'token', 'cajero', 'no_factura', 'tipo_factura', 'comprobante', 'cod_cliente', 'nombre_cliente', 'telefono_cliente', 'productos', 'vendedor', 'metodo_pago', 'tarjeta', 'porcentaje_tarjeta', 'monto_porcentaje_tarjeta', 'transferencia', 'efectivo', 'canal_venta', 'fecha_emision', 'impuesto', 'descuento', 'subtotal', 'costo', 'total', 'ganancia', 'financiera', 'estado_factura', 'fecha_estado', 'mes', 'year', 'hora', 'otro', 'nota', 'usuario', 'identificadordb', 'total_institucion', 'total_cliente', 'ncf', 'tipo_comprobante', 'comprobante_id', 'turno_id', 'created_at', 'updated_at']
     if (tableExists('facturas')) {
       const columns = tableColumns('facturas')
       if (!columns.includes('id')) {
         db!.exec(`ALTER TABLE facturas RENAME TO facturas_old`)
-        db!.exec(`CREATE TABLE facturas (id INTEGER PRIMARY KEY AUTOINCREMENT,cheque TEXT DEFAULT '',token TEXT DEFAULT '',cajero TEXT DEFAULT '',no_factura TEXT DEFAULT '',tipo_factura TEXT DEFAULT '',comprobante TEXT DEFAULT '',cod_cliente TEXT DEFAULT '',nombre_cliente TEXT DEFAULT '',telefono_cliente TEXT DEFAULT '',productos TEXT DEFAULT '',vendedor TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',tarjeta REAL DEFAULT 0,transferencia REAL DEFAULT 0,efectivo REAL DEFAULT 0,canal_venta TEXT DEFAULT '',fecha_emision TEXT DEFAULT '',impuesto REAL DEFAULT 0,descuento REAL DEFAULT 0,subtotal REAL DEFAULT 0,costo REAL DEFAULT 0,total REAL DEFAULT 0,ganancia REAL DEFAULT 0,financiera TEXT DEFAULT '',estado_factura TEXT DEFAULT 'PENDIENTE',fecha_estado TEXT DEFAULT '',mes TEXT DEFAULT '',year TEXT DEFAULT '',hora TEXT DEFAULT '',otro TEXT DEFAULT '',nota TEXT DEFAULT '',usuario TEXT DEFAULT '',identificadordb TEXT DEFAULT '',total_institucion REAL DEFAULT 0,total_cliente REAL DEFAULT 0,ncf TEXT DEFAULT '',tipo_comprobante TEXT DEFAULT '',comprobante_id INTEGER DEFAULT 0,turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+        db!.exec(`CREATE TABLE facturas (id INTEGER PRIMARY KEY AUTOINCREMENT,cheque TEXT DEFAULT '',token TEXT DEFAULT '',cajero TEXT DEFAULT '',no_factura TEXT DEFAULT '',tipo_factura TEXT DEFAULT '',comprobante TEXT DEFAULT '',cod_cliente TEXT DEFAULT '',nombre_cliente TEXT DEFAULT '',telefono_cliente TEXT DEFAULT '',productos TEXT DEFAULT '',vendedor TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',tarjeta REAL DEFAULT 0,porcentaje_tarjeta REAL DEFAULT 0,monto_porcentaje_tarjeta REAL DEFAULT 0,transferencia REAL DEFAULT 0,efectivo REAL DEFAULT 0,canal_venta TEXT DEFAULT '',fecha_emision TEXT DEFAULT '',impuesto REAL DEFAULT 0,descuento REAL DEFAULT 0,subtotal REAL DEFAULT 0,costo REAL DEFAULT 0,total REAL DEFAULT 0,ganancia REAL DEFAULT 0,financiera TEXT DEFAULT '',estado_factura TEXT DEFAULT 'PENDIENTE',fecha_estado TEXT DEFAULT '',mes TEXT DEFAULT '',year TEXT DEFAULT '',hora TEXT DEFAULT '',otro TEXT DEFAULT '',nota TEXT DEFAULT '',usuario TEXT DEFAULT '',identificadordb TEXT DEFAULT '',total_institucion REAL DEFAULT 0,total_cliente REAL DEFAULT 0,ncf TEXT DEFAULT '',tipo_comprobante TEXT DEFAULT '',comprobante_id INTEGER DEFAULT 0,turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
         const copyColumns = requiredColumns.filter(column => columns.includes(column))
         if (copyColumns.length > 0) {
           const columnsSql = copyColumns.map(column => `"${column}"`).join(', ')
@@ -319,11 +634,46 @@ function initDatabase(): void {
       }
       if (!columns.includes('turno_id')) db!.exec(`ALTER TABLE facturas ADD COLUMN turno_id INTEGER DEFAULT 0`)
       for (const column of requiredColumns) {
-        if (!columns.includes(column) && column !== 'turno_id') db!.exec(`ALTER TABLE facturas ADD COLUMN "${column}" ${['costo', 'ganancia'].includes(column) ? 'REAL DEFAULT 0' : "TEXT DEFAULT ''"}`)
+        if (!columns.includes(column) && column !== 'turno_id') db!.exec(`ALTER TABLE facturas ADD COLUMN "${column}" ${['tarjeta', 'porcentaje_tarjeta', 'monto_porcentaje_tarjeta', 'transferencia', 'efectivo', 'impuesto', 'descuento', 'subtotal', 'costo', 'total', 'ganancia', 'total_institucion', 'total_cliente'].includes(column) ? 'REAL DEFAULT 0' : "TEXT DEFAULT ''"}`)
       }
       return
     }
-    db!.exec(`CREATE TABLE facturas (id INTEGER PRIMARY KEY AUTOINCREMENT,cheque TEXT DEFAULT '',token TEXT DEFAULT '',cajero TEXT DEFAULT '',no_factura TEXT DEFAULT '',tipo_factura TEXT DEFAULT '',comprobante TEXT DEFAULT '',cod_cliente TEXT DEFAULT '',nombre_cliente TEXT DEFAULT '',telefono_cliente TEXT DEFAULT '',productos TEXT DEFAULT '',vendedor TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',tarjeta REAL DEFAULT 0,transferencia REAL DEFAULT 0,efectivo REAL DEFAULT 0,canal_venta TEXT DEFAULT '',fecha_emision TEXT DEFAULT '',impuesto REAL DEFAULT 0,descuento REAL DEFAULT 0,subtotal REAL DEFAULT 0,costo REAL DEFAULT 0,total REAL DEFAULT 0,ganancia REAL DEFAULT 0,financiera TEXT DEFAULT '',estado_factura TEXT DEFAULT 'PENDIENTE',fecha_estado TEXT DEFAULT '',mes TEXT DEFAULT '',year TEXT DEFAULT '',hora TEXT DEFAULT '',otro TEXT DEFAULT '',nota TEXT DEFAULT '',usuario TEXT DEFAULT '',identificadordb TEXT DEFAULT '',total_institucion REAL DEFAULT 0,total_cliente REAL DEFAULT 0,ncf TEXT DEFAULT '',tipo_comprobante TEXT DEFAULT '',comprobante_id INTEGER DEFAULT 0,turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+    db!.exec(`CREATE TABLE facturas (id INTEGER PRIMARY KEY AUTOINCREMENT,cheque TEXT DEFAULT '',token TEXT DEFAULT '',cajero TEXT DEFAULT '',no_factura TEXT DEFAULT '',tipo_factura TEXT DEFAULT '',comprobante TEXT DEFAULT '',cod_cliente TEXT DEFAULT '',nombre_cliente TEXT DEFAULT '',telefono_cliente TEXT DEFAULT '',productos TEXT DEFAULT '',vendedor TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',tarjeta REAL DEFAULT 0,porcentaje_tarjeta REAL DEFAULT 0,monto_porcentaje_tarjeta REAL DEFAULT 0,transferencia REAL DEFAULT 0,efectivo REAL DEFAULT 0,canal_venta TEXT DEFAULT '',fecha_emision TEXT DEFAULT '',impuesto REAL DEFAULT 0,descuento REAL DEFAULT 0,subtotal REAL DEFAULT 0,costo REAL DEFAULT 0,total REAL DEFAULT 0,ganancia REAL DEFAULT 0,financiera TEXT DEFAULT '',estado_factura TEXT DEFAULT 'PENDIENTE',fecha_estado TEXT DEFAULT '',mes TEXT DEFAULT '',year TEXT DEFAULT '',hora TEXT DEFAULT '',otro TEXT DEFAULT '',nota TEXT DEFAULT '',usuario TEXT DEFAULT '',identificadordb TEXT DEFAULT '',total_institucion REAL DEFAULT 0,total_cliente REAL DEFAULT 0,ncf TEXT DEFAULT '',tipo_comprobante TEXT DEFAULT '',comprobante_id INTEGER DEFAULT 0,turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  }
+
+  function backfillPorcentajeTarjetaFacturas(): void {
+    if (!tableExists('facturas')) return
+    const columns = tableColumns('facturas')
+    if (!columns.includes('porcentaje_tarjeta') || !columns.includes('monto_porcentaje_tarjeta')) return
+
+    const porcentajes = new Map<string, number>()
+    if (tableExists('metodos_pago')) {
+      const metodos = db!.prepare(`SELECT nombre, porcentaje FROM metodos_pago`).all() as any[]
+      for (const metodo of metodos) porcentajes.set(String(metodo.nombre || '').trim().toUpperCase(), Number(metodo.porcentaje || 0))
+    }
+
+    const facturasTarjeta = db!.prepare(`SELECT id, metodo_pago, productos, total, descuento, impuesto, financiera, porcentaje_tarjeta, monto_porcentaje_tarjeta FROM facturas WHERE UPPER(metodo_pago) LIKE '%TARJETA%' AND COALESCE(monto_porcentaje_tarjeta, 0) <= 0`).all() as any[]
+    const actualizar = db!.prepare(`UPDATE facturas SET porcentaje_tarjeta = ?, monto_porcentaje_tarjeta = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+    const transaction = db!.transaction(() => {
+      for (const factura of facturasTarjeta) {
+        let productos: any[] = []
+        let financiera: any = {}
+        try { productos = Array.isArray(factura.productos) ? factura.productos : JSON.parse(factura.productos || '[]') } catch {}
+        try { financiera = typeof factura.financiera === 'string' ? JSON.parse(factura.financiera || '{}') : factura.financiera || {} } catch {}
+        const subtotalProductos = productos.reduce((sum: number, producto: any) => {
+          const cantidad = Number(producto?.cantidad || 1)
+          const precio = Number(producto?.precio ?? producto?.precio_venta ?? 0)
+          return sum + (precio * cantidad)
+        }, 0)
+        let porcentaje = Number(factura.porcentaje_tarjeta || financiera?.comision_porcentaje || porcentajes.get(String(factura.metodo_pago || '').trim().toUpperCase()) || 0)
+        let monto = Number(factura.monto_porcentaje_tarjeta || financiera?.monto_comision || 0)
+        if (monto <= 0 && porcentaje > 0 && subtotalProductos > 0) monto = subtotalProductos * (porcentaje / 100)
+        if (monto <= 0) monto = Math.max(0, Number(factura.total || 0) - subtotalProductos + Number(factura.descuento || 0) - Number(factura.impuesto || 0))
+        if (porcentaje <= 0 && monto > 0 && subtotalProductos > 0) porcentaje = (monto / subtotalProductos) * 100
+        if (monto > 0) actualizar.run(Number(porcentaje.toFixed(4)), Number(monto.toFixed(2)), factura.id)
+      }
+    })
+    transaction()
   }
 
   function ensureEmpresaTable(): void {
@@ -369,8 +719,10 @@ function initDatabase(): void {
   ensurePiezasTable()
   ensureTecnicosTable()
   ensureCorreoTable()
+  ensureOtpLocalTable()
   ensureGastosTable()
   ensureFacturasTable()
+  backfillPorcentajeTarjetaFacturas()
   ensureEmpresaTable()
 
   db.exec(`CREATE TABLE IF NOT EXISTS impresoras_config (id INTEGER PRIMARY KEY AUTOINCREMENT,printer_name TEXT DEFAULT '',printer_model TEXT DEFAULT '',paper_width INTEGER DEFAULT 80,show_logo INTEGER DEFAULT 1,show_company_name INTEGER DEFAULT 1,show_legal INTEGER DEFAULT 1,show_phone INTEGER DEFAULT 1,show_address INTEGER DEFAULT 1,show_email INTEGER DEFAULT 1,show_cliente INTEGER DEFAULT 1,show_items INTEGER DEFAULT 1,show_totals INTEGER DEFAULT 1,show_barcode INTEGER DEFAULT 1,show_footer INTEGER DEFAULT 1,show_qr INTEGER DEFAULT 0,footer_text TEXT DEFAULT 'Gracias por su compra',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
@@ -513,7 +865,7 @@ function initDatabase(): void {
   } catch {}
   db.exec(`CREATE TABLE IF NOT EXISTS electrodomesticos (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   try { db!.exec(`ALTER TABLE electrodomesticos ADD COLUMN imagen TEXT DEFAULT ''`) } catch {}
-  db.exec(`CREATE TABLE IF NOT EXISTS serial (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,id_equi INTEGER,costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,color TEXT DEFAULT '',capacidad TEXT DEFAULT '',bateria TEXT DEFAULT '',estado TEXT DEFAULT 'DISPONIBLE',fecha_venta TEXT,comprador TEXT DEFAULT '',proveedor TEXT DEFAULT '',no_compra TEXT DEFAULT '',precio_vendido REAL DEFAULT 0,hora_venta TEXT DEFAULT '',no_factura TEXT DEFAULT '',nota TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (id_equi) REFERENCES electrodomesticos(id))`)
+  db.exec(`CREATE TABLE IF NOT EXISTS serial (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,id_equi INTEGER,equipo_uid TEXT DEFAULT '',equipo TEXT DEFAULT '',costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,color TEXT DEFAULT '',capacidad TEXT DEFAULT '',bateria TEXT DEFAULT '',estado TEXT DEFAULT 'DISPONIBLE',fecha_venta TEXT,comprador TEXT DEFAULT '',proveedor TEXT DEFAULT '',no_compra TEXT DEFAULT '',precio_vendido REAL DEFAULT 0,hora_venta TEXT DEFAULT '',no_factura TEXT DEFAULT '',nota TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (id_equi) REFERENCES electrodomesticos(id))`)
   db.exec(`CREATE TABLE IF NOT EXISTS notas (id INTEGER PRIMARY KEY AUTOINCREMENT,titulo TEXT NOT NULL,contenido TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   try {
     const cols = db.prepare("PRAGMA table_info(notas)").all() as any[]
@@ -558,6 +910,7 @@ function initDatabase(): void {
   db.exec(`CREATE TABLE IF NOT EXISTS gastos_fijos (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,monto REAL DEFAULT 0,dia_pago INTEGER DEFAULT 1,categoria TEXT DEFAULT '',periodicidad TEXT DEFAULT 'MENSUAL',estado TEXT DEFAULT 'ACTIVO',descripcion TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS sync_deletes (id INTEGER PRIMARY KEY AUTOINCREMENT,tabla TEXT NOT NULL,uid TEXT NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS tmcloud_config (id INTEGER PRIMARY KEY AUTOINCREMENT,url TEXT NOT NULL DEFAULT '',public_key TEXT NOT NULL DEFAULT '',secret_key TEXT NOT NULL DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.exec(`CREATE TABLE IF NOT EXISTS bancos (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,numero_cuenta TEXT DEFAULT '',moneda TEXT DEFAULT 'PESOS',saldo REAL DEFAULT 0,fecha_transaccion TEXT DEFAULT '',uid TEXT DEFAULT '',almacen_id INTEGER DEFAULT 0,almacen_uid TEXT DEFAULT '',created_at TEXT DEFAULT '',updated_at TEXT DEFAULT '')`)
   db.prepare(`INSERT OR IGNORE INTO tmcloud_config (id, url, public_key, secret_key) VALUES (1, '', '', '')`).run()
   db.exec(`CREATE TABLE IF NOT EXISTS caja_turnos (id INTEGER PRIMARY KEY AUTOINCREMENT,monto_inicial REAL DEFAULT 0,entradas REAL DEFAULT 0,retiros REAL DEFAULT 0,estado TEXT DEFAULT 'abierto',observacion TEXT DEFAULT '',usuario_id INTEGER DEFAULT 0,usuario_nombre TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS caja_movimientos (id INTEGER PRIMARY KEY AUTOINCREMENT,turno_id INTEGER,tipo TEXT,monto REAL DEFAULT 0,descripcion TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
@@ -577,7 +930,7 @@ function initDatabase(): void {
   db.exec(`CREATE TABLE IF NOT EXISTS tickets_soporte (id INTEGER PRIMARY KEY AUTOINCREMENT,codigo TEXT DEFAULT '',cliente_nombre TEXT DEFAULT '',cliente_telefono TEXT DEFAULT '',cliente_email TEXT DEFAULT '',producto TEXT DEFAULT '',descripcion TEXT DEFAULT '',prioridad TEXT DEFAULT 'NORMAL',estado TEXT DEFAULT 'ABIERTO',asignado TEXT DEFAULT '',solucion TEXT DEFAULT '',fecha_cierre TEXT DEFAULT '',usuario TEXT DEFAULT '',almacen_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS ticket_comentarios (id INTEGER PRIMARY KEY AUTOINCREMENT,ticket_id INTEGER DEFAULT 0,comentario TEXT DEFAULT '',tipo TEXT DEFAULT 'COMENTARIO',usuario TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS cuadres (id INTEGER PRIMARY KEY AUTOINCREMENT,fecha TEXT DEFAULT '',turno_id INTEGER DEFAULT 0,turno_usuario TEXT DEFAULT '',monto_inicial REAL DEFAULT 0,total_ventas REAL DEFAULT 0,efectivo REAL DEFAULT 0,tarjeta REAL DEFAULT 0,transferencia REAL DEFAULT 0,total_gastos REAL DEFAULT 0,saldo_final REAL DEFAULT 0,observacion TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
-  const tablasConAlmacen = ['facturas', 'clientes', 'proveedores', 'telefonos', 'accesorios', 'electrodomesticos', 'imei', 'serial', 'piezas', 'tecnicos', 'ordenes_taller', 'gastos', 'gastos_fijos', 'cuentas_cobrar', 'cuentas_pagar', 'notas', 'comprobantes_fiscales', 'plantillas_etiquetas', 'correo']
+  const tablasConAlmacen = ['facturas', 'clientes', 'proveedores', 'telefonos', 'accesorios', 'electrodomesticos', 'imei', 'serial', 'piezas', 'tecnicos', 'ordenes_taller', 'gastos', 'gastos_fijos', 'bancos', 'cuentas_cobrar', 'cuentas_pagar', 'notas', 'comprobantes_fiscales', 'plantillas_etiquetas', 'correo']
   for (const t of tablasConAlmacen) { try { db!.exec(`ALTER TABLE "${t}" ADD COLUMN almacen_id INTEGER DEFAULT 0`) } catch {} }
   auditarEsquemaLocal()
 }
@@ -614,10 +967,13 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('db:getAll', (_event, tabla: string) => {
     try {
-      // Empresa es una configuración única: siempre se toma el primer registro
-      // creado, sin depender del valor del id ni del almacén activo.
-      const orderBy = tabla === 'empresa' ? 'ORDER BY rowid ASC' : 'ORDER BY id DESC'
-      const rows = db!.prepare(`SELECT * FROM "${tabla}" ${orderBy}`).all()
+      // La empresa activa se devuelve primero para que tickets y reportes usen la tienda seleccionada.
+      const rows = db!.prepare(`SELECT * FROM "${tabla}" ORDER BY id DESC`).all() as any[]
+      if (tabla === 'empresa' && rows.length > 1) {
+        const config = db!.prepare(`SELECT valor FROM configuracion WHERE clave = 'empresa_id'`).get() as any
+        const empresaId = Number(config?.valor || 0)
+        if (empresaId) rows.sort((a: any, b: any) => Number(b.id === empresaId) - Number(a.id === empresaId))
+      }
       return { success: true, data: rows }
     } catch (error: any) {
       return { success: false, error: error.message }
@@ -659,6 +1015,17 @@ function setupIpcHandlers(): void {
   ipcMain.handle('db:insert', (_event, tabla: string, data: Record<string, any>, usuario?: string) => {
     try {
       if (!data.uid) data.uid = generarUid()
+      if (tabla === 'empresa') data.almacen_uid = data.uid
+      if (tabla === 'serial') {
+        const equipo = data.equipo_uid
+          ? db!.prepare(`SELECT id, uid, nombre FROM electrodomesticos WHERE uid = ? LIMIT 1`).get(data.equipo_uid) as any
+          : db!.prepare(`SELECT id, uid, nombre FROM electrodomesticos WHERE id = ? LIMIT 1`).get(data.id_equi || 0) as any
+        if (equipo) {
+          data.id_equi = equipo.id
+          data.equipo_uid = equipo.uid || ''
+          data.equipo = equipo.nombre || data.equipo || ''
+        }
+      }
       data.created_at = new Date().toISOString()
       data.updated_at = new Date().toISOString()
       const keys = Object.keys(data)
@@ -677,6 +1044,17 @@ function setupIpcHandlers(): void {
   ipcMain.handle('db:update', (_event, tabla: string, id: number, data: Record<string, any>, usuario?: string) => {
     try {
       const oldData = db!.prepare(`SELECT * FROM "${tabla}" WHERE id = ?`).get(id) as Record<string, any> || {}
+      if (tabla === 'empresa') data.almacen_uid = data.uid || oldData.uid || oldData.almacen_uid || ''
+      if (tabla === 'serial' && (data.equipo_uid !== undefined || data.id_equi !== undefined)) {
+        const equipo = data.equipo_uid
+          ? db!.prepare(`SELECT id, uid, nombre FROM electrodomesticos WHERE uid = ? LIMIT 1`).get(data.equipo_uid) as any
+          : db!.prepare(`SELECT id, uid, nombre FROM electrodomesticos WHERE id = ? LIMIT 1`).get(data.id_equi || 0) as any
+        if (equipo) {
+          data.id_equi = equipo.id
+          data.equipo_uid = equipo.uid || ''
+          data.equipo = equipo.nombre || data.equipo || ''
+        }
+      }
       data.updated_at = new Date().toISOString()
       const keys = Object.keys(data)
       const sets = keys.map(k => `${k} = ?`).join(', ')
@@ -687,6 +1065,116 @@ function setupIpcHandlers(): void {
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('gastos:guardarConPago', (_event, payload: any = {}) => {
+    try {
+      const id = Number(payload?.id || 0)
+      const cantidad = Number(payload?.cantidad || 0)
+      const metodoPago = String(payload?.metodo_pago || 'EFECTIVO').trim().toUpperCase()
+      const bancoId = Number(payload?.banco_id || 0)
+      const bancoUid = String(payload?.banco_uid || '').trim()
+      if (!(cantidad > 0)) return { success: false, error: 'El monto del gasto debe ser mayor que cero' }
+      if (!['EFECTIVO', 'TRANSFERENCIA'].includes(metodoPago)) return { success: false, error: 'Metodo de pago no valido' }
+      if (metodoPago === 'TRANSFERENCIA' && !bancoId && !bancoUid) return { success: false, error: 'Selecciona el banco de la transferencia' }
+
+      const guardar = db!.transaction(() => {
+        const now = new Date().toISOString()
+        const anterior = id ? db!.prepare(`SELECT * FROM gastos WHERE id = ?`).get(id) as any : null
+        if (id && !anterior) throw new Error('El gasto que intentas editar no existe')
+
+        const buscarBanco = (uid: string, bankId: number) => {
+          if (uid) return db!.prepare(`SELECT * FROM bancos WHERE uid = ? LIMIT 1`).get(uid) as any
+          if (bankId) return db!.prepare(`SELECT * FROM bancos WHERE id = ? LIMIT 1`).get(bankId) as any
+          return null
+        }
+
+        // Al editar, primero se revierte el retiro bancario anterior dentro de
+        // la misma transaccion para que el saldo nunca quede duplicado.
+        if (anterior && String(anterior.metodo_pago || '').toUpperCase() === 'TRANSFERENCIA') {
+          const bancoAnterior = buscarBanco(String(anterior.banco_uid || ''), Number(anterior.banco_id || 0))
+          if (!bancoAnterior) throw new Error('No se encontro el banco asociado al gasto anterior')
+          const saldoRestaurado = Number(bancoAnterior.saldo || 0) + Number(anterior.cantidad || 0)
+          db!.prepare(`UPDATE bancos SET saldo = ?, fecha_transaccion = ?, updated_at = ? WHERE id = ?`).run(saldoRestaurado, now, now, bancoAnterior.id)
+          registrarBitacora('bancos', Number(bancoAnterior.id), 'UPDATE', String(payload?.usuario || ''), { saldo: saldoRestaurado }, bancoAnterior)
+        }
+
+        let banco: any = null
+        if (metodoPago === 'TRANSFERENCIA') {
+          banco = buscarBanco(bancoUid, bancoId)
+          if (!banco) throw new Error('No se encontro el banco seleccionado')
+          const almacenUid = String(payload?.almacen_uid || '')
+          if (almacenUid && banco.almacen_uid && String(banco.almacen_uid) !== almacenUid) {
+            throw new Error('El banco seleccionado no pertenece al almacen actual')
+          }
+          const saldoActual = Number((db!.prepare(`SELECT saldo FROM bancos WHERE id = ?`).get(banco.id) as any)?.saldo || 0)
+          if (saldoActual < cantidad) throw new Error(`Fondos insuficientes en ${banco.nombre}. Saldo disponible: RD$ ${saldoActual.toFixed(2)}`)
+          const saldoNuevo = saldoActual - cantidad
+          db!.prepare(`UPDATE bancos SET saldo = ?, fecha_transaccion = ?, updated_at = ? WHERE id = ?`).run(saldoNuevo, now, now, banco.id)
+          registrarBitacora('bancos', Number(banco.id), 'UPDATE', String(payload?.usuario || ''), { saldo: saldoNuevo }, { ...banco, saldo: saldoActual })
+        }
+
+        const data: Record<string, any> = {
+          cantidad,
+          fecha: String(payload?.fecha || ''),
+          hora: String(payload?.hora || ''),
+          comentario: String(payload?.comentario || '').trim(),
+          metodo_pago: metodoPago,
+          banco_id: banco ? Number(banco.id) : 0,
+          banco_uid: banco ? String(banco.uid || '') : '',
+          banco_nombre: banco ? String(banco.nombre || '') : '',
+          turno_id: Number(payload?.turno_id || 0),
+          almacen_id: Number(payload?.almacen_id || 0),
+          almacen_uid: String(payload?.almacen_uid || ''),
+          updated_at: now,
+        }
+
+        if (id) {
+          const keys = Object.keys(data)
+          db!.prepare(`UPDATE gastos SET ${keys.map(key => `"${key}" = ?`).join(', ')} WHERE id = ?`).run(...Object.values(data), id)
+          registrarBitacora('gastos', id, 'UPDATE', String(payload?.usuario || ''), data, anterior)
+          return id
+        }
+
+        data.uid = generarUid()
+        data.created_at = now
+        const keys = Object.keys(data)
+        const result = db!.prepare(`INSERT INTO gastos (${keys.map(key => `"${key}"`).join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...Object.values(data))
+        const nuevoId = Number(result.lastInsertRowid)
+        registrarBitacora('gastos', nuevoId, 'CREATE', String(payload?.usuario || ''), data, null)
+        return nuevoId
+      })
+
+      return { success: true, data: { id: guardar() } }
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'No se pudo guardar el gasto' }
+    }
+  })
+
+  ipcMain.handle('gastos:eliminarConPago', (_event, id: number, usuario?: string) => {
+    try {
+      const eliminar = db!.transaction(() => {
+        const gasto = db!.prepare(`SELECT * FROM gastos WHERE id = ?`).get(Number(id || 0)) as any
+        if (!gasto) throw new Error('El gasto no existe')
+        if (String(gasto.metodo_pago || '').toUpperCase() === 'TRANSFERENCIA') {
+          const banco = gasto.banco_uid
+            ? db!.prepare(`SELECT * FROM bancos WHERE uid = ? LIMIT 1`).get(gasto.banco_uid) as any
+            : db!.prepare(`SELECT * FROM bancos WHERE id = ? LIMIT 1`).get(Number(gasto.banco_id || 0)) as any
+          if (!banco) throw new Error('No se encontro el banco asociado al gasto')
+          const saldoNuevo = Number(banco.saldo || 0) + Number(gasto.cantidad || 0)
+          const now = new Date().toISOString()
+          db!.prepare(`UPDATE bancos SET saldo = ?, fecha_transaccion = ?, updated_at = ? WHERE id = ?`).run(saldoNuevo, now, now, banco.id)
+          registrarBitacora('bancos', Number(banco.id), 'UPDATE', usuario || '', { saldo: saldoNuevo }, banco)
+        }
+        db!.prepare(`DELETE FROM gastos WHERE id = ?`).run(gasto.id)
+        registrarBitacora('gastos', Number(gasto.id), 'DELETE', usuario || '', null, gasto)
+        if (gasto.uid) db!.prepare(`INSERT INTO sync_deletes (tabla, uid) VALUES ('gastos', ?)`).run(gasto.uid)
+      })
+      eliminar()
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'No se pudo eliminar el gasto' }
     }
   })
 
@@ -731,22 +1219,56 @@ function setupIpcHandlers(): void {
   ipcMain.handle('db:delete', async (_event, tabla: string, id: number, usuario?: string) => {
     try {
       const oldData = db!.prepare(`SELECT * FROM "${tabla}" WHERE id = ?`).get(id) as Record<string, any> || {}
-      const uid = oldData?.uid || ''
-      db!.prepare(`DELETE FROM "${tabla}" WHERE id = ?`).run(id)
-      if (tabla !== 'bitacora' && tabla !== 'sync_deletes') {
-        registrarBitacora(tabla, id, 'DELETE', usuario || '', null, oldData)
-        let queuedId: number | null = null
-        if (uid) {
+      const queuedDeletes: Array<{ tabla: string; uid: string; queuedId: number | null }> = []
+      const deleteLocal = db!.transaction(() => {
+        const queueDelete = (deleteTable: string, uid: string) => {
+          if (!uid) return
+          let queuedId: number | null = null
           try {
-            const queued = db!.prepare(`INSERT INTO sync_deletes (tabla, uid) VALUES (?, ?)`).run(tabla, uid)
+            const queued = db!.prepare(`INSERT INTO sync_deletes (tabla, uid) VALUES (?, ?)`).run(deleteTable, uid)
             queuedId = Number(queued.lastInsertRowid)
           } catch {}
-          if (await pushCloudDelete(tabla, String(uid))) {
-            try {
-              if (queuedId) db!.prepare(`DELETE FROM sync_deletes WHERE id = ?`).run(queuedId)
-              else db!.prepare(`DELETE FROM sync_deletes WHERE tabla = ? AND uid = ?`).run(tabla, uid)
-            } catch {}
+          queuedDeletes.push({ tabla: deleteTable, uid, queuedId })
+        }
+
+        // facturas_ecf depende de facturas mediante una clave foranea NO ACTION.
+        // Se elimina primero el metadato tecnico dentro de la misma transaccion.
+        if (tabla === 'facturas') {
+          const ecfRows = db!.prepare(`SELECT * FROM facturas_ecf WHERE factura_id = ?`).all(id) as Record<string, any>[]
+          db!.prepare(`DELETE FROM facturas_ecf WHERE factura_id = ?`).run(id)
+          for (const ecf of ecfRows) {
+            registrarBitacora('facturas_ecf', Number(ecf.id || 0), 'DELETE', usuario || '', null, ecf)
+            queueDelete('facturas_ecf', String(ecf.uid || ''))
           }
+        }
+
+        // Cualquier eliminacion de un gasto por transferencia debe devolver
+        // el dinero al banco, incluso si proviene de una vista antigua.
+        if (tabla === 'gastos' && String(oldData?.metodo_pago || '').toUpperCase() === 'TRANSFERENCIA') {
+          const banco = oldData?.banco_uid
+            ? db!.prepare(`SELECT * FROM bancos WHERE uid = ? LIMIT 1`).get(oldData.banco_uid) as any
+            : db!.prepare(`SELECT * FROM bancos WHERE id = ? LIMIT 1`).get(Number(oldData?.banco_id || 0)) as any
+          if (!banco) throw new Error('No se encontro el banco asociado al gasto')
+          const saldoNuevo = Number(banco.saldo || 0) + Number(oldData.cantidad || 0)
+          const now = new Date().toISOString()
+          db!.prepare(`UPDATE bancos SET saldo = ?, fecha_transaccion = ?, updated_at = ? WHERE id = ?`).run(saldoNuevo, now, now, banco.id)
+          registrarBitacora('bancos', Number(banco.id), 'UPDATE', usuario || '', { saldo: saldoNuevo }, banco)
+        }
+
+        db!.prepare(`DELETE FROM "${tabla}" WHERE id = ?`).run(id)
+        if (tabla !== 'bitacora' && tabla !== 'sync_deletes') {
+          registrarBitacora(tabla, id, 'DELETE', usuario || '', null, oldData)
+          queueDelete(tabla, String(oldData?.uid || ''))
+        }
+      })
+      deleteLocal()
+
+      for (const item of queuedDeletes) {
+        if (await pushCloudDelete(item.tabla, item.uid)) {
+          try {
+            if (item.queuedId) db!.prepare(`DELETE FROM sync_deletes WHERE id = ?`).run(item.queuedId)
+            else db!.prepare(`DELETE FROM sync_deletes WHERE tabla = ? AND uid = ?`).run(item.tabla, item.uid)
+          } catch {}
         }
       }
       return { success: true }
@@ -826,6 +1348,13 @@ function setupIpcHandlers(): void {
     return Math.ceil((new Date(fechaVencimiento).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
   }
 
+  function mensajeLicenciaVencida(fechaVencimiento?: string) {
+    if (!fechaVencimiento) return 'Licencia vencida'
+    const fecha = new Date(fechaVencimiento)
+    if (Number.isNaN(fecha.getTime())) return `Licencia vencida (${fechaVencimiento})`
+    return `Licencia vencida desde el ${fecha.toLocaleDateString('es-DO')}`
+  }
+
   function getLicenciaApiUrl(): string {
     const row = db!.prepare(`SELECT url FROM tmcloud_config WHERE id = 1`).get() as any
     return row?.url ? row.url.replace(/\/+$/, '') : ''
@@ -885,13 +1414,19 @@ function setupIpcHandlers(): void {
 
   function guardarCredencialesTmCloud(datosServidor: any) {
     if (!datosServidor || typeof datosServidor !== 'object') return
-    const url = datosServidor.project_url || datosServidor.url_supabase || datosServidor.supabase_url || datosServidor.urlSupabase || ''
-    const publicKey = datosServidor.public_key || datosServidor.supabase_anon_key || datosServidor.anon_key || ''
-    const secretKey = datosServidor.secret_key || datosServidor.role_key || datosServidor.supabase_service_role || datosServidor.service_role || ''
+    const proyecto = datosServidor.project && typeof datosServidor.project === 'object' ? datosServidor.project : {}
+    const licencia = datosServidor.license && typeof datosServidor.license === 'object' ? datosServidor.license : {}
+    const url = datosServidor.project_url || licencia.project_url || proyecto.project_url || datosServidor.url_supabase || datosServidor.supabase_url || datosServidor.urlSupabase || ''
+    const publicKey = datosServidor.public_key || licencia.public_key || proyecto.public_key || datosServidor.supabase_anon_key || datosServidor.anon_key || ''
+    const secretKey = datosServidor.secret_key || licencia.secret_key || proyecto.secret_key || datosServidor.role_key || datosServidor.supabase_service_role || datosServidor.service_role || ''
     if (url || publicKey || secretKey) {
       const row = db!.prepare(`SELECT id FROM tmcloud_config WHERE id = 1`).get() as any
       if (row) {
-        db!.prepare(`UPDATE tmcloud_config SET url = COALESCE(NULLIF(url, ''), NULLIF(?, ''), ''), public_key = COALESCE(NULLIF(public_key, ''), NULLIF(?, ''), ''), secret_key = COALESCE(NULLIF(secret_key, ''), NULLIF(?, ''), ''), updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(url, publicKey, secretKey)
+        db!.prepare(`UPDATE tmcloud_config SET
+          url = CASE WHEN ? <> '' THEN ? ELSE url END,
+          public_key = CASE WHEN ? <> '' THEN ? ELSE public_key END,
+          secret_key = CASE WHEN ? <> '' THEN ? ELSE secret_key END,
+          updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(url, url, publicKey, publicKey, secretKey, secretKey)
       } else {
         db!.prepare(`INSERT INTO tmcloud_config (id, url, public_key, secret_key) VALUES (1, ?, ?, ?)`).run(url, publicKey, secretKey)
       }
@@ -908,7 +1443,11 @@ function setupIpcHandlers(): void {
     if (url || publicKey || roleKey) {
       const row = db!.prepare(`SELECT id FROM tmcloud_config WHERE id = 1`).get() as any
       if (row) {
-        db!.prepare(`UPDATE tmcloud_config SET url = COALESCE(NULLIF(url, ''), NULLIF(?, ''), ''), public_key = COALESCE(NULLIF(public_key, ''), NULLIF(?, ''), ''), secret_key = COALESCE(NULLIF(secret_key, ''), NULLIF(?, ''), ''), updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(url, publicKey, roleKey)
+        db!.prepare(`UPDATE tmcloud_config SET
+          url = CASE WHEN ? <> '' THEN ? ELSE url END,
+          public_key = CASE WHEN ? <> '' THEN ? ELSE public_key END,
+          secret_key = CASE WHEN ? <> '' THEN ? ELSE secret_key END,
+          updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(url, url, publicKey, publicKey, roleKey, roleKey)
       } else {
         db!.prepare(`INSERT INTO tmcloud_config (id, url, public_key, secret_key) VALUES (1, ?, ?, ?)`).run(url, publicKey, roleKey)
       }
@@ -965,7 +1504,19 @@ function setupIpcHandlers(): void {
   function guardarLicenciaLocal(datos: any) {
     const mac = obtenerMacAddress()
     const cifrada = mac ? cifrarBase64(mac) : ''
-    const datosJson = datos.datosServidor ? JSON.stringify(datos.datosServidor) : null
+    const licenciaAnterior = db!.prepare(`SELECT datos_servidor FROM licencia WHERE id = 1`).get() as any
+    let datosAnteriores: any = {}
+    try { datosAnteriores = licenciaAnterior?.datos_servidor ? JSON.parse(licenciaAnterior.datos_servidor) : {} } catch {}
+    const datosNuevos = datos.datosServidor && typeof datos.datosServidor === 'object' ? datos.datosServidor : {}
+    // /api/license/info no devuelve license_key. Conservar el valor previamente
+    // registrado evita perder la unica referencia necesaria para la siguiente
+    // verificacion online.
+    const datosCombinados = { ...datosAnteriores, ...datosNuevos }
+    const codigoAnterior = datosAnteriores?.license_key || datosAnteriores?.licencia || datosAnteriores?.license?.license_key
+    if (codigoAnterior && !datosCombinados.license_key && !datosCombinados.licencia && !datosCombinados?.license?.license_key) {
+      datosCombinados.license_key = codigoAnterior
+    }
+    const datosJson = Object.keys(datosCombinados).length ? JSON.stringify(datosCombinados) : null
     db!.prepare(`INSERT INTO licencia (id, licencia_equipo, licencia_cifrada, estado, nombre_empresa, fecha_inicio_prueba, fecha_vencimiento, ultima_verificacion, datos_servidor, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET licencia_equipo = COALESCE(excluded.licencia_equipo, licencia_equipo), licencia_cifrada = COALESCE(excluded.licencia_cifrada, licencia_cifrada), estado = excluded.estado, nombre_empresa = excluded.nombre_empresa, fecha_inicio_prueba = excluded.fecha_inicio_prueba, fecha_vencimiento = excluded.fecha_vencimiento, ultima_verificacion = excluded.ultima_verificacion, datos_servidor = excluded.datos_servidor, updated_at = excluded.updated_at`).run(
       mac || null, cifrada || null, datos.estado || 'sin_verificar', datos.nombre || '', datos.fecha_inicio_prueba || null, datos.fecha_vencimiento || null, datosJson
     )
@@ -981,12 +1532,37 @@ function setupIpcHandlers(): void {
     } catch {
       datosServidor = null
     }
-    const codigo = String(datosServidor?.licencia || datosServidor?.license_key || datosServidor?.codigo_licencia || datosServidor?.codigo || '').trim().toUpperCase()
+    const codigo = String(
+      datosServidor?.licencia || datosServidor?.license_key ||
+      datosServidor?.license?.license_key || datosServidor?.license?.licencia ||
+      datosServidor?.codigo_licencia || datosServidor?.codigo || ''
+    ).trim().toUpperCase()
     return /^[A-Z0-9]{5}-[A-Z0-9]{5}(-[A-Z0-9]{5})?$/.test(codigo) ? codigo : ''
   }
 
   function normalizarMac(valor: any) {
     return String(valor || '').replace(/[^0-9A-F]/gi, '').toUpperCase()
+  }
+
+  function ocultarCodigoLicencia(valor: any) {
+    const codigo = String(valor || '').trim().toUpperCase()
+    if (!codigo) return '(sin codigo)'
+    return codigo.length > 9 ? `${codigo.slice(0, 5)}...${codigo.slice(-5)}` : '***'
+  }
+
+  function resumenLicenciaLog(data: any) {
+    if (!data || typeof data !== 'object') return data
+    return {
+      uid: data.uid || data.id || '',
+      project_uid: data.project_uid || '',
+      project_name: data.project_name || data.nombre || '',
+      system_name: data.system_name || '',
+      status: data.status || data.estado || '',
+      expires_at: data.expires_at || data.proximopago || data.fecha_vencimiento || null,
+      license_key: ocultarCodigoLicencia(data.license_key || data.licencia),
+      authorized_devices: data.authorized_devices ?? data.devices ?? data.dispositivos ?? [],
+      unauthorized_devices: data.unauthorized_devices ?? data.pending_devices ?? data.equipos_no_autorizados ?? [],
+    }
   }
 
   function obtenerDispositivosLicencia(dispositivos: any): string[] {
@@ -1008,8 +1584,11 @@ function setupIpcHandlers(): void {
     const mac = obtenerMacAddress()
     if (!mac) return { success: false, error: 'No se pudo identificar este equipo' }
 
-    const dispositivos = obtenerDispositivosLicencia(datosServidor?.dispositivos)
-    if (!dispositivos.includes(normalizarMac(mac))) {
+    const dispositivos = obtenerDispositivosLicencia(datosServidor?.authorized_devices ?? datosServidor?.devices ?? datosServidor?.dispositivos)
+    const equipoLocal = normalizarMac(mac)
+    const autorizado = dispositivos.includes(equipoLocal)
+    console.log('[Licencia][Dispositivo]', { equipoOriginal: mac, equipoNormalizado: equipoLocal, dispositivosAutorizados: dispositivos, autorizado })
+    if (!autorizado) {
       return { success: false, estado: 'equipo_no_autorizado', error: 'Este equipo no esta permitido para usar esta licencia' }
     }
 
@@ -1088,7 +1667,14 @@ function setupIpcHandlers(): void {
     const equipo = normalizarMac(mac)
     if (!uid || !equipo) return
 
-    const actuales = obtenerEquiposNoAutorizados(datosServidor?.equipos_no_autorizados)
+    const licenseKey = String(datosServidor?.license_key || datosServidor?.licencia || '').trim().toUpperCase()
+    if (licenseKey) {
+      const conectado = await conectarDispositivoLicencia(licenseKey, equipo)
+      if (!conectado.success) throw new Error(conectado.error || 'No se pudo solicitar autorizacion para este equipo')
+      return
+    }
+
+    const actuales = obtenerEquiposNoAutorizados(datosServidor?.unauthorized_devices ?? datosServidor?.pending_devices ?? datosServidor?.equipos_no_autorizados)
     if (actuales.includes(equipo)) return
 
     const result = await actualizarCamposLicencia({
@@ -1118,7 +1704,7 @@ function setupIpcHandlers(): void {
         }
       }
       const diasRestantes = calcularDiasRestantes(licencia.fecha_vencimiento)
-      if (diasRestantes !== null && diasRestantes <= 0) return { success: false, error: 'Licencia vencida', estado: 'vencida' }
+      if (diasRestantes !== null && diasRestantes <= 0) return { success: false, error: mensajeLicenciaVencida(licencia.fecha_vencimiento), estado: 'vencida' }
       return { success: true, estado: estado.toLowerCase(), diasRestantes }
     }
     return { success: false, error: 'Estado de licencia desconocido', estado: licencia.estado }
@@ -1138,6 +1724,7 @@ function setupIpcHandlers(): void {
     let data = JSON.parse(body)
     if (Array.isArray(data)) data = data.find((item: any) => item && typeof item === 'object') || null
     if (data?.data) data = data.data
+    console.log('[Licencia][API] Datos recibidos:', resumenLicenciaLog(data))
     if (data && (data.id || data.uid || data.licencia || data.license_key || data.nombre)) {
       data.estado = normalizarEstado(data.status || data.estado || '')
       if (validarDispositivo) {
@@ -1152,10 +1739,17 @@ function setupIpcHandlers(): void {
   }
 
   function buscarLicenciaServidor(licencia: string, validarCoincidencia = false, validarDispositivo = true, timeoutMs = 5000): Promise<any> {
-    const url = `https://api.tmposystem.com/licenses/info?license_key=${encodeURIComponent(licencia)}`
+    const url = `https://api.tmposystem.com/api/license/info?license_key=${encodeURIComponent(licencia)}`
+    console.log('[Licencia][API] GET /api/license/info', { licencia: ocultarCodigoLicencia(licencia), validarDispositivo, timeoutMs })
     return new Promise((resolve) => {
       let resolved = false
-      const finish = (payload: any) => { if (!resolved) { resolved = true; resolve(payload) } }
+      const finish = (payload: any) => {
+        if (!resolved) {
+          resolved = true
+          console.log('[Licencia][API] Resultado /api/license/info:', { success: payload?.success, estado: payload?.estado, error: payload?.error || null, data: resumenLicenciaLog(payload?.data) })
+          resolve(payload)
+        }
+      }
       const urlObj = new URL(url)
       const req = https.request({ hostname: urlObj.hostname, port: 443, path: urlObj.pathname + urlObj.search, method: 'GET', headers: { 'Accept': '*/*' }, timeout: timeoutMs }, (res) => {
         let body = ''
@@ -1164,10 +1758,11 @@ function setupIpcHandlers(): void {
         res.on('end', () => {
           try {
             const statusCode = res.statusCode ?? 500
+            console.log('[Licencia][API] HTTP /api/license/info:', { statusCode, bytes: Buffer.byteLength(body) })
             if (statusCode < 200 || statusCode >= 300) {
               let errMsg = body
               try { const j = JSON.parse(body); errMsg = j.error || j.message || body } catch {}
-              finish({ success: false, error: errMsg, data: null, estado: 'error_servidor' })
+              finish({ success: false, error: errMsg, data: null, estado: statusCode === 404 ? 'no_encontrada' : 'error_servidor' })
               return
             }
             const parsed = parseLicenciaServerResponse(body, validarCoincidencia ? licencia : undefined, validarDispositivo)
@@ -1182,6 +1777,61 @@ function setupIpcHandlers(): void {
       })
       req.on('error', (error) => finish({ success: false, error: `Sin conexion: ${error.message}`, data: null }))
       req.setTimeout(timeoutMs, () => { req.destroy(); finish({ success: false, error: 'Tiempo de espera agotado', data: null }) })
+      req.end()
+    })
+  }
+
+  function recuperarLicenciaDelProyecto(timeoutMs = 5000): Promise<any> {
+    const baseUrl = getLicenciaApiUrl()
+    const token = getLicenciaReadToken()
+    console.log('[Licencia][Proyecto] Preparando GET /licenses:', { baseUrl: baseUrl || '(sin URL)', tokenConfigurado: Boolean(token), timeoutMs })
+    if (!baseUrl || !token) return Promise.resolve({ success: false, error: 'TM Cloud no configurado' })
+    return new Promise((resolve) => {
+      let resolved = false
+      const finish = (payload: any) => {
+        if (!resolved) {
+          resolved = true
+          console.log('[Licencia][Proyecto] Resultado GET /licenses:', { success: payload?.success, error: payload?.error || null, data: resumenLicenciaLog(payload?.data) })
+          resolve(payload)
+        }
+      }
+      const urlObj = new URL(`${baseUrl}/licenses`)
+      const req = https.request({
+        hostname: urlObj.hostname,
+        port: 443,
+        path: urlObj.pathname,
+        method: 'GET',
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        timeout: timeoutMs,
+      }, (res) => {
+        let body = ''
+        res.on('data', chunk => body += chunk)
+        res.on('end', () => {
+          try {
+            const parsed = body ? JSON.parse(body) : null
+            console.log('[Licencia][Proyecto] HTTP GET /licenses:', { statusCode: res.statusCode, bytes: Buffer.byteLength(body), cantidad: Array.isArray(parsed?.data) ? parsed.data.length : null })
+            if ((res.statusCode || 500) < 200 || (res.statusCode || 500) >= 300) {
+              finish({ success: false, error: parsed?.error || parsed?.message || `Error HTTP ${res.statusCode}` })
+              return
+            }
+            const rows = Array.isArray(parsed?.data) ? parsed.data : []
+            const equipo = normalizarMac(obtenerMacAddress())
+            const licencia = rows.find((item: any) =>
+              obtenerDispositivosLicencia(item?.authorized_devices ?? item?.devices ?? item?.dispositivos).includes(equipo)
+            ) || rows.find((item: any) => normalizarEstado(item?.status || item?.estado || '') === 'ACTIVO') || rows[0]
+            if (!licencia?.license_key) {
+              finish({ success: false, error: 'El proyecto no devolvio una licencia utilizable' })
+              return
+            }
+            licencia.estado = normalizarEstado(licencia.status || licencia.estado || '')
+            finish({ success: true, data: licencia })
+          } catch {
+            finish({ success: false, error: 'Respuesta de licencias invalida' })
+          }
+        })
+      })
+      req.on('error', error => finish({ success: false, error: `Sin conexion: ${error.message}` }))
+      req.setTimeout(timeoutMs, () => { req.destroy(); finish({ success: false, error: 'Tiempo de espera agotado' }) })
       req.end()
     })
   }
@@ -1215,7 +1865,7 @@ function setupIpcHandlers(): void {
     const equipo = normalizarMac(mac)
     if (!equipo) return { success: false, error: 'No se pudo identificar este equipo' }
 
-    const dispositivos = obtenerDispositivosLicencia(result.data.dispositivos)
+    const dispositivos = obtenerDispositivosLicencia(result.data.authorized_devices ?? result.data.devices ?? result.data.dispositivos)
     if (dispositivos.includes(equipo)) {
       const d = result.data
       guardarLicenciaLocal({ estado: (d.estado || d.status || '').toUpperCase(), nombre: d.nombre || d.almacen || '', fecha_inicio_prueba: d.created_at || d.fecha_inicio, fecha_vencimiento: d.proximopago || d.fecha_vencimiento, datosServidor: d })
@@ -1280,13 +1930,7 @@ function setupIpcHandlers(): void {
           </tr>
         </table>
       </div>`
-    const attempts: Array<{ host: string; port: number; secure: boolean; label: string }> = []
-    if (config.host && config.puerto) {
-      const secure = String(config.seguridad).toLowerCase().includes('ssl') || Number(config.puerto) === 465
-      attempts.push({ host: config.host, port: Number(config.puerto), secure, label: `${config.host}:${config.puerto}` })
-    }
-    attempts.push({ host: 'smtp.gmail.com', port: 587, secure: false, label: 'gmail 587' })
-    attempts.push({ host: 'smtp.gmail.com', port: 465, secure: true, label: 'gmail 465' })
+    const attempts = getSmtpAttempts(config)
 
     let lastError: any = null
     for (const attempt of attempts) {
@@ -1351,10 +1995,7 @@ function setupIpcHandlers(): void {
       </div>`
 
     let lastError: any = null
-    for (const attempt of [
-      { host: config.host, port: Number(config.puerto), secure: false },
-      { host: 'smtp.gmail.com', port: 465, secure: true },
-    ]) {
+    for (const attempt of getSmtpAttempts(config)) {
       try {
         await sendEmail(email, 'Codigo para ver licencia', html, attempt.host, attempt.port, attempt.secure, config)
         return { success: true }
@@ -1419,10 +2060,7 @@ function setupIpcHandlers(): void {
       </div>`
 
     let lastError: any = null
-    for (const attempt of [
-      { host: config.host, port: Number(config.puerto), secure: false },
-      { host: 'smtp.gmail.com', port: 465, secure: true },
-    ]) {
+    for (const attempt of getSmtpAttempts(config)) {
       try {
         await sendEmail(email, `Codigo para eliminar ${entidad}`, html, attempt.host, attempt.port, attempt.secure, config)
         return { success: true }
@@ -1431,6 +2069,69 @@ function setupIpcHandlers(): void {
       }
     }
     return { success: false, error: lastError?.message || 'No se pudo enviar el correo' }
+  }
+
+  async function enviarOtpPorApi(email: string, codigo: string, detalle: any = {}) {
+    const destino = String(email || '').trim()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(destino)) {
+      return { success: false, error: 'El correo destino no es valido' }
+    }
+
+    const config = db!.prepare(`SELECT url, secret_key FROM tmcloud_config WHERE id = 1`).get() as any
+    const baseUrl = String(config?.url || '').trim().replace(/\/+$/, '')
+    const secretKey = String(config?.secret_key || '').trim()
+    if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) {
+      return { success: false, error: 'Configura la URL del proyecto en TM Cloud antes de enviar el OTP' }
+    }
+    if (!secretKey) {
+      return { success: false, error: 'Configura la Secret Key de TM Cloud antes de enviar el OTP' }
+    }
+
+    const cantidad = Math.max(1, Number(detalle?.cantidad || 1))
+    const entidad = String(detalle?.entidad || 'factura').trim()
+    const referencia = String(detalle?.no_factura || detalle?.nombre || detalle?.id || '').trim()
+    let companyName = 'TM POS System'
+    try {
+      const empresa = db!.prepare(`SELECT nombre FROM empresa ORDER BY id ASC LIMIT 1`).get() as any
+      companyName = String(empresa?.nombre || companyName).trim()
+    } catch {}
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15000)
+    try {
+      const response = await fetch(`${baseUrl}/otp/send`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          to: destino,
+          otp: String(codigo || '').trim(),
+          purpose: `Autorizar eliminacion de ${cantidad > 1 ? `${cantidad} ${entidad}` : entidad}${referencia ? ` ${referencia}` : ''}`,
+          expires_minutes: 10,
+          company_name: companyName,
+        }),
+        signal: controller.signal,
+      })
+
+      const raw = await response.text()
+      let body: any = null
+      try { body = raw ? JSON.parse(raw) : null } catch {}
+      if (!response.ok || body?.success === false) {
+        const message = body?.message || body?.error || `El servidor respondio HTTP ${response.status}`
+        return { success: false, error: String(message) }
+      }
+      return { success: true, data: body?.data || body }
+    } catch (error: any) {
+      const message = error?.name === 'AbortError'
+        ? 'El servidor tardo demasiado en responder al envio del OTP'
+        : (error?.message || 'No se pudo conectar con el servidor para enviar el OTP')
+      return { success: false, error: message }
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   async function verificarLicenciaOnline(timeoutMs = 5000): Promise<any> {
@@ -1444,31 +2145,59 @@ function setupIpcHandlers(): void {
 
   async function verificarLicenciaCompleta(): Promise<any> {
     const VERIFY_TIMEOUT = 3000
-    const codigoLocal = getCodigoLicenciaLocal()
+    let codigoLocal = getCodigoLicenciaLocal()
+    const licenciaInicial = getLicenciaLocal()
+    console.log('[Licencia][Verificacion] Inicio:', {
+      equipo: obtenerMacAddress(),
+      codigoLocal: ocultarCodigoLicencia(codigoLocal),
+      estadoLocal: licenciaInicial?.estado || '(sin estado)',
+      vencimientoLocal: licenciaInicial?.fecha_vencimiento || null,
+      ultimaVerificacionLocal: licenciaInicial?.ultima_verificacion || null,
+      tmCloudUrl: getLicenciaApiUrl() || '(sin URL)',
+    })
+    if (!codigoLocal) {
+      const recuperada = await recuperarLicenciaDelProyecto(VERIFY_TIMEOUT)
+      if (recuperada.success && recuperada.data) {
+        const d = recuperada.data
+        guardarLicenciaLocal({
+          estado: normalizarEstado(d.estado || d.status || ''),
+          nombre: d.nombre || d.project_name || '',
+          fecha_inicio_prueba: d.created_at,
+          fecha_vencimiento: d.expires_at || d.proximopago || d.fecha_vencimiento,
+          datosServidor: d,
+        })
+        codigoLocal = String(d.license_key || '').trim().toUpperCase()
+      }
+    }
     if (codigoLocal) {
       const localLicencia = getLicenciaLocal()
-      const vencimiento = localLicencia?.fecha_vencimiento
-      const estadoLocal = (localLicencia?.estado || '').toUpperCase()
-      if (estadoLocal === 'ACTIVO' || estadoLocal === 'PENDIENTE') {
-        const dias = calcularDiasRestantes(vencimiento)
-        if (dias === null || dias > 0) {
-          const online = await buscarLicenciaServidor(codigoLocal, false, true, VERIFY_TIMEOUT)
-          if (online.success && online.data) {
-            const d = online.data
-            guardarLicenciaLocal({ estado: (d.estado || d.status || '').toUpperCase(), nombre: d.nombre || d.almacen || '', fecha_inicio_prueba: d.created_at || d.fecha_inicio, fecha_vencimiento: d.proximopago || d.fecha_vencimiento, datosServidor: d })
-            const mensajeDias = dias !== null ? `${dias} dia(s) restantes` : 'sin vencimiento'
-            return { success: true, estado: estadoLocal.toLowerCase(), mensaje: `Licencia verificada - ${mensajeDias}`, diasRestantes: dias, nombreEmpresa: d.nombre || localLicencia?.nombre_empresa, verificadoOnline: true }
-          }
-          if (online.estado === 'equipo_no_autorizado') {
-            return { success: false, estado: 'equipo_no_autorizado', mensaje: online.error || 'Este equipo no esta autorizado para usar esta licencia', codigoLicencia: online.data?.license_key || codigoLocal || '', verificadoOnline: true }
-          }
-          if (esErrorConexion(online.error)) {
-            const mensajeDias = dias !== null ? `${dias} dia(s) restantes` : 'sin vencimiento'
-            return { success: true, estado: estadoLocal.toLowerCase(), mensaje: estadoLocal === 'ACTIVO' ? `Licencia activa - ${mensajeDias}` : `Periodo de prueba: ${mensajeDias}`, diasRestantes: dias, nombreEmpresa: localLicencia?.nombre_empresa, verificadoOnline: false }
-          }
-          return { success: false, estado: 'no_encontrada', mensaje: online.error || 'Licencia no encontrada en el servidor', verificadoOnline: true }
+      const online = await buscarLicenciaServidor(codigoLocal, false, true, VERIFY_TIMEOUT)
+      if (online.success && online.data) {
+        const d = online.data
+        const estado = normalizarEstado(d.estado || d.status || '')
+        const vencimiento = d.expires_at || d.proximopago || d.fecha_vencimiento
+        guardarLicenciaLocal({ estado, nombre: d.nombre || d.almacen || d.project_name || '', fecha_inicio_prueba: d.created_at || d.fecha_inicio, fecha_vencimiento: vencimiento, datosServidor: d })
+        if (estado !== 'ACTIVO' && estado !== 'PENDIENTE') {
+          return { success: false, estado: estado.toLowerCase(), mensaje: `Estado: ${estado}`, verificadoOnline: true }
         }
+        const dias = calcularDiasRestantes(vencimiento)
+        if (dias !== null && dias <= 0) {
+          return { success: false, estado: 'vencida', mensaje: mensajeLicenciaVencida(vencimiento), verificadoOnline: true }
+        }
+        const mensajeDias = dias !== null ? `${dias} dia(s) restantes` : 'sin vencimiento'
+        return { success: true, estado: estado.toLowerCase(), mensaje: `Licencia verificada - ${mensajeDias}`, diasRestantes: dias, nombreEmpresa: d.nombre || d.project_name || localLicencia?.nombre_empresa, verificadoOnline: true }
       }
+      if (online.estado === 'equipo_no_autorizado') {
+        return { success: false, estado: 'equipo_no_autorizado', mensaje: online.error || 'Este equipo no esta autorizado para usar esta licencia', codigoLicencia: online.data?.license_key || codigoLocal || '', verificadoOnline: true }
+      }
+      if (esErrorConexion(online.error)) {
+        const offline = verificarLicenciaOffline()
+        if (offline.success) {
+          return { ...offline, nombreEmpresa: localLicencia?.nombre_empresa, verificadoOnline: false, mensaje: offline.estado === 'pendiente' ? `Periodo de prueba: ${offline.diasRestantes} dia(s) restantes` : 'Licencia activa (offline)' }
+        }
+        return { success: false, estado: offline.estado || 'sin_verificar', mensaje: offline.error || online.error || 'Sin conexion y sin licencia local', verificadoOnline: false }
+      }
+      return { success: false, estado: online.estado || 'no_encontrada', mensaje: online.error || 'Licencia no encontrada en el servidor', verificadoOnline: true }
     }
     let online: any = await verificarLicenciaOnline(VERIFY_TIMEOUT)
     if (!online.success && !esErrorConexion(online.error)) {
@@ -1477,12 +2206,12 @@ function setupIpcHandlers(): void {
     }
     if (online.success && online.data) {
       const d = online.data
-      const estado = (d.estado || d.status || '').toUpperCase()
-      const vencimiento = d.proximopago || d.fecha_vencimiento
+      const estado = normalizarEstado(d.estado || d.status || '')
+      const vencimiento = d.expires_at || d.proximopago || d.fecha_vencimiento
       guardarLicenciaLocal({ estado, nombre: d.nombre || d.almacen || '', fecha_inicio_prueba: d.created_at || d.fecha_inicio, fecha_vencimiento: vencimiento, datosServidor: d })
       if (estado === 'ACTIVO' || estado === 'PENDIENTE') {
         const dias = calcularDiasRestantes(vencimiento)
-        if (dias !== null && dias <= 0) return { success: false, estado: 'vencida', mensaje: 'Licencia vencida', verificadoOnline: true }
+        if (dias !== null && dias <= 0) return { success: false, estado: 'vencida', mensaje: mensajeLicenciaVencida(vencimiento), verificadoOnline: true }
         const mensajeDias = dias !== null ? `${dias} dia(s) restantes` : 'sin vencimiento'
         return { success: true, estado: estado === 'ACTIVO' ? 'activo' : 'pendiente', mensaje: estado === 'ACTIVO' ? `Licencia activa - ${mensajeDias}` : `Periodo de prueba: ${mensajeDias}`, diasRestantes: dias, nombreEmpresa: d.nombre, verificadoOnline: true }
       }
@@ -1607,13 +2336,24 @@ function setupIpcHandlers(): void {
           try { parsed = responseBody ? JSON.parse(responseBody) : null } catch { parsed = responseBody }
           const statusCode = res.statusCode ?? 500
           if (statusCode >= 200 && statusCode < 300) {
-            const data = parsed?.data || parsed
+            const rawData = parsed?.data || parsed
+            const project = rawData?.project && typeof rawData.project === 'object' ? rawData.project : {}
+            const license = rawData?.license && typeof rawData.license === 'object' ? rawData.license : rawData
+            const data = {
+              ...rawData,
+              ...license,
+              project,
+              license,
+              project_url: license?.project_url || rawData?.project_url || '',
+              public_key: license?.public_key || project?.public_key || rawData?.public_key || '',
+              secret_key: project?.secret_key || license?.secret_key || rawData?.secret_key || '',
+            }
             if (data) {
               guardarCredencialesTmCloud(data)
               guardarEmpresaDesdeLicencia(data)
-              guardarLicenciaLocal({ estado: (data.estado || data.status || 'ACTIVO').toUpperCase(), nombre: data.nombre || nombre, fecha_inicio_prueba: data.created_at || data.fecha_inicio || new Date().toISOString().replace('T', ' ').split('.')[0], fecha_vencimiento: data.proximopago || data.fecha_vencimiento, datosServidor: data })
+              guardarLicenciaLocal({ estado: normalizarEstado(data.estado || data.status || 'ACTIVO'), nombre: data.nombre || nombre, fecha_inicio_prueba: data.created_at || data.fecha_inicio || new Date().toISOString().replace('T', ' ').split('.')[0], fecha_vencimiento: data.expires_at || data.proximopago || data.fecha_vencimiento, datosServidor: data })
             }
-            finish({ success: true, data: parsed?.data || parsed })
+            finish({ success: true, data })
           } else {
             finish({ success: false, error: (parsed && typeof parsed === 'object' ? parsed.message || parsed.error : null) || `Error HTTP ${statusCode}` })
           }
@@ -1735,18 +2475,20 @@ function setupIpcHandlers(): void {
     } catch (e: any) { return { success: false, error: e.message } }
   })
 
-  ipcMain.handle('caja:getTurnoAbierto', async () => {
+  ipcMain.handle('caja:getTurnoAbierto', async (_event, almacenUid = '') => {
     try {
-      const row = db!.prepare(`SELECT * FROM caja_turnos WHERE estado = 'abierto' ORDER BY id DESC LIMIT 1`).get() as any
+      const row = almacenUid
+        ? db!.prepare(`SELECT * FROM caja_turnos WHERE estado = 'abierto' AND (almacen_uid = ? OR almacen_uid IS NULL OR almacen_uid = '') ORDER BY CASE WHEN almacen_uid = ? THEN 0 ELSE 1 END, id DESC LIMIT 1`).get(almacenUid, almacenUid) as any
+        : db!.prepare(`SELECT * FROM caja_turnos WHERE estado = 'abierto' ORDER BY id DESC LIMIT 1`).get() as any
       return { success: true, data: row || null }
     } catch (e: any) { return { success: false, error: e.message } }
   })
 
-  ipcMain.handle('caja:abrirTurno', async (_event, data: { monto_inicial: number; observacion?: string; usuario_id: number; usuario_nombre: string }) => {
+  ipcMain.handle('caja:abrirTurno', async (_event, data: { monto_inicial: number; observacion?: string; usuario_id: number; usuario_nombre: string; almacen_id?: number; almacen_uid?: string }) => {
     try {
       const now = new Date().toISOString()
-      const info = db!.prepare(`INSERT INTO caja_turnos (monto_inicial, entradas, retiros, estado, observacion, usuario_id, usuario_nombre, created_at, updated_at) VALUES (?, 0, 0, 'abierto', ?, ?, ?, ?, ?)`).run(
-        data.monto_inicial || 0, data.observacion || '', data.usuario_id || 0, data.usuario_nombre || '', now, now
+      const info = db!.prepare(`INSERT INTO caja_turnos (monto_inicial, entradas, retiros, estado, observacion, usuario_id, usuario_nombre, almacen_id, almacen_uid, uid, created_at, updated_at) VALUES (?, 0, 0, 'abierto', ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        data.monto_inicial || 0, data.observacion || '', data.usuario_id || 0, data.usuario_nombre || '', data.almacen_id || 0, data.almacen_uid || '', generarUid(), now, now
       )
       return { success: true, data: { id: info.lastInsertRowid } }
     } catch (e: any) { return { success: false, error: e.message } }
@@ -1759,26 +2501,34 @@ function setupIpcHandlers(): void {
     } catch (e: any) { return { success: false, error: e.message } }
   })
 
-  ipcMain.handle('caja:getTurnoActivo', async () => {
+  ipcMain.handle('caja:getTurnoActivo', async (_event, almacenUid = '') => {
     try {
-      const row = db!.prepare(`SELECT * FROM caja_turnos WHERE estado = 'abierto' ORDER BY id DESC LIMIT 1`).get() as any
+      const row = almacenUid
+        ? db!.prepare(`SELECT * FROM caja_turnos WHERE estado = 'abierto' AND (almacen_uid = ? OR almacen_uid IS NULL OR almacen_uid = '') ORDER BY CASE WHEN almacen_uid = ? THEN 0 ELSE 1 END, id DESC LIMIT 1`).get(almacenUid, almacenUid) as any
+        : db!.prepare(`SELECT * FROM caja_turnos WHERE estado = 'abierto' ORDER BY id DESC LIMIT 1`).get() as any
       return { success: true, data: row || null }
     } catch (e: any) { return { success: false, error: e.message } }
   })
 
-  ipcMain.handle('cuadre:listar', async () => {
+  ipcMain.handle('cuadre:listar', async (_event, almacenUid = '') => {
     try {
-      const rows = db!.prepare(`SELECT * FROM cuadres ORDER BY created_at DESC`).all()
+      const rows = almacenUid
+        ? db!.prepare(`SELECT * FROM cuadres WHERE almacen_uid = ? OR almacen_uid IS NULL OR almacen_uid = '' ORDER BY created_at DESC`).all(almacenUid)
+        : db!.prepare(`SELECT * FROM cuadres ORDER BY created_at DESC`).all()
       return { success: true, data: rows }
     } catch (e: any) { return { success: false, error: e.message } }
   })
 
-  ipcMain.handle('cuadre:ventasTurno', async () => {
+  ipcMain.handle('cuadre:ventasTurno', async (_event, almacenUid = '') => {
     try {
-      const turno = db!.prepare(`SELECT id, created_at FROM caja_turnos WHERE estado = 'abierto' ORDER BY id DESC LIMIT 1`).get() as any
+      const turno = almacenUid
+        ? db!.prepare(`SELECT id, created_at FROM caja_turnos WHERE estado = 'abierto' AND (almacen_uid = ? OR almacen_uid IS NULL OR almacen_uid = '') ORDER BY CASE WHEN almacen_uid = ? THEN 0 ELSE 1 END, id DESC LIMIT 1`).get(almacenUid, almacenUid) as any
+        : db!.prepare(`SELECT id, created_at FROM caja_turnos WHERE estado = 'abierto' ORDER BY id DESC LIMIT 1`).get() as any
       if (!turno) return { success: true, data: { total: 0, efectivo: 0, tarjeta: 0, transferencia: 0 } }
       const desde = turno.created_at
-      const facturas = db!.prepare(`SELECT metodo_pago, total, efectivo, tarjeta, transferencia FROM facturas WHERE estado_factura = 'PAGADA' AND created_at >= ?`).all(desde) as any[]
+      const facturas = almacenUid
+        ? db!.prepare(`SELECT metodo_pago, total, efectivo, tarjeta, transferencia FROM facturas WHERE estado_factura = 'PAGADA' AND created_at >= ? AND (almacen_uid = ? OR almacen_uid IS NULL OR almacen_uid = '')`).all(desde, almacenUid) as any[]
+        : db!.prepare(`SELECT metodo_pago, total, efectivo, tarjeta, transferencia FROM facturas WHERE estado_factura = 'PAGADA' AND created_at >= ?`).all(desde) as any[]
       let total = 0, efectivo = 0, tarjeta = 0, transferencia = 0
       for (const f of facturas) {
         total += Number(f.total || 0)
@@ -1790,12 +2540,16 @@ function setupIpcHandlers(): void {
     } catch (e: any) { return { success: false, error: e.message } }
   })
 
-  ipcMain.handle('cuadre:gastosTurno', async () => {
+  ipcMain.handle('cuadre:gastosTurno', async (_event, almacenUid = '') => {
     try {
-      const turno = db!.prepare(`SELECT id, created_at FROM caja_turnos WHERE estado = 'abierto' ORDER BY id DESC LIMIT 1`).get() as any
+      const turno = almacenUid
+        ? db!.prepare(`SELECT id, created_at FROM caja_turnos WHERE estado = 'abierto' AND (almacen_uid = ? OR almacen_uid IS NULL OR almacen_uid = '') ORDER BY CASE WHEN almacen_uid = ? THEN 0 ELSE 1 END, id DESC LIMIT 1`).get(almacenUid, almacenUid) as any
+        : db!.prepare(`SELECT id, created_at FROM caja_turnos WHERE estado = 'abierto' ORDER BY id DESC LIMIT 1`).get() as any
       if (!turno) return { success: true, data: { total: 0 } }
       const desde = turno.created_at
-      const rows = db!.prepare(`SELECT cantidad FROM gastos WHERE created_at >= ?`).all(desde) as any[]
+      const rows = almacenUid
+        ? db!.prepare(`SELECT cantidad FROM gastos WHERE created_at >= ? AND (almacen_uid = ? OR almacen_uid IS NULL OR almacen_uid = '')`).all(desde, almacenUid) as any[]
+        : db!.prepare(`SELECT cantidad FROM gastos WHERE created_at >= ?`).all(desde) as any[]
       let total = 0
       for (const r of rows) total += Number(r.cantidad || 0)
       return { success: true, data: { total } }
@@ -1805,6 +2559,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle('cuadre:realizar', async (_event, data: any) => {
     try {
       data.fecha = new Date().toISOString().split('T')[0]
+      if (!data.uid) data.uid = generarUid()
       const keys = Object.keys(data)
       const vals = Object.values(data)
       db!.prepare(`INSERT INTO cuadres (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...vals)
@@ -1877,8 +2632,8 @@ function setupIpcHandlers(): void {
       const id = d?.id
       if (!id) return { success: false, error: 'La licencia no tiene identificador para actualizar' }
 
-      const dispositivos = obtenerDispositivosLicencia(d.dispositivos)
-      const equiposNoAutorizados = obtenerEquiposNoAutorizados(d.equipos_no_autorizados).filter(equipo => equipo !== mac)
+      const dispositivos = obtenerDispositivosLicencia(d.authorized_devices ?? d.devices ?? d.dispositivos)
+      const equiposNoAutorizados = obtenerEquiposNoAutorizados(d.unauthorized_devices ?? d.pending_devices ?? d.equipos_no_autorizados).filter(equipo => equipo !== mac)
       const dispositivosActualizados = dispositivos.includes(mac) ? dispositivos : [...dispositivos, mac]
       const fecha = new Date().toISOString().replace('T', ' ').split('.')[0]
       const updateResult = await actualizarCamposLicencia({
@@ -1952,26 +2707,32 @@ function setupIpcHandlers(): void {
         .sort((a: number, b: number) => a - b)
       if (facturaIds.length === 0) return { success: false, error: 'Factura invalida' }
 
-      const email = getEmailEmpresa()
-      if (!email || !email.includes('@')) return { success: false, error: 'Configura un correo valido en los datos de la empresa' }
-
       const mac = normalizarMac(obtenerMacAddress()) || 'LOCAL'
       const key = `${mac}:${facturaIds.join(',')}`
-      const codigo = Math.floor(1000 + Math.random() * 9000).toString()
+      const otpStatus = getOtpLocalStatus()
       facturaEliminacionOtp.set(key, {
-        codigo,
+        codigo: otpStatus.code,
         facturaIds,
-        email,
+        email: otpStatus.sendEmail ? getOtpEmailConfig().email : 'OTP LOCAL',
         expiresAt: Date.now() + 10 * 60 * 1000,
       })
 
-      const emailResult = await enviarEmailOtpEliminarFactura(email, codigo, factura)
-      if (!emailResult.success) {
-        facturaEliminacionOtp.delete(key)
-        return { success: false, error: emailResult.error || 'No se pudo enviar el codigo' }
+      let email = ''
+      if (otpStatus.sendEmail) {
+        const emailConfig = getOtpEmailConfig()
+        email = String(emailConfig.email || '').trim()
+        if (!email) {
+          facturaEliminacionOtp.delete(key)
+          return { success: false, error: 'Activa o completa la configuracion de correo antes de enviar el OTP' }
+        }
+        const emailResult = await enviarOtpPorApi(email, otpStatus.code, factura)
+        if (!emailResult.success) {
+          facturaEliminacionOtp.delete(key)
+          return { success: false, error: emailResult.error || 'No se pudo enviar el OTP al correo' }
+        }
       }
 
-      return { success: true, data: { email: ocultarEmail(email), expiresMinutes: 10 } }
+      return { success: true, data: { local: true, emailSent: otpStatus.sendEmail, email, networkUrl: otpStatus.networkUrl, mode: otpStatus.mode, expiresMinutes: 10 } }
     } catch (e: any) { return { success: false, error: e.message || 'Error solicitando codigo' } }
   })
 
@@ -1993,7 +2754,7 @@ function setupIpcHandlers(): void {
         facturaEliminacionOtp.delete(key)
         return { success: false, error: 'El codigo vencio. Solicita uno nuevo' }
       }
-      if (registro.codigo !== codigo) return { success: false, error: 'Codigo incorrecto' }
+      if (!validateLocalOtp(codigo)) return { success: false, error: 'Codigo OTP local incorrecto' }
 
       facturaEliminacionOtp.delete(key)
       return { success: true }
@@ -2008,29 +2769,33 @@ function setupIpcHandlers(): void {
         .sort((a: number, b: number) => a - b)
       if (imeiIds.length === 0) return { success: false, error: 'IMEI invalido' }
 
-      const email = getEmailEmpresa()
-      if (!email || !email.includes('@')) return { success: false, error: 'Configura un correo valido en los datos de la empresa' }
-
       const mac = normalizarMac(obtenerMacAddress()) || 'LOCAL'
       const key = `${mac}:${imeiIds.join(',')}`
-      const codigo = Math.floor(1000 + Math.random() * 9000).toString()
-      imeiEliminacionOtp.set(key, { codigo, imeiIds, email, expiresAt: Date.now() + 10 * 60 * 1000 })
+      const otpStatus = getOtpLocalStatus()
+      imeiEliminacionOtp.set(key, { codigo: otpStatus.code, imeiIds, email: otpStatus.sendEmail ? getOtpEmailConfig().email : 'OTP LOCAL', expiresAt: Date.now() + 10 * 60 * 1000 })
 
-      const emailResult = await enviarEmailOtpEliminarFactura(email, codigo, {
-        ...imei,
-        entidad: 'IMEI',
-        entidadPlural: 'IMEI',
-        no_factura: imeiIds.length === 1 ? (imei?.nombre || imeiIds[0]) : '',
-        nombre_cliente: imeiIds.length === 1 ? (imei?.nombre || 'Sin nombre') : '',
-        cantidad: imeiIds.length,
-        total: Number(imei?.total || 0),
-      })
-      if (!emailResult.success) {
-        imeiEliminacionOtp.delete(key)
-        return { success: false, error: emailResult.error || 'No se pudo enviar el codigo' }
+      let email = ''
+      if (otpStatus.sendEmail) {
+        const emailConfig = getOtpEmailConfig()
+        email = String(emailConfig.email || '').trim()
+        if (!email) {
+          imeiEliminacionOtp.delete(key)
+          return { success: false, error: 'Activa o completa la configuracion de correo antes de enviar el OTP' }
+        }
+        const emailResult = await enviarOtpPorApi(email, otpStatus.code, {
+          ...imei,
+          entidad: 'IMEI',
+          entidadPlural: 'IMEI',
+          cantidad: imeiIds.length,
+          no_factura: imeiIds.length > 1 ? `${imeiIds.length} IMEI` : (imei?.nombre || `IMEI-${imeiIds[0]}`),
+        })
+        if (!emailResult.success) {
+          imeiEliminacionOtp.delete(key)
+          return { success: false, error: emailResult.error || 'No se pudo enviar el OTP al correo' }
+        }
       }
 
-      return { success: true, data: { email: ocultarEmail(email), expiresMinutes: 10 } }
+      return { success: true, data: { local: true, emailSent: otpStatus.sendEmail, email, networkUrl: otpStatus.networkUrl, mode: otpStatus.mode, expiresMinutes: 10 } }
     } catch (e: any) { return { success: false, error: e.message || 'Error solicitando codigo' } }
   })
 
@@ -2052,34 +2817,41 @@ function setupIpcHandlers(): void {
         imeiEliminacionOtp.delete(key)
         return { success: false, error: 'El codigo vencio. Solicita uno nuevo' }
       }
-      if (registro.codigo !== codigo) return { success: false, error: 'Codigo incorrecto' }
+      if (!validateLocalOtp(codigo)) return { success: false, error: 'Codigo OTP local incorrecto' }
 
       imeiEliminacionOtp.delete(key)
       return { success: true }
     } catch (e: any) { return { success: false, error: e.message || 'Error validando codigo' } }
   })
 
-  ipcMain.handle('transferencia:realizar', async (_event, params: { tabla: string; items: { id: number; cantidad: number }[]; origen_id: number; destino_id: number; transferencia: any }) => {
+  ipcMain.handle('transferencia:realizar', async (_event, params: { tabla: string; items: { id: number; cantidad: number }[]; origen_id: number; destino_id: number; origen_uid?: string; destino_uid?: string; transferencia: any }) => {
     try {
-      const { tabla, items, origen_id, destino_id, transferencia } = params
+      const { tabla, items, origen_id, destino_id, origen_uid = '', destino_uid = '', transferencia } = params
       for (const item of items) {
         const row = db!.prepare(`SELECT * FROM "${tabla}" WHERE id = ?`).get(item.id) as any
         if (!row) { return { success: false, error: `Producto #${item.id} no encontrado` } }
+        if (origen_uid && row.almacen_uid && String(row.almacen_uid) !== origen_uid) {
+          return { success: false, error: `${row.nombre || 'Producto'} no pertenece al almacen de origen` }
+        }
         const stockActual = Number(row.cantidad || 0)
         if (stockActual < item.cantidad) { return { success: false, error: `${row.nombre}: stock insuficiente (${stockActual} < ${item.cantidad})` } }
         const nuevaCantidadOrigen = stockActual - item.cantidad
-        db!.prepare(`UPDATE "${tabla}" SET cantidad = ? WHERE id = ?`).run(nuevaCantidadOrigen, item.id)
-        const destRow = db!.prepare(`SELECT * FROM "${tabla}" WHERE id = ? AND (almacen_id = ? OR ? = 1)`).get(item.id, destino_id, destino_id) as any
+        db!.prepare(`UPDATE "${tabla}" SET cantidad = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(nuevaCantidadOrigen, item.id)
+        const destRow = db!.prepare(`SELECT * FROM "${tabla}" WHERE almacen_uid = ? AND nombre = ? LIMIT 1`).get(destino_uid, row.nombre || '') as any
         if (destRow) {
-          db!.prepare(`UPDATE "${tabla}" SET cantidad = ? WHERE id = ? AND almacen_id = ?`).run(Number(destRow.cantidad || 0) + item.cantidad, item.id, destino_id)
+          db!.prepare(`UPDATE "${tabla}" SET cantidad = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(Number(destRow.cantidad || 0) + item.cantidad, destRow.id)
         } else {
-          const newRow = { ...row, id: undefined, cantidad: item.cantidad, almacen_id: destino_id }
+          const newRow = { ...row, uid: generarUid(), cantidad: item.cantidad, almacen_id: destino_id, almacen_uid: destino_uid }
+          delete newRow.id
           const keys = Object.keys(newRow)
           const placeholders = keys.map(() => '?').join(', ')
           const values = Object.values(newRow)
           db!.prepare(`INSERT INTO "${tabla}" (${keys.join(', ')}) VALUES (${placeholders})`).run(...values)
         }
       }
+      if (!transferencia.uid) transferencia.uid = generarUid()
+      if (!transferencia.created_at) transferencia.created_at = new Date().toISOString()
+      transferencia.updated_at = new Date().toISOString()
       const tk = Object.keys(transferencia)
       const tp = tk.map(() => '?').join(', ')
       const tv = Object.values(transferencia)
@@ -2088,28 +2860,28 @@ function setupIpcHandlers(): void {
     } catch (e: any) { return { success: false, error: e.message } }
   })
 
-  ipcMain.handle('ajuste:realizar', async (_event, params: { tabla: string; producto_id: number; cantidad_nueva: number; motivo: string; tipo: string; almacen_id: number }) => {
+  ipcMain.handle('ajuste:realizar', async (_event, params: { tabla: string; producto_id: number; cantidad_nueva: number; motivo: string; tipo: string; almacen_id: number; almacen_uid?: string }) => {
     try {
-      const { tabla, producto_id, cantidad_nueva, motivo, tipo, almacen_id } = params
+      const { tabla, producto_id, cantidad_nueva, motivo, tipo, almacen_id, almacen_uid = '' } = params
       const row = db!.prepare(`SELECT * FROM "${tabla}" WHERE id = ?`).get(producto_id) as any
       if (!row) return { success: false, error: 'Producto no encontrado' }
       const anterior = Number(row.cantidad || 0)
       const diferencia = cantidad_nueva - anterior
       db!.prepare(`UPDATE "${tabla}" SET cantidad = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(cantidad_nueva, producto_id)
-      const data = { tabla, producto_id, producto_nombre: row.nombre || '', cantidad_anterior: anterior, cantidad_nueva, diferencia, tipo, motivo, usuario: '', almacen_id }
+      const data = { uid: generarUid(), tabla, producto_id, producto_nombre: row.nombre || '', cantidad_anterior: anterior, cantidad_nueva, diferencia, tipo, motivo, usuario: '', almacen_id, almacen_uid }
       const keys = Object.keys(data); const vals = Object.values(data)
       db!.prepare(`INSERT INTO ajustes_inventario (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...vals)
       return { success: true, data: { anterior, nueva: cantidad_nueva, diferencia } }
     } catch (e: any) { return { success: false, error: e.message } }
   })
 
-  ipcMain.handle('precio:registrarHistorial', async (_event, params: { tabla: string; producto_id: number; producto_nombre: string; cambios: { campo: string; anterior: any; nuevo: any }[] }) => {
+  ipcMain.handle('precio:registrarHistorial', async (_event, params: { tabla: string; producto_id: number; producto_nombre: string; cambios: { campo: string; anterior: any; nuevo: any }[]; almacen_id?: number; almacen_uid?: string }) => {
     try {
-      const { tabla, producto_id, producto_nombre, cambios } = params
-      const stmt = db!.prepare(`INSERT INTO historial_precios (tabla, producto_id, producto_nombre, campo, valor_anterior, valor_nuevo, usuario) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      const { tabla, producto_id, producto_nombre, cambios, almacen_id = 0, almacen_uid = '' } = params
+      const stmt = db!.prepare(`INSERT INTO historial_precios (uid, tabla, producto_id, producto_nombre, campo, valor_anterior, valor_nuevo, usuario, almacen_id, almacen_uid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       for (const c of cambios) {
         if (String(c.anterior) !== String(c.nuevo)) {
-          stmt.run(tabla, producto_id, producto_nombre, c.campo, String(c.anterior || ''), String(c.nuevo || ''), '')
+          stmt.run(generarUid(), tabla, producto_id, producto_nombre, c.campo, String(c.anterior || ''), String(c.nuevo || ''), '', almacen_id, almacen_uid)
         }
       }
       return { success: true }
@@ -2153,7 +2925,7 @@ function setupIpcHandlers(): void {
         const estadoFinal = offline.estado === 'sin_verificar' ? 'no_encontrada' : offline.estado
         return { success: false, estado: estadoFinal, error: offline.error || 'Sin licencia local', data: { estado: estadoFinal, mensaje: offline.error || 'Sin licencia local' } }
       }
-        if (forceOnline) {
+      if (forceOnline) {
         const VERIFY_TIMEOUT = 1500
         const codigoLocal = getCodigoLicenciaLocal()
         let online: any
@@ -2178,7 +2950,9 @@ function setupIpcHandlers(): void {
         }
         return { success: false, error: online.error || 'Error verificando online', data: { estado: 'error', mensaje: online.error || 'Sin respuesta del servidor' } }
       }
+
       const resultado = await verificarLicenciaCompleta()
+      console.log('[Licencia][Verificacion] Resultado final:', resultado)
       return { success: resultado.success, estado: resultado.estado, data: resultado, verificadoOnline: resultado.verificadoOnline }
     } catch (e: any) { return { success: false, error: e.message } }
   })
@@ -2382,6 +3156,50 @@ function setupIpcHandlers(): void {
     } catch { return { success: false, error: 'Error al leer config' } }
   })
 
+  // Configuracion portable: esquema de tablas/campos y datos iniciales controlados.
+  ipcMain.handle('portable-config:create', () => {
+    try { return { success: true, data: createPortableConfiguration() } }
+    catch (error: any) { return { success: false, error: error.message } }
+  })
+
+  ipcMain.handle('portable-config:apply', (_event, packageData: any) => {
+    try { return { success: true, data: applyPortableConfiguration(packageData) } }
+    catch (error: any) { return { success: false, error: error.message } }
+  })
+
+  ipcMain.handle('portable-config:seed-defaults', (_event, defaults?: any) => {
+    try { return { success: true, data: seedPortableDefaults(defaults) } }
+    catch (error: any) { return { success: false, error: error.message } }
+  })
+
+  ipcMain.handle('portable-config:export', async (_event, packageData?: any) => {
+    try {
+      const data = packageData ? validatePortableConfiguration(packageData) : createPortableConfiguration()
+      const stamp = new Date().toISOString().slice(0, 10)
+      const result = await dialog.showSaveDialog(mainWindow!, {
+        title: 'Exportar configuracion TMPOS',
+        defaultPath: `tmpos-configuracion-${stamp}.json`,
+        filters: [{ name: 'Configuracion JSON', extensions: ['json'] }],
+      })
+      if (result.canceled || !result.filePath) return { success: false, canceled: true }
+      await fs.promises.writeFile(result.filePath, JSON.stringify(data, null, 2), 'utf8')
+      return { success: true, path: result.filePath, data }
+    } catch (error: any) { return { success: false, error: error.message } }
+  })
+
+  ipcMain.handle('portable-config:import', async () => {
+    try {
+      const result = await dialog.showOpenDialog(mainWindow!, {
+        title: 'Importar configuracion TMPOS',
+        properties: ['openFile'],
+        filters: [{ name: 'Configuracion JSON', extensions: ['json'] }],
+      })
+      if (result.canceled || !result.filePaths[0]) return { success: false, canceled: true }
+      const data = validatePortableConfiguration(JSON.parse(await fs.promises.readFile(result.filePaths[0], 'utf8')))
+      return { success: true, path: result.filePaths[0], data }
+    } catch (error: any) { return { success: false, error: error.message } }
+  })
+
   ipcMain.handle('update:check', async () => {
     try {
       const res = await fetch('https://celulares.tmposystem.com/api2/actualizaciones', {
@@ -2499,6 +3317,28 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('getServerUrl', () => { return { success: true, url: serverUrl } })
 
+  ipcMain.handle('otp-local:getConfig', () => {
+    try { return { success: true, data: getOtpLocalStatus() } }
+    catch (error: any) { return { success: false, error: error.message || 'No se pudo cargar el OTP local' } }
+  })
+
+  ipcMain.handle('otp-local:saveConfig', (_event, payload: any = {}) => {
+    try {
+      const mode: OtpLocalMode = payload.mode === 'fixed' ? 'fixed' : 'variable'
+      const fixedCode = String(payload.fixedCode || '').replace(/\D/g, '')
+      const intervalSeconds = Math.min(3600, Math.max(30, Number(payload.intervalSeconds || 60)))
+      const sendEmail = payload.sendEmail === true
+      if (mode === 'fixed' && !/^\d{4}$/.test(fixedCode)) return { success: false, error: 'El codigo fijo debe tener 4 digitos' }
+      const current = getOtpLocalConfig()
+      const secret = payload.regenerateSecret ? crypto.randomBytes(32).toString('hex') : current.secret
+      db!.prepare(`UPDATE otp_local_config SET mode = ?, fixed_code = ?, interval_seconds = ?, send_email = ?, secret = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1`).run(
+        mode, /^\d{4}$/.test(fixedCode) ? fixedCode : current.fixedCode, intervalSeconds, sendEmail ? 1 : 0, secret
+      )
+      registrarBitacora('otp_local_config', 1, 'UPDATE', 'ADMIN/SOPORTE', { mode, interval_seconds: intervalSeconds, send_email: sendEmail, secret_regenerated: Boolean(payload.regenerateSecret) }, { mode: current.mode, interval_seconds: current.intervalSeconds, send_email: current.sendEmail })
+      return { success: true, data: getOtpLocalStatus() }
+    } catch (error: any) { return { success: false, error: error.message || 'No se pudo guardar el OTP local' } }
+  })
+
   // consultaservidor
   ipcMain.handle('consultaservidor', (_event, action: string, ...args: any[]) => {
     try {
@@ -2591,6 +3431,50 @@ function setupIpcHandlers(): void {
         const row = db!.prepare(`SELECT COUNT(*) as count FROM "${args[0]}"`).get() as any
         return { success: true, count: row?.count || 0 }
       }
+      if (action === 'tableAdminInfo') {
+        const tabla = String(args[0] || '')
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tabla)) return { success: false, error: 'Nombre de tabla no valido' }
+        const existe = db!.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(tabla)
+        if (!existe) return { success: false, error: 'La tabla no existe' }
+        const count = (db!.prepare(`SELECT COUNT(*) AS count FROM "${tabla}"`).get() as any)?.count || 0
+        const columns = db!.prepare(`PRAGMA table_info("${tabla}")`).all() as any[]
+        const indexes = db!.prepare(`PRAGMA index_list("${tabla}")`).all() as any[]
+        const foreignKeys = db!.prepare(`PRAGMA foreign_key_list("${tabla}")`).all() as any[]
+        const sequence = db!.prepare(`SELECT seq FROM sqlite_sequence WHERE name = ?`).get(tabla) as any
+        return { success: true, data: { tabla, rows: count, columns: columns.length, indexes: indexes.length, foreignKeys: foreignKeys.length, nextId: Number(sequence?.seq || 0) + 1 } }
+      }
+      if (action === 'tableAdminAction') {
+        const tabla = String(args[0] || '')
+        const operation = String(args[1] || '')
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tabla)) return { success: false, error: 'Nombre de tabla no valido' }
+        const existe = db!.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(tabla)
+        if (!existe) return { success: false, error: 'La tabla no existe' }
+        if (operation === 'empty') {
+          const result = db!.transaction(() => {
+            const deleted = db!.prepare(`DELETE FROM "${tabla}"`).run().changes
+            db!.prepare(`DELETE FROM sqlite_sequence WHERE name = ?`).run(tabla)
+            return deleted
+          })()
+          if (tabla !== 'bitacora') registrarBitacora(tabla, 0, 'EMPTY_TABLE', 'SOPORTE', { reset_id: true, deleted: result }, null)
+          return { success: true, deleted: result }
+        }
+        if (operation === 'drop') {
+          db!.exec(`DROP TABLE "${tabla}"`)
+          registrarBitacora(tabla, 0, 'DROP_TABLE', 'SOPORTE', null, { tabla })
+          return { success: true }
+        }
+        if (operation === 'optimize') {
+          db!.exec(`ANALYZE "${tabla}"`)
+          db!.exec(`REINDEX "${tabla}"`)
+          return { success: true }
+        }
+        if (operation === 'integrity') {
+          const rows = db!.prepare(`PRAGMA integrity_check("${tabla}")`).all() as any[]
+          const messages = rows.map(row => String(Object.values(row)[0] || ''))
+          return { success: true, ok: messages.length === 1 && messages[0].toLowerCase() === 'ok', messages }
+        }
+        return { success: false, error: 'Accion de tabla no reconocida' }
+      }
       return null
     } catch (error: any) { return { success: false, error: error.message } }
   })
@@ -2598,26 +3482,22 @@ function setupIpcHandlers(): void {
   // Email
   function decodeBase64Password(encoded: string): string {
     if (!encoded) return ''
+    const valor = String(encoded).trim()
     try {
-      let valor = encoded.trim()
-      // Algunas versiones guardaron la misma clave varias veces en Base64. Se
-      // decodifica los niveles necesarios y se detiene al llegar al password real.
-      for (let intento = 0; intento < 5; intento++) {
-        const base64 = valor.startsWith('b64:') ? valor.slice(4) : valor
-        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) break
-        const padded = base64.padEnd(base64.length + ((4 - base64.length % 4) % 4), '=')
-        const decoded = Buffer.from(padded, 'base64').toString('utf8')
-        if (Buffer.from(decoded, 'utf8').toString('base64') !== padded) break
-        if (!base64.includes('=') && !decoded.startsWith('b64:') && !/^[A-Za-z0-9+/]+={1,2}$/.test(decoded)) break
-        valor = decoded
-      }
-      return valor
-    } catch { return encoded }
+      const marcado = valor.startsWith('b64:')
+      const base64 = marcado ? valor.slice(4) : valor
+      // Sin prefijo solo se considera Base64 cuando tiene padding. Esto evita
+      // cambiar por accidente una contrasena normal compuesta por letras.
+      if (!marcado && !base64.includes('=')) return valor
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64) || base64.length % 4 !== 0) return valor
+      const decoded = Buffer.from(base64, 'base64').toString('utf8')
+      return Buffer.from(decoded, 'utf8').toString('base64') === base64 ? decoded : valor
+    } catch { return valor }
   }
 
   function getOtpEmailConfig() {
     const row = db!.prepare(`SELECT * FROM correo ORDER BY id ASC LIMIT 1`).get() as any
-    return {
+    const config = {
       activo: Number(row?.activo || 0),
       email: row?.email || '',
       password: row?.password ? decodeBase64Password(row.password) : '',
@@ -2625,6 +3505,20 @@ function setupIpcHandlers(): void {
       puerto: Number(row?.puerto || row?.port || 587),
       seguridad: row?.seguridad || row?.secure || 'STARTTLS',
     }
+    console.info('[SMTP] Configuracion cargada', {
+      id: row?.id || null,
+      activo: Boolean(config.activo),
+      email: config.email,
+      host: config.host,
+      puerto: config.puerto,
+      seguridad: config.seguridad,
+      passwordAlmacenado: {
+        length: String(row?.password || '').length,
+        format: String(row?.password || '').startsWith('b64:') ? 'b64-prefixed' : String(row?.password || '').includes('=') ? 'base64-padded' : 'plain-or-unpadded',
+      },
+      passwordSmtpLength: config.password.length,
+    })
+    return config
   }
 
   function getEmailConfig() {
@@ -2641,6 +3535,20 @@ function setupIpcHandlers(): void {
       puerto: Number(row.puerto || row.port || defaultEmailConfig.puerto),
       seguridad: row.seguridad || row.secure || defaultEmailConfig.seguridad,
     }
+  }
+
+  function getSmtpAttempts(config: any): Array<{ host: string; port: number; secure: boolean; label: string }> {
+    const host = String(config?.host || 'smtp.gmail.com').trim() || 'smtp.gmail.com'
+    const port = Number(config?.puerto || 587)
+    const secure = port === 465 || String(config?.seguridad || '').toLowerCase().includes('ssl')
+    const attempts = [{ host, port, secure, label: `${host}:${port} ${secure ? 'SSL' : 'STARTTLS'}` }]
+
+    // El puerto 465 suele estar bloqueado en algunas redes. Gmail 587 con
+    // STARTTLS es el fallback, sin terminar ocultando el error con un timeout 465.
+    if (!(host.toLowerCase() === 'smtp.gmail.com' && port === 587)) {
+      attempts.push({ host: 'smtp.gmail.com', port: 587, secure: false, label: 'smtp.gmail.com:587 STARTTLS' })
+    }
+    return attempts
   }
 
   function smtpCommand(socket: any, command: string | null, expected: number[] = [250]): Promise<string> {
@@ -2663,56 +3571,108 @@ function setupIpcHandlers(): void {
     })
   }
 
-  async function resolverHostSmtp(host: string): Promise<string> {
+  async function resolverHostsSmtp(host: string): Promise<string[]> {
+    const direcciones = new Set<string>()
     try {
-      return (await dns.promises.lookup(host)).address
-    } catch (firstError: any) {
-      try {
-        const direcciones = await dns.promises.resolve4(host)
-        if (direcciones[0]) return direcciones[0]
-      } catch (_) {}
+      const lookup = await dns.promises.lookup(host, { all: true })
+      lookup.forEach(item => direcciones.add(item.address))
+    } catch (_) {}
+    try { (await dns.promises.resolve4(host)).forEach(address => direcciones.add(address)) } catch (_) {}
+    try { (await dns.promises.resolve6(host)).forEach(address => direcciones.add(address)) } catch (_) {}
+    if (direcciones.size === 0) {
       throw new Error(`No se pudo resolver el servidor SMTP ${host}. Verifica la conexion DNS.`)
     }
+    const resultado = [...direcciones]
+    console.info('[SMTP] DNS resuelto', { host, direcciones: resultado })
+    return resultado
   }
 
   async function connectSmtp(host: string, port: number, secure: boolean): Promise<any> {
-    const address = await resolverHostSmtp(host)
-    return new Promise((resolve, reject) => {
-      const options: any = { host: address, port, servername: host }
-      const socket = secure ? tls.connect(options) : net.connect(options)
-      socket.setTimeout(30000)
-      socket.once('error', reject)
-      socket.once(secure ? 'secureConnect' : 'connect', () => resolve(socket))
-      socket.once('timeout', () => { socket.destroy(); reject(new Error('Tiempo de espera agotado')) })
-    })
+    const addresses = await resolverHostsSmtp(host)
+    let lastError: any = null
+    for (const address of addresses) {
+      console.info('[SMTP] Probando conexion TCP', { host, address, port, secure })
+      try {
+        const socket = await new Promise<any>((resolve, reject) => {
+          const options: any = { host: address, port, servername: host }
+          const candidate = secure ? tls.connect(options) : net.connect(options)
+          const event = secure ? 'secureConnect' : 'connect'
+          const cleanup = () => {
+            candidate.off(event, onConnect)
+            candidate.off('error', onError)
+            candidate.off('timeout', onTimeout)
+          }
+          const onConnect = () => { cleanup(); resolve(candidate) }
+          const onError = (error: any) => { cleanup(); candidate.destroy(); reject(error) }
+          const onTimeout = () => {
+            cleanup()
+            candidate.destroy()
+            const error: any = new Error(`connect ETIMEDOUT ${address}:${port}`)
+            error.code = 'ETIMEDOUT'
+            reject(error)
+          }
+          candidate.setTimeout(10000)
+          candidate.once(event, onConnect)
+          candidate.once('error', onError)
+          candidate.once('timeout', onTimeout)
+        })
+        console.info('[SMTP] Conexion TCP establecida', { host, address, port, secure })
+        return socket
+      } catch (error: any) {
+        lastError = error
+        console.error('[SMTP] Conexion TCP fallida', { host, address, port, secure, code: error?.code, message: error?.message })
+      }
+    }
+    throw lastError || new Error(`No se pudo conectar a ${host}:${port}`)
   }
 
   async function sendEmail(toEmail: string, subject: string, html: string, host: string, port: number, secure: boolean, authConfig?: any): Promise<any> {
     const config = authConfig || getEmailConfig()
-    let socket = await connectSmtp(host, port, secure)
+    let socket: any = null
+    let phase = 'conexion TCP'
+    console.info('[SMTP] Inicio de envio', { host, port, secure, from: config.email, to: toEmail, subject })
     try {
+      socket = await connectSmtp(host, port, secure)
+      phase = 'saludo del servidor'
       await smtpCommand(socket, null, [220])
+      phase = 'EHLO inicial'
       await smtpCommand(socket, `EHLO ${hostname() || 'localhost'}`)
       if (!secure) {
+        phase = 'STARTTLS'
         await smtpCommand(socket, 'STARTTLS', [220])
         socket = tls.connect({ socket, servername: host })
         await new Promise((resolve, reject) => { socket.once('secureConnect', resolve); socket.once('error', reject) })
+        phase = 'EHLO despues de STARTTLS'
         await smtpCommand(socket, `EHLO ${hostname() || 'localhost'}`)
       }
+      phase = 'AUTH LOGIN'
       await smtpCommand(socket, 'AUTH LOGIN', [334])
+      phase = 'usuario SMTP'
       await smtpCommand(socket, Buffer.from(config.email).toString('base64'), [334])
       const password = /smtp\.gmail\.com/i.test(host)
         ? String(config.password || '').replace(/\s+/g, '')
         : String(config.password || '')
+      phase = 'contrasena SMTP'
       await smtpCommand(socket, Buffer.from(password).toString('base64'), [235])
+      console.info('[SMTP] Autenticacion aceptada', { host, port, email: config.email })
+      phase = 'remitente'
       await smtpCommand(socket, `MAIL FROM:<${config.email}>`)
+      phase = 'destinatario'
       await smtpCommand(socket, `RCPT TO:<${toEmail}>`, [250, 251])
+      phase = 'contenido del mensaje'
       await smtpCommand(socket, 'DATA', [354])
       const message = `From: "${config.email}" <${config.email}>\r\nTo: <${toEmail}>\r\nSubject: =?UTF-8?B?${Buffer.from(subject, 'utf8').toString('base64')}?=\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${html}`
       await smtpCommand(socket, `${message}\r\n.`, [250])
+      phase = 'cierre SMTP'
       await smtpCommand(socket, 'QUIT', [221])
+      console.info('[SMTP] Correo enviado correctamente', { host, port, to: toEmail })
       return { success: true }
-    } finally { socket.end() }
+    } catch (error: any) {
+      console.error('[SMTP] Envio fallido', { phase, host, port, secure, code: error?.code, message: error?.message })
+      throw new Error(`[${phase}] ${error?.message || 'Error SMTP'}`)
+    } finally {
+      if (socket && !socket.destroyed) socket.end()
+    }
   }
 
   async function sendTestEmail(toEmail: string, host: string, port: number, secure: boolean): Promise<any> {
@@ -2733,8 +3693,8 @@ function setupIpcHandlers(): void {
       if (!config.email || !config.password) return { success: false, error: 'Configuracion de correo incompleta' }
       if (!toEmail || !toEmail.includes('@')) return { success: false, error: 'Correo destinatario invalido' }
       let lastError: any = null
-      for (const attempt of [{ port: 587, secure: false, label: '587 STARTTLS' }, { port: 465, secure: true, label: '465 SSL' }]) {
-        try { await sendTestEmail(toEmail, 'smtp.gmail.com', attempt.port, attempt.secure); return { success: true, message: `Correo de prueba enviado correctamente (puerto ${attempt.label})` } } catch (e: any) { lastError = e }
+      for (const attempt of getSmtpAttempts(config)) {
+        try { await sendTestEmail(toEmail, attempt.host, attempt.port, attempt.secure); return { success: true, message: `Correo de prueba enviado correctamente (${attempt.label})` } } catch (e: any) { lastError = e }
       }
       return { success: false, error: `No se pudo enviar el correo. Intentos fallidos: ${lastError?.message || 'Error desconocido'}` }
     } catch (e: any) { return { success: false, error: e.message || 'Error al enviar correo' } }
@@ -2747,10 +3707,10 @@ function setupIpcHandlers(): void {
       if (!config.email || !config.password) return { success: false, error: 'Configuracion de correo incompleta' }
       if (!toEmail || !toEmail.includes('@')) return { success: false, error: 'Correo destinatario invalido' }
       let lastError: any = null
-      for (const attempt of [{ port: 587, secure: false, label: '587 STARTTLS' }, { port: 465, secure: true, label: '465 SSL' }]) {
+      for (const attempt of getSmtpAttempts(config)) {
         try {
-          await sendEmail(toEmail, 'Codigo de verificacion - TMPOS', `<h2>Tu codigo de verificacion</h2><p style="font-size:24px;font-weight:bold;letter-spacing:8px;text-align:center;padding:16px;background:#f3f4f6;border-radius:8px">${codigo}</p><p>Este codigo expirara en 10 minutos.</p>`, 'smtp.gmail.com', attempt.port, attempt.secure)
-          return { success: true, message: `OTP enviado (puerto ${attempt.label})` }
+          await sendEmail(toEmail, 'Codigo de verificacion - TMPOS', `<h2>Tu codigo de verificacion</h2><p style="font-size:24px;font-weight:bold;letter-spacing:8px;text-align:center;padding:16px;background:#f3f4f6;border-radius:8px">${codigo}</p><p>Este codigo expirara en 10 minutos.</p>`, attempt.host, attempt.port, attempt.secure)
+          return { success: true, message: `OTP enviado (${attempt.label})` }
         } catch (e: any) { lastError = e }
       }
       return { success: false, error: `No se pudo enviar el OTP. Intentos fallidos: ${lastError?.message || 'Error desconocido'}` }
@@ -2769,10 +3729,7 @@ function setupIpcHandlers(): void {
       }
       if (!payload?.html) return { success: false, error: 'El reporte de cierre esta vacio' }
 
-      const attempts = [
-        { host: config.host || 'smtp.gmail.com', port: Number(config.puerto || 587), secure: false },
-        { host: 'smtp.gmail.com', port: 465, secure: true },
-      ]
+      const attempts = getSmtpAttempts(config)
 
       let lastError: any = null
       for (const attempt of attempts) {
@@ -2830,6 +3787,77 @@ const MIME_TYPES: Record<string, string> = {
   '.ttf': 'font/ttf', '.map': 'application/octet-stream',
 }
 
+const otpWebSessions = new Map<string, { user: string; expiresAt: number }>()
+const otpLoginAttempts = new Map<string, { count: number; blockedUntil: number }>()
+
+function otpWebPage(): string {
+  return `<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Centro OTP Local</title><style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#07111f;color:#e5edf7;font-family:system-ui,-apple-system,Segoe UI,sans-serif;padding:20px}.card{width:min(440px,100%);background:#111d2e;border:1px solid #26364c;border-radius:22px;padding:28px;box-shadow:0 24px 70px #0008}h1{margin:0 0 6px;font-size:25px}.sub{color:#94a3b8;margin:0 0 24px}.field{margin:14px 0}label{display:block;font-size:13px;color:#b9c5d4;margin-bottom:7px}input{width:100%;border:1px solid #34465f;background:#0a1422;color:white;border-radius:11px;padding:13px;font-size:16px;outline:none}input:focus{border-color:#22c55e}button{width:100%;border:0;border-radius:11px;padding:13px;font-weight:700;font-size:15px;background:#22c55e;color:#052e16;cursor:pointer}button:disabled{opacity:.6}.error{min-height:22px;color:#fca5a5;font-size:13px;margin:10px 0}.hidden{display:none}.code{text-align:center;font-size:64px;font-weight:800;letter-spacing:12px;color:#86efac;margin:20px 0 8px;font-variant-numeric:tabular-nums}.pill{display:inline-block;background:#1d3047;color:#bfdbfe;padding:6px 10px;border-radius:999px;font-size:12px}.center{text-align:center}.timer{color:#94a3b8;margin:12px 0 22px}.logout{background:transparent;color:#cbd5e1;border:1px solid #34465f}.notice{font-size:12px;color:#64748b;text-align:center;margin-top:18px}
+</style></head><body><main class="card">
+<section id="login"><h1>Centro OTP Local</h1><p class="sub">Acceso exclusivo para Administrador y Soporte.</p><form id="form"><div class="field"><label for="user">Usuario</label><input id="user" autocomplete="username" required autofocus></div><div class="field"><label for="pass">Contrasena o PIN</label><input id="pass" type="password" autocomplete="current-password" required></div><div id="error" class="error"></div><button id="enter">Entrar</button></form></section>
+<section id="viewer" class="hidden center"><h1>Codigo de eliminacion</h1><p class="sub">Usa este codigo en la solicitud abierta dentro del sistema.</p><span id="mode" class="pill"></span><div id="code" class="code">----</div><div id="timer" class="timer"></div><button id="logout" class="logout">Cerrar sesion</button></section>
+<div class="notice">Conexion local. No compartas este enlace ni el codigo.</div></main>
+<script>
+const login=document.getElementById('login'),viewer=document.getElementById('viewer'),errorBox=document.getElementById('error'),form=document.getElementById('form'),enter=document.getElementById('enter');let poll;
+async function request(url,options={}){const r=await fetch(url,{...options,credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})}});const data=await r.json().catch(()=>({success:false,error:'Respuesta invalida'}));if(!r.ok)throw new Error(data.error||'Acceso denegado');return data}
+function showLogin(message=''){clearInterval(poll);viewer.classList.add('hidden');login.classList.remove('hidden');errorBox.textContent=message}
+function showViewer(){login.classList.add('hidden');viewer.classList.remove('hidden');refresh();clearInterval(poll);poll=setInterval(refresh,1000)}
+async function refresh(){try{const d=await request('/api/otp/status');document.getElementById('code').textContent=d.data.code;document.getElementById('mode').textContent=d.data.mode==='fixed'?'Codigo fijo':'Codigo variable';document.getElementById('timer').textContent=d.data.mode==='fixed'?'El codigo no cambia':'Cambia en '+d.data.secondsRemaining+' s'}catch(e){showLogin(e.message)}}
+form.addEventListener('submit',async e=>{e.preventDefault();errorBox.textContent='';enter.disabled=true;try{await request('/api/otp/login',{method:'POST',body:JSON.stringify({user:document.getElementById('user').value,password:document.getElementById('pass').value})});document.getElementById('pass').value='';showViewer()}catch(err){errorBox.textContent=err.message}finally{enter.disabled=false}});
+document.getElementById('logout').addEventListener('click',async()=>{try{await request('/api/otp/logout',{method:'POST',body:'{}'})}catch{}showLogin()});
+request('/api/otp/status').then(showViewer).catch(()=>showLogin());
+</script></body></html>`
+}
+
+function parseCookies(header = ''): Record<string, string> {
+  return Object.fromEntries(header.split(';').map(value => value.trim().split('=')).filter(parts => parts.length === 2).map(([key, value]) => [key, decodeURIComponent(value)]))
+}
+
+async function readJsonBody(req: http.IncomingMessage): Promise<any> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    const buffer = Buffer.from(chunk)
+    size += buffer.length
+    if (size > 16_384) throw new Error('Solicitud demasiado grande')
+    chunks.push(buffer)
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
+}
+
+function sendOtpJson(res: http.ServerResponse, status: number, data: any, headers: Record<string, string> = {}): void {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers })
+  res.end(JSON.stringify(data))
+}
+
+function getOtpWebSession(req: http.IncomingMessage) {
+  const token = parseCookies(String(req.headers.cookie || '')).otp_session
+  const session = token ? otpWebSessions.get(token) : undefined
+  if (!session || session.expiresAt <= Date.now()) {
+    if (token) otpWebSessions.delete(token)
+    return null
+  }
+  return session
+}
+
+function verifyOtpWebLogin(userInput: string, password: string): { valid: boolean; user: string } {
+  const normalized = userInput.trim().toLowerCase()
+  const supportPassword = new Date().toTimeString().slice(0, 5).replace(':', '')
+  if (normalized === 'soporte' && password === supportPassword) return { valid: true, user: 'SOPORTE TECNICO' }
+  const users = db!.prepare(`SELECT * FROM usuarios WHERE estado = 'ACTIVADO'`).all() as any[]
+  const user = users.find(row => [row.usuario, row.email, row.nombre].some(value => String(value || '').trim().toLowerCase() === normalized))
+  if (!user) return { valid: false, user: '' }
+  const role = String(user.rol || '').toLowerCase()
+  const level = String(user.nivel_seguridad || '').toLowerCase()
+  if (!['admin', 'administrador', 'soporte'].includes(role) && !['administrador', 'soporte'].includes(level)) return { valid: false, user: '' }
+  const storedPassword = String(user.password || '')
+  const passwordMatches = storedPassword.startsWith('$2') ? bcrypt.compareSync(password, storedPassword) : storedPassword === password
+  const valid = passwordMatches || String(user.pin || '') === password
+  return { valid, user: valid ? String(user.nombre || user.email || user.usuario) : '' }
+}
+
 async function startLocalServer() {
   try {
     const port = await findFreePort()
@@ -2840,7 +3868,48 @@ async function startLocalServer() {
       res.setHeader('Access-Control-Allow-Origin', '*')
       if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return }
 
-      const urlPath = req.url || '/'
+      const urlPath = new URL(req.url || '/', 'http://localhost').pathname
+      if (urlPath === '/otp' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'" })
+        res.end(otpWebPage())
+        return
+      }
+      if (urlPath === '/api/otp/login' && req.method === 'POST') {
+        const remoteAddress = String(req.socket.remoteAddress || 'unknown')
+        const attempts = otpLoginAttempts.get(remoteAddress)
+        if (attempts?.blockedUntil && attempts.blockedUntil > Date.now()) {
+          sendOtpJson(res, 429, { success: false, error: 'Demasiados intentos. Espera un minuto.' })
+          return
+        }
+        try {
+          const body = await readJsonBody(req)
+          const login = verifyOtpWebLogin(String(body.user || ''), String(body.password || ''))
+          if (!login.valid) {
+            const count = (attempts?.count || 0) + 1
+            otpLoginAttempts.set(remoteAddress, { count: count >= 5 ? 0 : count, blockedUntil: count >= 5 ? Date.now() + 60_000 : 0 })
+            sendOtpJson(res, 401, { success: false, error: 'Credenciales incorrectas o usuario no autorizado' })
+            return
+          }
+          otpLoginAttempts.delete(remoteAddress)
+          const token = crypto.randomBytes(32).toString('hex')
+          otpWebSessions.set(token, { user: login.user, expiresAt: Date.now() + 8 * 60 * 60 * 1000 })
+          sendOtpJson(res, 200, { success: true }, { 'Set-Cookie': `otp_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800` })
+        } catch (error: any) {
+          sendOtpJson(res, 400, { success: false, error: error.message || 'Solicitud invalida' })
+        }
+        return
+      }
+      if (urlPath === '/api/otp/status' && req.method === 'GET') {
+        if (!getOtpWebSession(req)) sendOtpJson(res, 401, { success: false, error: 'Inicia sesion para ver el codigo' })
+        else sendOtpJson(res, 200, { success: true, data: getOtpLocalStatus() })
+        return
+      }
+      if (urlPath === '/api/otp/logout' && req.method === 'POST') {
+        const token = parseCookies(String(req.headers.cookie || '')).otp_session
+        if (token) otpWebSessions.delete(token)
+        sendOtpJson(res, 200, { success: true }, { 'Set-Cookie': 'otp_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' })
+        return
+      }
       if (urlPath.startsWith('/api/') && req.method === 'POST') {
         const buffers: Buffer[] = []
         for await (const chunk of req) buffers.push(chunk)
@@ -2848,6 +3917,10 @@ async function startLocalServer() {
         try {
           const action = urlPath.replace('/api/', '')
           let result: any
+          if (String(body.tabla || '') === 'otp_local_config') {
+            sendOtpJson(res, 403, { success: false, error: 'La configuracion OTP solo esta disponible mediante acceso autorizado' })
+            return
+          }
           if (action === 'db/getAll') { const rows = db!.prepare(`SELECT * FROM "${body.tabla}" ORDER BY id DESC`).all(); result = { success: true, data: rows } }
           else if (action === 'db/getModified') {
             const rows = body.desde
@@ -2874,11 +3947,21 @@ async function startLocalServer() {
           } else if (action === 'db/delete') {
             const oldData = db!.prepare(`SELECT * FROM "${body.tabla}" WHERE id = ?`).get(body.id) as Record<string, any> || {}
             const uid = oldData?.uid || ''
-            db!.prepare(`DELETE FROM "${body.tabla}" WHERE id = ?`).run(body.id)
-            if (body.tabla !== 'bitacora' && body.tabla !== 'sync_deletes') {
-              registrarBitacora(body.tabla, body.id, 'DELETE', body.usuario || '', null, oldData)
-              if (uid) { try { db!.prepare(`INSERT INTO sync_deletes (tabla, uid) VALUES (?, ?)`).run(body.tabla, uid) } catch {} }
-            }
+            db!.transaction(() => {
+              if (body.tabla === 'facturas') {
+                const ecfRows = db!.prepare(`SELECT * FROM facturas_ecf WHERE factura_id = ?`).all(body.id) as Record<string, any>[]
+                db!.prepare(`DELETE FROM facturas_ecf WHERE factura_id = ?`).run(body.id)
+                for (const ecf of ecfRows) {
+                  registrarBitacora('facturas_ecf', Number(ecf.id || 0), 'DELETE', body.usuario || '', null, ecf)
+                  if (ecf.uid) { try { db!.prepare(`INSERT INTO sync_deletes (tabla, uid) VALUES ('facturas_ecf', ?)`).run(ecf.uid) } catch {} }
+                }
+              }
+              db!.prepare(`DELETE FROM "${body.tabla}" WHERE id = ?`).run(body.id)
+              if (body.tabla !== 'bitacora' && body.tabla !== 'sync_deletes') {
+                registrarBitacora(body.tabla, body.id, 'DELETE', body.usuario || '', null, oldData)
+                if (uid) { try { db!.prepare(`INSERT INTO sync_deletes (tabla, uid) VALUES (?, ?)`).run(body.tabla, uid) } catch {} }
+              }
+            })()
             result = { success: true }
           } else if (action === 'db/bitacoraList') { const rows = db!.prepare(`SELECT * FROM bitacora ORDER BY id DESC LIMIT ?`).all(body.limite || 1000); result = { success: true, data: rows } }
           else if (action === 'db/bitacoraDeleteAll') { db!.prepare(`DELETE FROM bitacora`).run(); result = { success: true } }

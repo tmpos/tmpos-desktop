@@ -7,6 +7,7 @@ import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
+import InputOtp from 'primevue/inputotp'
 import Select from 'primevue/select'
 import Fieldset from 'primevue/fieldset'
 import { useToast } from 'primevue/usetoast'
@@ -22,6 +23,12 @@ const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
 const dialogVisible = ref(false)
 const deleteDialogVisible = ref(false)
+const deleteOtpEnviado = ref(false)
+const deleteOtpEmail = ref('')
+const deleteOtp = ref('')
+const deleteOtpError = ref('')
+const deleteOtpLoading = ref(false)
+const deleteOtpConfirmando = ref(false)
 const isEditing = ref(false)
 const selectedUsuario = ref<any>(null)
 const busqueda = ref('')
@@ -127,7 +134,73 @@ function abrirEditar(usuario: any) {
 
 function confirmarBorrar(usuario: any) {
   selectedUsuario.value = usuario
+  resetDeleteOtp()
   deleteDialogVisible.value = true
+}
+
+function resetDeleteOtp() {
+  deleteOtpEnviado.value = false
+  deleteOtpEmail.value = ''
+  deleteOtp.value = ''
+  deleteOtpError.value = ''
+  deleteOtpLoading.value = false
+  deleteOtpConfirmando.value = false
+}
+
+async function solicitarOtpEliminarUsuario() {
+  if (!selectedUsuario.value) return
+  deleteOtpError.value = ''
+  deleteOtp.value = ''
+  deleteOtpLoading.value = true
+  try {
+    const res = await window.electron.invoke('facturas:solicitarOtpEliminar', {
+      id: selectedUsuario.value.id,
+      facturaIds: [selectedUsuario.value.id],
+      no_factura: `USUARIO-${selectedUsuario.value.id}`,
+      nombre_cliente: selectedUsuario.value.nombre || selectedUsuario.value.email || 'USUARIO',
+      cantidad: 1,
+      total: 0,
+    }) as any
+    if (res.success) {
+      deleteOtpEmail.value = res.data?.networkUrl || ''
+      deleteOtpEnviado.value = true
+      toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
+    } else {
+      deleteOtpError.value = res.error || 'No se pudo enviar el codigo'
+    }
+  } catch (error: any) {
+    deleteOtpError.value = error?.message || 'Error solicitando codigo'
+  } finally {
+    deleteOtpLoading.value = false
+  }
+}
+
+async function confirmarOtpEliminarUsuario(): Promise<boolean> {
+  if (!selectedUsuario.value) return false
+  const codigo = String(deleteOtp.value || '').replace(/\D/g, '')
+  if (!/^\d{4}$/.test(codigo)) {
+    deleteOtpError.value = 'Introduce el codigo de 4 digitos'
+    return false
+  }
+  deleteOtpConfirmando.value = true
+  deleteOtpError.value = ''
+  try {
+    const res = await window.electron.invoke('facturas:confirmarOtpEliminar', {
+      facturaId: selectedUsuario.value.id,
+      facturaIds: [selectedUsuario.value.id],
+      codigo,
+    }) as any
+    if (!res.success) {
+      deleteOtpError.value = res.error || 'Codigo no valido'
+      return false
+    }
+    return true
+  } catch (error: any) {
+    deleteOtpError.value = error?.message || 'Error al confirmar codigo'
+    return false
+  } finally {
+    deleteOtpConfirmando.value = false
+  }
 }
 
 function normalizarPin(event: Event) {
@@ -206,6 +279,7 @@ async function guardar() {
 }
 
 async function borrar() {
+  if (!await confirmarOtpEliminarUsuario()) return
   try {
     const res = await window.db.delete('usuarios', selectedUsuario.value.id)
     if (res.success) {
@@ -215,6 +289,7 @@ async function borrar() {
       return
     }
     deleteDialogVisible.value = false
+    resetDeleteOtp()
     await cargarUsuarios()
   } catch (error) {
     toast.add({ severity: 'error', summary: 'Error', detail: 'Error al eliminar', life: 3000 })
@@ -399,13 +474,39 @@ onMounted(async () => {
       modal
       :style="{ width: '24rem' }"
     >
-      <div class="flex items-center gap-3">
-        <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span>Seguro que deseas eliminar <strong>{{ selectedUsuario?.nombre }}</strong>?</span>
+      <div class="space-y-4">
+        <div class="flex items-center gap-3">
+          <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
+          <span>Seguro que deseas eliminar <strong>{{ selectedUsuario?.nombre }}</strong>?</span>
+        </div>
+        <div class="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm text-amber-800 dark:text-amber-200">
+          Esta accion requiere el codigo OTP enviado al correo de la empresa.
+        </div>
+        <div v-if="deleteOtpEnviado" class="space-y-2">
+          <p class="text-xs text-surface-500">Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.</p>
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly />
+        </div>
+        <p v-if="deleteOtpError" class="text-sm text-red-500">{{ deleteOtpError }}</p>
       </div>
       <template #footer>
-        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
-        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="borrar" />
+        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false; resetDeleteOtp()" />
+        <Button
+          v-if="!deleteOtpEnviado"
+          label="Enviar OTP"
+          icon="pi pi-send"
+          severity="warning"
+          :loading="deleteOtpLoading"
+          @click="solicitarOtpEliminarUsuario"
+        />
+        <Button
+          v-else
+          label="Confirmar y eliminar"
+          icon="pi pi-trash"
+          severity="danger"
+          :loading="deleteOtpConfirmando"
+          :disabled="String(deleteOtp || '').length !== 4"
+          @click="borrar"
+        />
       </template>
     </Dialog>
   </div>

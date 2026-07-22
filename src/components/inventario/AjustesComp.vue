@@ -94,9 +94,11 @@ import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import { useToast } from 'primevue/usetoast'
 import { useAlmacenStore } from '@/stores/almacen.store'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 const toast = useToast()
 const almacenStore = useAlmacenStore()
+const systemMode = useSystemModeStore()
 
 const loading = ref(true)
 const ajustes = ref<any[]>([])
@@ -106,11 +108,11 @@ const error = ref('')
 const productos = ref<any[]>([])
 const cantidadActual = ref(0)
 
-const tablasInventario = [
-  { label: 'Accesorios', value: 'accesorios' },
+const tablasInventario = computed(() => [
+  { label: systemMode.productLabel, value: 'accesorios' },
   { label: 'Electrodomesticos', value: 'electrodomesticos' },
   { label: 'Piezas Taller', value: 'piezas' },
-]
+])
 
 const form = ref({ tabla: '', producto_id: null as number | null, cantidad_nueva: undefined as number | undefined, tipo: '', motivo: '' })
 
@@ -164,6 +166,7 @@ async function realizarAjuste() {
       motivo: form.value.motivo.trim(),
       tipo: form.value.tipo,
       almacen_id: almacenStore.activeId || 0,
+      almacen_uid: almacenStore.activeUid || '',
     })
     if (!res.success) throw new Error(res.error)
     dialogVisible.value = false

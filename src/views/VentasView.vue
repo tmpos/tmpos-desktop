@@ -11,9 +11,11 @@ import RecibidosComp from '@/components/ventas/RecibidosComp.vue'
 import NotasCreditoComp from '@/components/ventas/NotasCreditoComp.vue'
 import NotasAdminComp from '@/components/ventas/NotasAdminComp.vue'
 import ReclamacionesComp from '@/components/ReclamacionesComp.vue'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 const auth = useAuthStore()
 const route = useRoute()
+const systemMode = useSystemModeStore()
 
 const allItems: SubMenuItem[] = [
   { label: 'Facturas', icon: 'pi pi-file', key: 'facturas' },
@@ -25,7 +27,9 @@ const allItems: SubMenuItem[] = [
   { label: 'Reclamaciones', icon: 'pi pi-exclamation-triangle', key: 'reclamaciones' },
 ]
 
-const items = computed(() => allItems.filter(item => auth.tienePermiso(item.key)))
+const items = computed(() => allItems
+  .filter(item => !systemMode.isGeneralStore || item.key !== 'recibidos')
+  .filter(item => auth.tienePermiso(item.key)))
 
 const components: Record<string, any> = {
   facturas: FacturasComp,

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -33,6 +34,7 @@ import { useEmpresa } from '@/composables/useEmpresa'
 import { envioElectron, encryptarPassword } from '@/funciones/funciones.js'
 
 const toast = useToast()
+const route = useRoute()
 const { nombre: nombreEmpresa, cargar: cargarEmpresa } = useEmpresa()
 
 // ─── Estado general ───
@@ -65,7 +67,7 @@ const piezaSeleccionadaInfo = ref<any>(null)
 const creandoFactura = ref(false)
 const deleteOtpEmail = ref('')
 const deleteOtpError = ref('')
-const busqueda = ref('')
+const busqueda = ref(String(route.query.search || ''))
 const activeTab = ref('0')
 const ticketTallerRef = ref<any>(null)
 const dialogEtiquetaTaller = ref(false)
@@ -267,6 +269,8 @@ const ordenesFiltradas = computed(() => {
     o.cedula?.toLowerCase().includes(texto) ||
     o.telefono?.toLowerCase().includes(texto) ||
     o.equipo?.toLowerCase().includes(texto) ||
+    o.imei?.toLowerCase().includes(texto) ||
+    o.serial?.toLowerCase().includes(texto) ||
     o.tecnico?.toLowerCase().includes(texto) ||
     String(o.id).includes(texto)
   )
@@ -885,7 +889,7 @@ async function solicitarOtpEliminarOrden() {
     if (!res?.success) throw new Error(res?.error || 'No se pudo enviar el codigo')
 
     deleteOtpEnviado.value = true
-    deleteOtpEmail.value = res.data?.email || ''
+    deleteOtpEmail.value = res.data?.networkUrl || ''
     toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
   } catch (error: any) {
     deleteOtpError.value = error?.message || 'No se pudo enviar el codigo'
@@ -1434,7 +1438,7 @@ defineExpose({ cargarOrdenes })
 
         <div v-if="deleteOtpEnviado" class="space-y-2">
           <p class="text-sm text-surface-600 dark:text-surface-300">
-            Codigo enviado a <strong>{{ deleteOtpEmail || 'correo de la empresa' }}</strong>.
+          Consulta el codigo en el Centro OTP: <strong>{{ deleteOtpEmail || 'Configuracion > OTP Local' }}</strong>.
           </p>
           <InputOtp v-model="deleteOtp" integerOnly :length="4" class="justify-center" />
         </div>

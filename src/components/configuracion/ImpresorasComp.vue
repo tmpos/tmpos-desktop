@@ -358,7 +358,7 @@ onMounted(async () => {
               <i class="pi pi-check-circle text-blue-600"></i>
               <span class="text-blue-700 dark:text-blue-300 font-medium truncate">{{ labelPrinter }}</span>
             </div>
-            <p class="text-xs text-surface-400">Usada para imprimir etiquetas desde el modulo IMEI y el Disenador de Etiquetas</p>
+              <p class="text-xs text-surface-400">Usada para imprimir etiquetas desde el inventario y el Disenador de Etiquetas</p>
           </div>
 
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-5 space-y-4">

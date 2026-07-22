@@ -289,6 +289,8 @@ function createTables() {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL,
     id_equi INTEGER,
+    equipo_uid TEXT DEFAULT '',
+    equipo TEXT DEFAULT '',
     costo REAL DEFAULT 0,
     precio_venta REAL DEFAULT 0,
     precio_min REAL DEFAULT 0,
@@ -325,6 +327,8 @@ function createTables() {
     vendedor TEXT DEFAULT '',
     metodo_pago TEXT DEFAULT 'EFECTIVO',
     tarjeta REAL DEFAULT 0,
+    porcentaje_tarjeta REAL DEFAULT 0,
+    monto_porcentaje_tarjeta REAL DEFAULT 0,
     transferencia REAL DEFAULT 0,
     efectivo REAL DEFAULT 0,
     canal_venta TEXT DEFAULT '',
@@ -436,10 +440,28 @@ function createTables() {
     fecha TEXT DEFAULT '',
     hora TEXT DEFAULT '',
     comentario TEXT DEFAULT '',
+    metodo_pago TEXT DEFAULT 'EFECTIVO',
+    banco_id INTEGER DEFAULT 0,
+    banco_uid TEXT DEFAULT '',
+    banco_nombre TEXT DEFAULT '',
     turno_id INTEGER DEFAULT 0,
     uid TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS bancos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL,
+    numero_cuenta TEXT DEFAULT '',
+    moneda TEXT DEFAULT 'PESOS',
+    saldo REAL DEFAULT 0,
+    fecha_transaccion TEXT DEFAULT '',
+    uid TEXT DEFAULT '',
+    almacen_id INTEGER DEFAULT 0,
+    almacen_uid TEXT DEFAULT '',
+    created_at TEXT DEFAULT '',
+    updated_at TEXT DEFAULT ''
   )`)
 
   db.run(`CREATE TABLE IF NOT EXISTS gastos_fijos (
@@ -626,6 +648,12 @@ function migrateTables() {
   if (!facturasColumns.has('ganancia')) {
     db.run('ALTER TABLE facturas ADD COLUMN ganancia REAL DEFAULT 0')
   }
+  if (!facturasColumns.has('porcentaje_tarjeta')) {
+    db.run('ALTER TABLE facturas ADD COLUMN porcentaje_tarjeta REAL DEFAULT 0')
+  }
+  if (!facturasColumns.has('monto_porcentaje_tarjeta')) {
+    db.run('ALTER TABLE facturas ADD COLUMN monto_porcentaje_tarjeta REAL DEFAULT 0')
+  }
   const imeiInfo = db.exec('PRAGMA table_info("imei")')
   const imeiColumns = new Set(
     (imeiInfo[0]?.values || []).map((row: any[]) => String(row[1]))
@@ -651,6 +679,9 @@ function auditSchema() {
     facturas: { costo: 'REAL DEFAULT 0', ganancia: 'REAL DEFAULT 0', financiera: "TEXT DEFAULT ''", turno_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
     clientes: { imagen: "TEXT DEFAULT ''", rnc: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", almacen_id: 'INTEGER DEFAULT 0' },
+    gastos: { metodo_pago: "TEXT DEFAULT 'EFECTIVO'", banco_id: 'INTEGER DEFAULT 0', banco_uid: "TEXT DEFAULT ''", banco_nombre: "TEXT DEFAULT ''" },
+    serial: { equipo_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''" },
+    transferencias: { origen_uid: "TEXT DEFAULT ''", destino_uid: "TEXT DEFAULT ''", almacen_uid: "TEXT DEFAULT ''" },
   }
   db.run(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, aplicado_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, detalle TEXT DEFAULT '')`)
   for (const [table, columns] of Object.entries(expected)) {
@@ -668,11 +699,34 @@ function auditSchema() {
     const info = db.exec(`PRAGMA table_info(${escapeId(table)})`)
     const existing = new Set((info[0]?.values || []).map((column: any[]) => String(column[1])))
     if (!existing.has('almacen_id')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN almacen_id INTEGER DEFAULT 0`)
+    if (!existing.has('almacen_uid')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN almacen_uid TEXT DEFAULT ''`)
     if (!existing.has('uid')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN uid TEXT DEFAULT ''`)
     if (!existing.has('created_at')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN created_at TEXT DEFAULT ''`)
     if (!existing.has('updated_at')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN updated_at TEXT DEFAULT ''`)
+    const missingUids = db.exec(`SELECT id FROM ${escapeId(table)} WHERE uid IS NULL OR uid = ''`)
+    for (const missingRow of missingUids[0]?.values || []) {
+      db.run(`UPDATE ${escapeId(table)} SET uid = ? WHERE id = ?`, [generarUid(), missingRow[0]])
+    }
   }
-  db.run(`INSERT OR REPLACE INTO schema_migrations (version, detalle) VALUES (20260714, 'Auditoria automatica de columnas')`)
+  const empresasResult = db.exec(`SELECT id, almacen_id, uid FROM empresa WHERE uid IS NOT NULL AND uid <> '' ORDER BY id`)
+  const empresas = (empresasResult[0]?.values || []).map((row: any[]) => ({ id: Number(row[0]), almacen_id: Number(row[1]), uid: String(row[2]) }))
+  const uidPrincipal = empresas[0]?.uid || ''
+  for (const row of tables[0]?.values || []) {
+    const table = String(row[0])
+    if (table === 'schema_migrations') continue
+    if (table === 'empresa') {
+      db.run(`UPDATE empresa SET almacen_uid = uid WHERE almacen_uid IS NULL OR almacen_uid = ''`)
+      continue
+    }
+    for (const empresa of empresas) {
+      db.run(`UPDATE ${escapeId(table)} SET almacen_uid = ? WHERE (almacen_uid IS NULL OR almacen_uid = '') AND almacen_id = ?`, [empresa.uid, empresa.almacen_id || empresa.id])
+    }
+    if (uidPrincipal) db.run(`UPDATE ${escapeId(table)} SET almacen_uid = ? WHERE (almacen_uid IS NULL OR almacen_uid = '') AND (almacen_id IS NULL OR almacen_id = 0)`, [uidPrincipal])
+  }
+  db.run(`UPDATE serial SET equipo_uid = (SELECT uid FROM electrodomesticos WHERE electrodomesticos.id = serial.id_equi) WHERE (equipo_uid IS NULL OR equipo_uid = '') AND id_equi IS NOT NULL`)
+  db.run(`UPDATE serial SET equipo = (SELECT nombre FROM electrodomesticos WHERE electrodomesticos.id = serial.id_equi) WHERE (equipo IS NULL OR equipo = '') AND id_equi IS NOT NULL`)
+  db.run(`UPDATE serial SET id_equi = (SELECT id FROM electrodomesticos WHERE electrodomesticos.uid = serial.equipo_uid) WHERE equipo_uid IS NOT NULL AND equipo_uid <> '' AND EXISTS (SELECT 1 FROM electrodomesticos WHERE electrodomesticos.uid = serial.equipo_uid)`)
+  db.run(`INSERT OR REPLACE INTO schema_migrations (version, detalle) VALUES (20260721, 'Relacion estable de almacenes mediante almacen_uid')`)
 }
 
 function insertDefaultData() {
@@ -784,6 +838,29 @@ export function dbGetAll(tabla: string): { success: boolean; data?: any[]; error
       rows.push(stmt.getAsObject())
     }
     stmt.free()
+    if (tabla === 'empresa' && rows.length > 1) {
+      const activeUid = localStorage.getItem('almacen_default_uid') || localStorage.getItem('almacen_uid') || ''
+      const activeId = Number(localStorage.getItem('almacen_default_id') || localStorage.getItem('almacen_id'))
+      if (activeUid || activeId) {
+        rows.sort((a: any, b: any) =>
+          Number(activeUid ? String(b.uid || b.almacen_uid || '') === activeUid : Number(b.almacen_id || b.id) === activeId) -
+          Number(activeUid ? String(a.uid || a.almacen_uid || '') === activeUid : Number(a.almacen_id || a.id) === activeId)
+        )
+      }
+    }
+    return { success: true, data: rows }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+}
+
+export function dbGetWhere(tabla: string, where: string, params: any[] = []): { success: boolean; data?: any[]; error?: string } {
+  try {
+    const stmt = getDb().prepare(`SELECT * FROM ${escapeId(tabla)}${where ? ` WHERE ${where}` : ''} ORDER BY id DESC`)
+    if (params.length) stmt.bind(params)
+    const rows: any[] = []
+    while (stmt.step()) rows.push(stmt.getAsObject())
+    stmt.free()
     return { success: true, data: rows }
   } catch (e: any) {
     return { success: false, error: e.message }
@@ -831,7 +908,23 @@ export function dbGetById(tabla: string, id: number): { success: boolean; data?:
 export function dbInsert(tabla: string, data: Record<string, any>): { success: boolean; data?: { id: number }; error?: string } {
   try {
     const d = getDb()
+    if (data.almacen_id === undefined) data.almacen_id = Number(localStorage.getItem('almacen_id') || localStorage.getItem('almacen_default_id') || 0)
+    if (!data.almacen_uid) data.almacen_uid = localStorage.getItem('almacen_uid') || localStorage.getItem('almacen_default_uid') || ''
     if (!data.uid) data.uid = generarUid()
+    if (tabla === 'empresa') data.almacen_uid = data.uid
+    if (tabla === 'serial') {
+      const equipoStmt = d.prepare(data.equipo_uid
+        ? `SELECT id, uid, nombre FROM electrodomesticos WHERE uid = ? LIMIT 1`
+        : `SELECT id, uid, nombre FROM electrodomesticos WHERE id = ? LIMIT 1`)
+      equipoStmt.bind([data.equipo_uid || data.id_equi || 0])
+      if (equipoStmt.step()) {
+        const equipo: any = equipoStmt.getAsObject()
+        data.id_equi = equipo.id
+        data.equipo_uid = equipo.uid || ''
+        data.equipo = equipo.nombre || data.equipo || ''
+      }
+      equipoStmt.free()
+    }
     data.created_at = data.created_at || nowISO()
     data.updated_at = nowISO()
 
@@ -870,6 +963,20 @@ export function dbUpdate(tabla: string, id: number, data: Record<string, any>): 
     const oldData = oldStmt.step() ? oldStmt.getAsObject() : {}
     oldStmt.free()
 
+    if (tabla === 'empresa') data.almacen_uid = data.uid || (oldData as any).uid || (oldData as any).almacen_uid || ''
+    if (tabla === 'serial' && (data.equipo_uid !== undefined || data.id_equi !== undefined)) {
+      const equipoStmt = d.prepare(data.equipo_uid
+        ? `SELECT id, uid, nombre FROM electrodomesticos WHERE uid = ? LIMIT 1`
+        : `SELECT id, uid, nombre FROM electrodomesticos WHERE id = ? LIMIT 1`)
+      equipoStmt.bind([data.equipo_uid || data.id_equi || 0])
+      if (equipoStmt.step()) {
+        const equipo: any = equipoStmt.getAsObject()
+        data.id_equi = equipo.id
+        data.equipo_uid = equipo.uid || ''
+        data.equipo = equipo.nombre || data.equipo || ''
+      }
+      equipoStmt.free()
+    }
     data.updated_at = nowISO()
     const keys = Object.keys(data)
     const sets = keys.map(k => `${escapeId(k)} = ?`).join(', ')

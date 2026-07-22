@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -18,8 +19,11 @@ import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
 import { envioElectron, encryptarPassword, peticionesFetch } from '@/funciones/funciones.js'
+import { useAlmacenStore } from '@/stores/almacen.store'
 
 const toast = useToast()
+const route = useRoute()
+const almacenStore = useAlmacenStore()
 const recibidos = ref<any[]>([])
 const telefonos = ref<any[]>([])
 const loading = ref(false)
@@ -34,8 +38,8 @@ const deleteOtp = ref('')
 const deleteOtpError = ref('')
 const deleteOtpLoading = ref(false)
 const deleteOtpConfirmando = ref(false)
-const busqueda = ref('')
-const estadoFiltro = ref('RECIBIDO')
+const busqueda = ref(String(route.query.search || ''))
+const estadoFiltro = ref(route.query.estado === 'todos' ? 'TODOS' : 'RECIBIDO')
 const viewMode = ref<'table' | 'cards'>('table')
 const dialogNuevoTelefono = ref(false)
 const nuevoTelefonoForm = ref({ nombre: '' })
@@ -59,6 +63,7 @@ const tallerForm = ref({
 })
 
 const imeiPublishForm = ref({
+  costo: 0,
   precio_venta: 0,
   precio_min: 0,
   precio_xmayor: 0,
@@ -102,6 +107,14 @@ const notaData = computed(() => {
 })
 
 const busquedaTelefono = ref('')
+
+const telefonosAlmacenActual = computed(() => {
+  const almacenUid = String(almacenStore.activeUid || '')
+  if (!almacenUid) return []
+  return telefonos.value
+    .filter((telefono: any) => String(telefono.almacen_uid || '') === almacenUid)
+    .sort((a: any, b: any) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'))
+})
 
 const estadoOptions = computed(() => {
   const base = ['RECIBIDO', 'DISPONIBLE', 'EN_GARANTIA']
@@ -197,7 +210,10 @@ async function cargarRecibidos() {
   try {
     const res = await window.db.getAll('imei')
     if (res.success) {
-      recibidos.value = (res.data || []).filter(esEquipoRecibido)
+      const almacenUid = String(almacenStore.activeUid || '')
+      recibidos.value = (res.data || []).filter((item: any) =>
+        Boolean(almacenUid) && String(item.almacen_uid || '') === almacenUid && esEquipoRecibido(item)
+      )
       const ids = new Set(recibidos.value.map((item: any) => item.id))
       recibidosSeleccionados.value = recibidosSeleccionados.value.filter((item: any) => ids.has(item.id))
     }
@@ -323,9 +339,14 @@ async function crearTelefono() {
   }
   guardandoTelefono.value = true
   try {
-    const res = await window.db.insert('telefonos', { nombre: nuevoTelefonoForm.value.nombre.trim().toUpperCase() })
+    const datosTelefono = {
+      nombre: nuevoTelefonoForm.value.nombre.trim().toUpperCase(),
+      almacen_id: Number(almacenStore.activeId || 0),
+      almacen_uid: String(almacenStore.activeUid || ''),
+    }
+    const res = await window.db.insert('telefonos', datosTelefono)
     if (res.success) {
-      const nuevo = { id: res.data.id, nombre: nuevoTelefonoForm.value.nombre.trim().toUpperCase() }
+      const nuevo = { id: res.data.id, uid: res.data.uid || '', ...datosTelefono }
       telefonos.value.unshift(nuevo)
       form.value.id_equi = nuevo.id
       form.value.telefono_modelo = nuevo.nombre
@@ -443,8 +464,11 @@ async function guardarRecibir() {
     const data: any = {
       nombre: form.value.nombre.trim().toUpperCase(),
       id_equi: form.value.id_equi,
+      telefono_uid: telefonos.value.find((telefono: any) => Number(telefono.id) === Number(form.value.id_equi))?.uid || '',
+      equipo: getNombreTelefono(form.value.id_equi),
       color: form.value.color.trim().toUpperCase(),
       capacidad: form.value.capacidad.trim().toUpperCase(),
+      costo: Number(nd.credit_note_value || 0),
       precio_venta: form.value.precio_venta || 0,
       estado: 'RECIBIDO',
       nota: JSON.stringify({ ...nd, cliente_id: clienteId }),
@@ -459,7 +483,11 @@ async function guardarRecibir() {
         return
       }
     } else {
-      const res = await window.db.insert('imei', data)
+      const res = await window.db.insert('imei', {
+        ...data,
+        almacen_id: Number(almacenStore.activeId || 0),
+        almacen_uid: String(almacenStore.activeUid || ''),
+      })
       if (res.success) {
         toast.add({ severity: 'success', summary: 'Recibido', detail: 'Equipo recibido correctamente', life: 3000 })
         const nuevoRecibido = { id: res.data.id, ...data }
@@ -542,7 +570,7 @@ async function solicitarOtpEliminarRecibidos() {
     }) as any
 
     if (res.success) {
-      deleteOtpEmail.value = res.data?.email || ''
+    deleteOtpEmail.value = res.data?.networkUrl || ''
       deleteOtpEnviado.value = true
       toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
     } else {
@@ -741,6 +769,7 @@ function abrirPublicarImei(recibido: any) {
   const ndVal = nd.credit_note_value || 0
   const precioVenta = Number(recibido.precio_venta || 0)
   imeiPublishForm.value = {
+    costo: Number(recibido.costo || ndVal || 0),
     precio_venta: precioVenta > 0 ? precioVenta : (ndVal > 0 ? ndVal * 1.3 : 0),
     precio_min: ndVal > 0 ? ndVal * 1.15 : 0,
     precio_xmayor: ndVal > 0 ? ndVal * 1.2 : 0,
@@ -755,17 +784,36 @@ async function publicarComoImei() {
     return
   }
 
+  const telefonoUidActual = String(selectedRecibido.value.telefono_uid || '')
+  const equipoAsignado = telefonosAlmacenActual.value.find((telefono: any) =>
+    Boolean(telefonoUidActual) && String(telefono.uid || '') === telefonoUidActual
+  ) || telefonosAlmacenActual.value.find((telefono: any) =>
+    Number(telefono.id) === Number(selectedRecibido.value.id_equi)
+  )
+
+  if (!equipoAsignado || !String(equipoAsignado.uid || '')) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Equipo requerido',
+      detail: 'El IMEI debe tener asignado un equipo con UID del almacén actual antes de publicarlo',
+      life: 4000,
+    })
+    return
+  }
+
   publicandoImei.value = true
   try {
     const data: any = {
       estado: 'DISPONIBLE',
+      id_equi: Number(equipoAsignado.id),
+      telefono_uid: String(equipoAsignado.uid),
+      equipo: String(equipoAsignado.nombre || '').toUpperCase(),
+      almacen_id: Number(almacenStore.activeId || equipoAsignado.almacen_id || 0),
+      almacen_uid: String(almacenStore.activeUid || equipoAsignado.almacen_uid || ''),
+      costo: Number(imeiPublishForm.value.costo || 0),
       precio_venta: imeiPublishForm.value.precio_venta,
       precio_min: imeiPublishForm.value.precio_min || 0,
       precio_xmayor: imeiPublishForm.value.precio_xmayor || 0,
-    }
-
-    if (!selectedRecibido.value.costo && imeiPublishForm.value.precio_min > 0) {
-      data.costo = imeiPublishForm.value.precio_min * 0.7
     }
 
     const res = await window.db.update('imei', selectedRecibido.value.id, data)
@@ -796,6 +844,7 @@ onMounted(async () => {
     }
   } catch (_) {}
 
+  await almacenStore.load()
   await Promise.all([cargarRecibidos(), cargarTelefonos()])
 })
 </script>
@@ -1002,7 +1051,7 @@ onMounted(async () => {
             <div class="flex flex-col gap-1">
               <label class="text-sm font-semibold">Modelo del Telefono</label>
               <div class="flex gap-2">
-                <Select v-model="form.id_equi" :options="telefonos" optionLabel="nombre" optionValue="id" placeholder="Seleccionar modelo" filter class="flex-1" @change="form.telefono_modelo = getNombreTelefono(form.id_equi)" />
+                <Select v-model="form.id_equi" :options="telefonosAlmacenActual" optionLabel="nombre" optionValue="id" placeholder="Seleccionar modelo" filter class="flex-1" @change="form.telefono_modelo = getNombreTelefono(form.id_equi)" />
                 <Button icon="pi pi-plus" severity="secondary" @click="dialogNuevoTelefono = true" v-tooltip="'Crear nuevo modelo'" />
               </div>
             </div>
@@ -1153,6 +1202,11 @@ onMounted(async () => {
           </div>
         </div>
         <div class="flex flex-col gap-1">
+          <label class="text-sm font-semibold">Costo real del equipo (RD$)</label>
+          <InputNumber v-model="imeiPublishForm.costo" mode="currency" currency="DOP" locale="es-DO" :min="0" fluid />
+          <p class="text-xs text-surface-400">Se toma del valor registrado cuando se recibió el celular.</p>
+        </div>
+        <div class="flex flex-col gap-1">
           <label class="text-sm font-semibold">Precio de Venta (RD$)</label>
           <InputNumber v-model="imeiPublishForm.precio_venta" mode="currency" currency="DOP" locale="es-DO" fluid />
         </div>
@@ -1181,7 +1235,7 @@ onMounted(async () => {
           Esta accion requiere codigo OTP enviado al correo de la empresa.
         </div>
         <div v-if="deleteOtpEnviado" class="space-y-2">
-          <p class="text-xs text-surface-500">Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la licencia' }}.</p>
+        <p class="text-xs text-surface-500">Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.</p>
           <InputOtp v-model="deleteOtp" :length="4" integerOnly />
         </div>
         <p v-if="deleteOtpError" class="text-sm text-red-500">{{ deleteOtpError }}</p>
@@ -1217,7 +1271,7 @@ onMounted(async () => {
           Esta accion requiere codigo OTP enviado al correo de la empresa.
         </div>
         <div v-if="deleteOtpEnviado" class="space-y-2">
-          <p class="text-xs text-surface-500">Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la licencia' }}.</p>
+        <p class="text-xs text-surface-500">Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.</p>
           <InputOtp v-model="deleteOtp" :length="4" integerOnly />
         </div>
         <p v-if="deleteOtpError" class="text-sm text-red-500">{{ deleteOtpError }}</p>

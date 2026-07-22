@@ -9,8 +9,10 @@ import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
+import { useAlmacenStore } from '@/stores/almacen.store'
 
 const toast = useToast()
+const almacenStore = useAlmacenStore()
 const gastos = ref<any[]>([])
 const gastosFijos = ref<any[]>([])
 const loading = ref(false)
@@ -54,7 +56,8 @@ async function cargar() {
 
     if (resGastos.success) {
       gastos.value = (resGastos.data || []).filter((g: any) =>
-        g.fecha >= inicio && g.fecha <= fin
+        g.fecha >= inicio && g.fecha <= fin &&
+        (!almacenStore.activeUid || (g.almacen_uid ? String(g.almacen_uid) === almacenStore.activeUid : Number(g.almacen_id) === almacenStore.activeId || (!g.almacen_id && almacenStore.activeId === 1)))
       )
     }
     if (resFijos.success) {
@@ -72,11 +75,11 @@ function formatCurrency(n: number): string {
 }
 
 function exportarCSV() {
-  let csv = 'Fecha,Concepto,Monto\n'
+  let csv = 'Fecha,Concepto,Metodo,Banco,Monto\n'
   for (const g of gastosFiltrados.value) {
     const concepto = vista.value === 'gastos' ? (g.comentario || '') : (g.nombre || '')
     const monto = vista.value === 'gastos' ? g.cantidad : g.monto
-    csv += `"${g.fecha || ''}","${concepto}","${Number(monto) || 0}"\n`
+    csv += `"${g.fecha || ''}","${concepto}","${g.metodo_pago || 'EFECTIVO'}","${g.banco_nombre || ''}","${Number(monto) || 0}"\n`
   }
   const blob = new Blob([csv], { type: 'text/csv' })
   const url = URL.createObjectURL(blob)
@@ -145,6 +148,8 @@ onMounted(cargar)
       <Column field="nombre" header="Concepto" sortable v-if="vista === 'fijos'" />
       <Column field="categoria" header="Categoria" sortable v-if="vista === 'fijos'" style="width: 8rem" />
       <Column field="periodicidad" header="Periodicidad" sortable v-if="vista === 'fijos'" style="width: 8rem" />
+      <Column field="metodo_pago" header="Metodo" sortable v-if="vista === 'gastos'" style="width: 8rem" />
+      <Column field="banco_nombre" header="Banco" sortable v-if="vista === 'gastos'" style="width: 10rem" />
       <Column :field="vista === 'gastos' ? 'cantidad' : 'monto'" header="Monto" sortable style="width: 8rem">
         <template #body="{ data }">${{ formatCurrency(vista === 'gastos' ? data.cantidad : data.monto) }}</template>
       </Column>

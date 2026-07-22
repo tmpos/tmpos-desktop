@@ -247,6 +247,7 @@ async function guardar() {
       nota: form.value.nota,
       usuario: '',
       almacen_id: almacenStore.activeId || 0,
+      almacen_uid: almacenStore.activeUid || '',
     }
     const res = await (window as any).electron.invoke('db:insert', 'ordenes_compra', data)
     if (!res.success) throw new Error(res.error)

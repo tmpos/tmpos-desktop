@@ -8,8 +8,10 @@ import Select from 'primevue/select'
 import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 const toast = useToast()
+const systemMode = useSystemModeStore()
 const loading = ref(false)
 const generandoPdf = ref(false)
 const dialogPdf = ref(false)
@@ -21,12 +23,12 @@ const imeis = ref<any[]>([])
 const accesorios = ref<any[]>([])
 const piezas = ref<any[]>([])
 
-const vistas = [
+const vistas = computed(() => [
   { label: 'Todos', value: 'todos' },
-  { label: 'IMEI', value: 'imei' },
-  { label: 'Accesorios', value: 'accesorios' },
+  ...(systemMode.isCellphoneStore ? [{ label: 'IMEI', value: 'imei' }] : []),
+  { label: systemMode.productLabel, value: 'accesorios' },
   { label: 'Piezas', value: 'piezas' },
-]
+])
 
 function money(n: number): string {
   return Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -47,15 +49,15 @@ const accesoriosBajoStock = computed(() => accesorios.value.filter(a => Number(a
 const piezasBajoStock = computed(() => piezas.value.filter(p => Number(p.cantidad || 0) <= Number(p.alerta || 0)))
 
 const resumen = computed(() => {
-  const costoImeis = imeisDisponibles.value.reduce((s, i) => s + Number(i.costo || 0), 0)
-  const valorImeis = imeisDisponibles.value.reduce((s, i) => s + Number(i.precio_venta || 0), 0)
+  const costoImeis = systemMode.isCellphoneStore ? imeisDisponibles.value.reduce((s, i) => s + Number(i.costo || 0), 0) : 0
+  const valorImeis = systemMode.isCellphoneStore ? imeisDisponibles.value.reduce((s, i) => s + Number(i.precio_venta || 0), 0) : 0
   const costoAccesorios = accesorios.value.reduce((s, a) => s + (Number(a.costo || 0) * Number(a.cantidad || 0)), 0)
   const valorAccesorios = accesorios.value.reduce((s, a) => s + (Number(a.precio_venta || 0) * Number(a.cantidad || 0)), 0)
   const costoPiezas = piezas.value.reduce((s, p) => s + (Number(p.costo || 0) * Number(p.cantidad || 0)), 0)
   const valorPiezas = piezas.value.reduce((s, p) => s + (Number(p.precio_venta || 0) * Number(p.cantidad || 0)), 0)
 
   return {
-    totalItems: imeisDisponibles.value.length + accesorios.value.reduce((s, a) => s + Number(a.cantidad || 0), 0) + piezas.value.reduce((s, p) => s + Number(p.cantidad || 0), 0),
+    totalItems: (systemMode.isCellphoneStore ? imeisDisponibles.value.length : 0) + accesorios.value.reduce((s, a) => s + Number(a.cantidad || 0), 0) + piezas.value.reduce((s, p) => s + Number(p.cantidad || 0), 0),
     costoTotal: costoImeis + costoAccesorios + costoPiezas,
     valorTotal: valorImeis + valorAccesorios + valorPiezas,
     gananciaPotencial: (valorImeis + valorAccesorios + valorPiezas) - (costoImeis + costoAccesorios + costoPiezas),
@@ -107,6 +109,11 @@ function buildPdfHtml(fecha: string): string {
     <tr><td>${escapeHtml(p.nombre)}</td><td>${escapeHtml(p.proveedor || '-')}</td><td class="right">${p.cantidad || 0}</td><td class="money">RD$ ${money(p.costo)}</td><td class="money">RD$ ${money(p.precio_venta)}</td></tr>
   `).join('')
 
+  const imeiSection = systemMode.isCellphoneStore
+    ? `<div class="sec">IMEI disponibles</div><table class="data"><thead><tr><th>IMEI</th><th>Telefono</th><th>Color</th><th>Capacidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsImeis || '<tr><td colspan="6">Sin IMEI disponibles</td></tr>'}</tbody></table>`
+    : ''
+  const productTitle = systemMode.productLabel
+
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Reporte Inventario</title>
   <style>
     @page{margin:12mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#1f2937;font-size:10.5px;margin:0}.bar{height:8px;background:#2563eb;margin-bottom:18px}.head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px}.head h1{margin:0;font-size:22px}.box{border:1px solid #d1d5db;border-radius:6px;overflow:hidden;min-width:180px}.box div{padding:7px 10px;border-top:1px solid #e5e7eb}.box div:first-child{border-top:0;background:#2563eb;color:#fff;font-weight:700;text-transform:uppercase}.sec{font-size:12px;font-weight:700;text-transform:uppercase;border-bottom:2px solid #2563eb;padding-bottom:5px;margin:16px 0 8px}.cards{width:100%;border-collapse:separate;border-spacing:8px;margin:0 -8px 12px}.card{border:1px solid #d1d5db;background:#f9fafb;border-radius:6px;padding:10px}.label{font-size:9px;color:#6b7280;text-transform:uppercase}.value{font-size:18px;font-weight:700}.green{background:#ecfdf5;border-color:#a7f3d0}.green .value{color:#047857}.amber{background:#fffbeb;border-color:#fde68a}.amber .value{color:#b45309}table.data{width:100%;border-collapse:collapse;margin-bottom:14px}th{background:#111827;color:#fff;text-align:left;padding:7px 8px;font-size:9px;text-transform:uppercase}td{padding:7px 8px;border-bottom:1px solid #e5e7eb}tbody tr:nth-child(even) td{background:#f9fafb}.money,.right{text-align:right;white-space:nowrap}.footer{margin-top:18px;padding-top:10px;border-top:1px solid #d1d5db;color:#6b7280;font-size:9px;display:flex;justify-content:space-between}
@@ -115,8 +122,8 @@ function buildPdfHtml(fecha: string): string {
     <div class="head"><div><h1>Reporte de Inventario</h1><p>Resumen de productos, costos y valor disponible.</p></div><div class="box"><div>Inventario</div><div>Fecha: <strong>${fecha}</strong></div><div>Filtro: <strong>${escapeHtml(vista.value)}</strong></div></div></div>
     <div class="sec">Resumen</div>
     <table class="cards"><tr><td class="card"><div class="label">Items</div><div class="value">${resumen.value.totalItems}</div></td><td class="card"><div class="label">Costo</div><div class="value">RD$ ${money(resumen.value.costoTotal)}</div></td><td class="card green"><div class="label">Valor</div><div class="value">RD$ ${money(resumen.value.valorTotal)}</div></td><td class="card amber"><div class="label">Alertas</div><div class="value">${resumen.value.alertas}</div></td></tr></table>
-    <div class="sec">IMEI disponibles</div><table class="data"><thead><tr><th>IMEI</th><th>Telefono</th><th>Color</th><th>Capacidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsImeis || '<tr><td colspan="6">Sin IMEI disponibles</td></tr>'}</tbody></table>
-    <div class="sec">Accesorios</div><table class="data"><thead><tr><th>Nombre</th><th>Marca</th><th class="right">Cantidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsAcc || '<tr><td colspan="5">Sin accesorios</td></tr>'}</tbody></table>
+    ${imeiSection}
+    <div class="sec">${productTitle}</div><table class="data"><thead><tr><th>Nombre</th><th>Marca</th><th class="right">Cantidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsAcc || `<tr><td colspan="5">Sin ${productTitle.toLowerCase()}</td></tr>`}</tbody></table>
     <div class="sec">Piezas</div><table class="data"><thead><tr><th>Nombre</th><th>Proveedor</th><th class="right">Cantidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsPiezas || '<tr><td colspan="5">Sin piezas</td></tr>'}</tbody></table>
     <div class="footer"><span>MrCuttiTechnology</span><span>Generado el ${fecha}</span></div>
   </body></html>`
@@ -221,12 +228,12 @@ onMounted(cargarDatos)
             <span class="text-xs text-green-600 font-semibold">Valor</span>
             <p class="text-2xl font-bold mt-1 text-green-600">${{ money(resumen.valorTotal) }}</p>
           </div>
-          <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+          <div v-if="systemMode.isCellphoneStore" class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-primary font-semibold">IMEI Disp.</span>
             <p class="text-2xl font-bold mt-1">{{ resumen.imeisDisponibles }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
-            <span class="text-xs text-surface-400">Accesorios</span>
+            <span class="text-xs text-surface-400">{{ systemMode.productLabel }}</span>
             <p class="text-2xl font-bold mt-1">{{ resumen.accesorios }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
@@ -235,7 +242,7 @@ onMounted(cargarDatos)
           </div>
         </div>
 
-        <div v-if="vista === 'todos' || vista === 'imei'" class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+        <div v-if="systemMode.isCellphoneStore && (vista === 'todos' || vista === 'imei')" class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
           <h3 class="font-semibold text-sm mb-3">IMEI Disponibles</h3>
           <DataTable :value="imeisDisponibles" paginator :rows="10" responsiveLayout="scroll">
             <Column field="nombre" header="IMEI" sortable />
@@ -248,7 +255,7 @@ onMounted(cargarDatos)
         </div>
 
         <div v-if="vista === 'todos' || vista === 'accesorios'" class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
-          <h3 class="font-semibold text-sm mb-3">Accesorios</h3>
+          <h3 class="font-semibold text-sm mb-3">{{ systemMode.productLabel }}</h3>
           <DataTable :value="accesorios" paginator :rows="10" responsiveLayout="scroll">
             <Column field="nombre" header="Nombre" sortable />
             <Column field="marca_nombre" header="Marca" sortable />

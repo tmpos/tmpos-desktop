@@ -62,6 +62,16 @@ const utilColumnaTabla = ref('')
 const utilColumnaNombre = ref('')
 const utilColumnaValor = ref('')
 const utilColumnaColumnas = ref<string[]>([])
+const configPortable = ref<any>(null)
+const configPortableRuta = ref('')
+const configPortableResultado = ref('')
+const configPortableCargando = ref(false)
+const adminTabla = ref('')
+const adminTablaInfo = ref<Record<string, any> | null>(null)
+const adminTablaCargando = ref(false)
+const adminTablaDialog = ref(false)
+const adminTablaAccion = ref<'empty' | 'drop' | ''>('')
+const adminTablaConfirmacion = ref('')
 
 const extAbierta = ref(false)
 const extRuta = ref('')
@@ -95,6 +105,60 @@ const tiposDatosFicticios = [
   { label: 'Direcciones', value: 'direcciones' },
   { label: 'Fechas aleatorias', value: 'fechas' },
 ]
+
+async function exportarConfiguracionPortable() {
+  configPortableCargando.value = true
+  try {
+    const res = await (window as any).electron.invoke('portable-config:export')
+    if (res?.canceled) return
+    if (!res?.success) throw new Error(res?.error || 'No se pudo exportar')
+    configPortable.value = res.data
+    configPortableRuta.value = res.path || ''
+    configPortableResultado.value = `${res.data.schema.tables.length} tablas y ${res.data.settings?.length || 0} configuraciones exportadas.`
+    toast.add({ severity: 'success', summary: 'JSON exportado', detail: configPortableResultado.value, life: 4000 })
+  } catch (e: any) { toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 5000 }) }
+  finally { configPortableCargando.value = false }
+}
+
+async function importarConfiguracionPortable() {
+  configPortableCargando.value = true
+  try {
+    const res = await (window as any).electron.invoke('portable-config:import')
+    if (res?.canceled) return
+    if (!res?.success) throw new Error(res?.error || 'No se pudo importar')
+    configPortable.value = res.data
+    configPortableRuta.value = res.path || ''
+    configPortableResultado.value = `Archivo cargado: ${res.data.schema.tables.length} tablas. Pulsa Aplicar para actualizar este sistema.`
+    toast.add({ severity: 'info', summary: 'Configuracion cargada', detail: 'Revisa el resumen y pulsa Aplicar JSON.', life: 4500 })
+  } catch (e: any) { toast.add({ severity: 'error', summary: 'JSON no valido', detail: e.message, life: 5500 }) }
+  finally { configPortableCargando.value = false }
+}
+
+async function aplicarConfiguracionPortable() {
+  if (!configPortable.value) return
+  configPortableCargando.value = true
+  try {
+    const configuracionPlana = JSON.parse(JSON.stringify(configPortable.value))
+    const res = await (window as any).electron.invoke('portable-config:apply', configuracionPlana)
+    if (!res?.success) throw new Error(res?.error || 'No se pudo aplicar')
+    configPortableResultado.value = `${res.data.tablesCreated.length} tablas creadas, ${res.data.columnsAdded.length} campos agregados y ${res.data.tablesUnchanged.length} tablas sin cambios.`
+    await cargarTablas()
+    toast.add({ severity: 'success', summary: 'JSON aplicado', detail: configPortableResultado.value, life: 5000 })
+  } catch (e: any) { toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 5500 }) }
+  finally { configPortableCargando.value = false }
+}
+
+async function aplicarDatosPortable() {
+  configPortableCargando.value = true
+  try {
+    const defaultsPlanos = configPortable.value?.defaults ? JSON.parse(JSON.stringify(configPortable.value.defaults)) : undefined
+    const res = await (window as any).electron.invoke('portable-config:seed-defaults', defaultsPlanos)
+    if (!res?.success) throw new Error(res?.error || 'No se pudieron crear los datos')
+    configPortableResultado.value = `${res.data.inserted.length} datos creados y ${res.data.existing.length} ya existentes.`
+    toast.add({ severity: 'success', summary: 'Datos iniciales listos', detail: configPortableResultado.value, life: 4500 })
+  } catch (e: any) { toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 5500 }) }
+  finally { configPortableCargando.value = false }
+}
 
 const abrirDevTools = () => {
   try { (window as any).electron.invoke('open:devtools') } catch (_) {}
@@ -317,13 +381,15 @@ async function exportarCSV() {
 }
 
 async function exportarSQL() {
-  if (!tablaActiva.value) return
+  const tablaExportar = tablaActiva.value === '__utilidades__' ? utilTablaExport.value : tablaActiva.value
+  if (!tablaExportar) return
   try {
-    const createRes = await window.electron.invoke('consultaservidor', 'getCreateTableSQL', tablaActiva.value) as any
-    const dataRes = await window.db.getAll(tablaActiva.value)
+    const createRes = await window.electron.invoke('consultaservidor', 'getCreateTableSQL', tablaExportar) as any
+    const dataRes = await window.db.getAll(tablaExportar)
     if (!dataRes.success || !dataRes.data) { toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudieron obtener los datos', life: 3000 }); return }
-    const cols = columnas.value.map((c: any) => typeof c === 'string' ? c : c.name)
-    let sql = (createRes?.sql || `CREATE TABLE "${tablaActiva.value}"`) + ';\n\n'
+    const columnRes = await window.electron.invoke('consultaservidor', 'getTableColumns', tablaExportar, 'names') as any
+    const cols = Array.isArray(columnRes) ? columnRes : []
+    let sql = (createRes?.sql || `CREATE TABLE "${tablaExportar}"`) + ';\n\n'
     for (const row of dataRes.data) {
       const values = cols.map(c => {
         const v = row[c]
@@ -331,14 +397,14 @@ async function exportarSQL() {
         if (typeof v === 'number') return String(v)
         return `'${String(v).replace(/'/g, "''")}'`
       })
-      sql += `INSERT INTO "${tablaActiva.value}" (${cols.join(', ')}) VALUES (${values.join(', ')});\n`
+      sql += `INSERT INTO "${tablaExportar}" (${cols.join(', ')}) VALUES (${values.join(', ')});\n`
     }
     const blob = new Blob([sql], { type: 'text/sql' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url; a.download = `${tablaActiva.value}.sql`; a.click()
+    a.href = url; a.download = `${tablaExportar}.sql`; a.click()
     URL.revokeObjectURL(url)
-    toast.add({ severity: 'success', summary: 'Exportado', detail: `${tablaActiva.value}.sql`, life: 2000 })
+    toast.add({ severity: 'success', summary: 'Exportado', detail: `${tablaExportar}.sql`, life: 2000 })
   } catch (error: any) { toast.add({ severity: 'error', summary: 'Error', detail: error.message, life: 3000 }) }
 }
 
@@ -467,11 +533,65 @@ async function verInfoTabla() {
   finally { utilCargando.value = false }
 }
 
+async function cargarAdminTablaInfo() {
+  adminTablaInfo.value = null
+  if (!adminTabla.value) return
+  adminTablaCargando.value = true
+  try {
+    const res = await window.electron.invoke('consultaservidor', 'tableAdminInfo', adminTabla.value) as any
+    if (!res?.success) throw new Error(res?.error || 'No se pudo consultar la tabla')
+    adminTablaInfo.value = res.data
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo consultar la tabla', life: 4000 })
+  } finally { adminTablaCargando.value = false }
+}
+
+function confirmarAccionAdminTabla(action: 'empty' | 'drop') {
+  if (!adminTabla.value) return
+  adminTablaAccion.value = action
+  adminTablaConfirmacion.value = ''
+  adminTablaDialog.value = true
+}
+
+function ejecutarAccionAdminConfirmada() {
+  if (adminTablaAccion.value === 'empty' || adminTablaAccion.value === 'drop') ejecutarAdminTabla(adminTablaAccion.value)
+}
+
+async function ejecutarAdminTabla(action: 'empty' | 'drop' | 'optimize' | 'integrity') {
+  if (!adminTabla.value) return
+  if ((action === 'empty' || action === 'drop') && adminTablaConfirmacion.value !== adminTabla.value) return
+  adminTablaCargando.value = true
+  try {
+    const tabla = adminTabla.value
+    const res = await window.electron.invoke('consultaservidor', 'tableAdminAction', tabla, action) as any
+    if (!res?.success) throw new Error(res?.error || 'No se pudo ejecutar la accion')
+    if (action === 'integrity') {
+      toast.add({ severity: res.ok ? 'success' : 'warn', summary: res.ok ? 'Integridad correcta' : 'Problemas encontrados', detail: (res.messages || []).join(' | ') || 'Sin resultado', life: 5000 })
+    } else if (action === 'optimize') {
+      toast.add({ severity: 'success', summary: 'Tabla optimizada', detail: `Indices y estadisticas de ${tabla} actualizados`, life: 3000 })
+    } else if (action === 'empty') {
+      toast.add({ severity: 'success', summary: 'Tabla vaciada', detail: `${res.deleted || 0} registros eliminados; el proximo ID sera 1`, life: 3500 })
+      adminTablaDialog.value = false
+    } else {
+      toast.add({ severity: 'success', summary: 'Tabla eliminada', detail: `${tabla} fue eliminada`, life: 3500 })
+      adminTablaDialog.value = false
+      adminTabla.value = ''
+      adminTablaInfo.value = null
+      await cargarTablas()
+      return
+    }
+    await cargarAdminTablaInfo()
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'No se pudo completar', detail: e.message || 'Error administrando la tabla', life: 5000 })
+  } finally { adminTablaCargando.value = false }
+}
+
 async function vaciarTabla() {
   if (!tablaActiva.value) return
   vaciando.value = true
   try {
-    await window.electron.invoke('consultaservidor', 'vaciarTabla', tablaActiva.value)
+    const res = await window.electron.invoke('consultaservidor', 'vaciarTabla', tablaActiva.value) as any
+    if (!res?.success) throw new Error(res?.error || 'No se pudo vaciar la tabla')
     toast.add({ severity: 'success', summary: 'Tabla vaciada', detail: `Todos los registros de ${tablaActiva.value} eliminados y ID reseteado`, life: 3000 })
     dialogVaciar.value = false
     await seleccionarTabla(tablaActiva.value)
@@ -483,7 +603,8 @@ async function eliminarTabla() {
   if (!tablaActiva.value) return
   eliminandoTabla.value = true
   try {
-    await window.electron.invoke('consultaservidor', 'eliminarTabla', tablaActiva.value)
+    const res = await window.electron.invoke('consultaservidor', 'eliminarTabla', tablaActiva.value) as any
+    if (!res?.success) throw new Error(res?.error || 'No se pudo eliminar la tabla')
     toast.add({ severity: 'success', summary: 'Tabla eliminada', detail: `${tablaActiva.value} eliminada correctamente`, life: 3000 })
     dialogEliminarTabla.value = false
     tablaActiva.value = ''
@@ -664,6 +785,46 @@ onMounted(async () => { await cargarTablas() })
               <div class="flex gap-2">
                 <Select v-model="utilTablaExport" :options="tablas" placeholder="Seleccionar tabla" class="flex-1" fluid />
                 <Button label="Exportar" severity="info" :disabled="!utilTablaExport" @click="exportarSQL" :loading="utilCargando" />
+              </div>
+            </div>
+            <div class="md:col-span-2 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/10 p-4 space-y-3">
+              <div>
+                <h4 class="font-semibold text-sm flex items-center gap-2"><i class="pi pi-file text-emerald-600"></i> Configuracion portable JSON</h4>
+                <p class="text-xs text-surface-500 mt-1">Exporta o importa exactamente la estructura de tablas/campos, preferencias no sensibles y datos iniciales. Al aplicar, solo crea lo faltante y conserva los registros actuales.</p>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <Button label="Exportar configuracion JSON" icon="pi pi-file-export" severity="success" :loading="configPortableCargando" @click="exportarConfiguracionPortable" />
+                <Button label="Importar JSON" icon="pi pi-file-import" severity="info" outlined :loading="configPortableCargando" @click="importarConfiguracionPortable" />
+                <Button label="Aplicar JSON" icon="pi pi-wrench" severity="warn" :disabled="!configPortable" :loading="configPortableCargando" @click="aplicarConfiguracionPortable" />
+                <Button label="Instalar datos por default" icon="pi pi-sparkles" severity="secondary" :loading="configPortableCargando" @click="aplicarDatosPortable" />
+              </div>
+              <div v-if="configPortableResultado" class="rounded-md bg-surface-0 dark:bg-surface-900 border border-surface-200 dark:border-surface-700 p-3 text-xs">
+                <div class="font-medium text-surface-700 dark:text-surface-200">{{ configPortableResultado }}</div>
+                <div v-if="configPortableRuta" class="text-surface-400 mt-1 break-all">{{ configPortableRuta }}</div>
+              </div>
+              <p class="text-[11px] text-amber-600 dark:text-amber-400"><i class="pi pi-shield mr-1"></i>No incluye claves, tokens, contraseñas, licencias ni datos reales de clientes o inventario.</p>
+            </div>
+            <div class="md:col-span-2 rounded-lg border border-red-200 dark:border-red-900 bg-red-50/40 dark:bg-red-950/10 p-4 space-y-4">
+              <div>
+                <h4 class="font-semibold text-sm flex items-center gap-2"><i class="pi pi-server text-red-500"></i> Administrar tabla</h4>
+                <p class="text-xs text-surface-500 mt-1">Consulta, verifica, optimiza, vacia o elimina una tabla completa.</p>
+              </div>
+              <div class="flex flex-col sm:flex-row gap-2">
+                <Select v-model="adminTabla" :options="tablas" placeholder="Seleccionar tabla" class="flex-1" fluid @change="cargarAdminTablaInfo" />
+                <Button label="Actualizar" icon="pi pi-refresh" severity="secondary" outlined :disabled="!adminTabla" :loading="adminTablaCargando" @click="cargarAdminTablaInfo" />
+              </div>
+              <div v-if="adminTablaInfo" class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                <div class="rounded-md bg-surface-0 dark:bg-surface-900 border border-surface-200 dark:border-surface-700 p-2 text-center"><div class="text-lg font-bold">{{ adminTablaInfo.rows }}</div><div class="text-[11px] text-surface-400">Registros</div></div>
+                <div class="rounded-md bg-surface-0 dark:bg-surface-900 border border-surface-200 dark:border-surface-700 p-2 text-center"><div class="text-lg font-bold">{{ adminTablaInfo.columns }}</div><div class="text-[11px] text-surface-400">Columnas</div></div>
+                <div class="rounded-md bg-surface-0 dark:bg-surface-900 border border-surface-200 dark:border-surface-700 p-2 text-center"><div class="text-lg font-bold">{{ adminTablaInfo.indexes }}</div><div class="text-[11px] text-surface-400">Indices</div></div>
+                <div class="rounded-md bg-surface-0 dark:bg-surface-900 border border-surface-200 dark:border-surface-700 p-2 text-center"><div class="text-lg font-bold">{{ adminTablaInfo.foreignKeys }}</div><div class="text-[11px] text-surface-400">Relaciones</div></div>
+                <div class="rounded-md bg-surface-0 dark:bg-surface-900 border border-surface-200 dark:border-surface-700 p-2 text-center"><div class="text-lg font-bold">{{ adminTablaInfo.nextId }}</div><div class="text-[11px] text-surface-400">Proximo ID</div></div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <Button label="Verificar integridad" icon="pi pi-check-circle" severity="info" outlined size="small" :disabled="!adminTabla" :loading="adminTablaCargando" @click="ejecutarAdminTabla('integrity')" />
+                <Button label="Optimizar" icon="pi pi-bolt" severity="success" outlined size="small" :disabled="!adminTabla" :loading="adminTablaCargando" @click="ejecutarAdminTabla('optimize')" />
+                <Button label="Vaciar y resetear ID" icon="pi pi-trash" severity="warn" size="small" :disabled="!adminTabla" @click="confirmarAccionAdminTabla('empty')" />
+                <Button label="Eliminar tabla" icon="pi pi-times-circle" severity="danger" size="small" :disabled="!adminTabla" @click="confirmarAccionAdminTabla('drop')" />
               </div>
             </div>
           </div>
@@ -884,6 +1045,33 @@ onMounted(async () => { await cargarTablas() })
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogEliminarTabla = false" />
         <Button label="Eliminar tabla" icon="pi pi-trash" severity="danger" @click="eliminarTabla" :loading="eliminandoTabla" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="adminTablaDialog" :header="adminTablaAccion === 'drop' ? 'Eliminar tabla' : 'Vaciar tabla'" modal :style="{ width: '30rem' }" :draggable="false">
+      <div class="space-y-4">
+        <div class="flex items-start gap-3">
+          <i class="pi pi-exclamation-triangle text-3xl text-red-500 mt-1"></i>
+          <div>
+            <p class="font-semibold">{{ adminTablaAccion === 'drop' ? 'Se eliminara la estructura y todos sus datos.' : 'Se eliminaran todos los registros y el proximo ID sera 1.' }}</p>
+            <p class="text-sm text-surface-500 mt-1">Esta accion no se puede deshacer y puede fallar si otras tablas dependen de <strong>{{ adminTabla }}</strong>.</p>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-medium text-surface-500 mb-1 block">Escribe <strong>{{ adminTabla }}</strong> para confirmar</label>
+          <InputText v-model="adminTablaConfirmacion" :placeholder="adminTabla" autocomplete="off" fluid />
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="adminTablaDialog = false" />
+        <Button
+          :label="adminTablaAccion === 'drop' ? 'Eliminar definitivamente' : 'Vaciar y resetear ID'"
+          icon="pi pi-trash"
+          :severity="adminTablaAccion === 'drop' ? 'danger' : 'warn'"
+          :disabled="adminTablaConfirmacion !== adminTabla"
+          :loading="adminTablaCargando"
+          @click="ejecutarAccionAdminConfirmada"
+        />
       </template>
     </Dialog>
 

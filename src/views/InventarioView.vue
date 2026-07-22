@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { shallowRef, computed } from 'vue'
+import { shallowRef, computed, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
@@ -18,8 +19,11 @@ import EtiquetasComp from '@/components/inventario/EtiquetasComp.vue'
 import TransferenciasComp from '@/components/transferencias/TransferenciasComp.vue'
 import OrdenesCompraComp from '@/components/compras/OrdenesCompraComp.vue'
 import PerdidasComp from '@/components/inventario/PerdidasComp.vue'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 const auth = useAuthStore()
+const systemMode = useSystemModeStore()
+const route = useRoute()
 
 const allItems: SubMenuItem[] = [
   { label: 'Telefonos', icon: 'pi pi-mobile', key: 'telefonos' },
@@ -39,7 +43,13 @@ const allItems: SubMenuItem[] = [
   { label: 'Historial Precios', icon: 'pi pi-history', key: 'historial-precios' },
 ]
 
-const items = computed(() => allItems.filter(item => auth.tienePermiso(item.key)))
+const cellphoneOnlyKeys = new Set(['telefonos', 'imei', 'cambiazo'])
+const items = computed(() => allItems
+  .filter(item => !systemMode.isGeneralStore || !cellphoneOnlyKeys.has(item.key))
+  .filter(item => auth.tienePermiso(item.key))
+  .map(item => item.key === 'accesorios' && systemMode.isGeneralStore
+    ? { ...item, label: 'Productos', icon: 'pi pi-box' }
+    : item))
 
 const components: Record<string, any> = {
   categorias: CategoriasComp,
@@ -65,7 +75,16 @@ function onSelect(key: string) {
   active.value = key
 }
 
-active.value = items.value.length > 0 ? items.value[0].key : ''
+watch(() => route.query.tab, (tab) => {
+  const key = String(tab || '')
+  active.value = items.value.some(item => item.key === key) ? key : (items.value[0]?.key || '')
+}, { immediate: true })
+
+watch(items, (visibleItems) => {
+  if (!visibleItems.some(item => item.key === active.value)) {
+    active.value = visibleItems[0]?.key || ''
+  }
+})
 </script>
 
 <template>

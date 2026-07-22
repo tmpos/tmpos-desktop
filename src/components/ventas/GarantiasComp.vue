@@ -29,7 +29,9 @@
       <DataTable :value="garantias" stripedRows paginator :rows="15" dataKey="id" sortField="created_at" :sortOrder="-1" v-model:selection="selectedGarantias" responsiveLayout="scroll">
         <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column field="producto_nombre" header="Producto" sortable />
-        <Column field="imei" header="IMEI/Serial" sortable style="width:9rem" />
+        <Column :header="systemMode.isGeneralStore ? 'Serial/Referencia' : 'IMEI/Serial'" sortable style="width:9rem">
+          <template #body="{ data }">{{ systemMode.isGeneralStore ? (data.serial || '') : (data.imei || data.serial || '') }}</template>
+        </Column>
         <Column field="cliente_nombre" header="Cliente" sortable />
         <Column field="fecha_venta" header="Venta" sortable style="width:7rem" />
         <Column field="fecha_vencimiento" header="Vence" sortable style="width:7rem" />
@@ -72,7 +74,7 @@
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="text-xs font-semibold mb-1 block">Tipo de producto</label>
-            <Select v-model="form.tipo_producto" :options="['IMEI', 'SERIAL', 'ACCESORIO', 'ELECTRODOMESTICO', 'PIEZA']" placeholder="Tipo" fluid @change="onTipoProductoChange" />
+            <Select v-model="form.tipo_producto" :options="productTypes" placeholder="Tipo" fluid @change="onTipoProductoChange" />
           </div>
           <div>
             <label class="text-xs font-semibold mb-1 block">Producto</label>
@@ -232,7 +234,7 @@
           Esta accion requiere codigo OTP enviado al correo de la empresa.
         </div>
         <div v-if="deleteOtpEnviado" class="space-y-2">
-          <p class="text-xs text-surface-500">Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la licencia' }}.</p>
+        <p class="text-xs text-surface-500">Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.</p>
           <InputOtp v-model="deleteOtp" :length="4" integerOnly />
         </div>
         <p v-if="deleteOtpError" class="text-sm text-red-500">{{ deleteOtpError }}</p>
@@ -262,6 +264,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useSystemModeStore } from '@/stores/systemMode'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
@@ -278,6 +281,10 @@ import OrdenTallerForm from '@/components/taller/OrdenTallerForm.vue'
 import Swal from 'sweetalert2'
 
 const toast = useToast()
+const systemMode = useSystemModeStore()
+const productTypes = computed(() => systemMode.isGeneralStore
+  ? ['SERIAL', 'PRODUCTO', 'ELECTRODOMESTICO', 'PIEZA']
+  : ['IMEI', 'SERIAL', 'ACCESORIO', 'ELECTRODOMESTICO', 'PIEZA'])
 const almacenStore = useAlmacenStore()
 
 const loading = ref(true)
@@ -455,7 +462,7 @@ async function onTipoProductoChange() {
 
 async function cargarProductos() {
   if (!form.value.tipo_producto) { productosDisponibles.value = []; return }
-  const tablaMap: Record<string, string> = { IMEI: 'imei', SERIAL: 'serial', ACCESORIO: 'accesorios', ELECTRODOMESTICO: 'electrodomesticos', PIEZA: 'piezas' }
+  const tablaMap: Record<string, string> = { IMEI: 'imei', SERIAL: 'serial', ACCESORIO: 'accesorios', PRODUCTO: 'accesorios', ELECTRODOMESTICO: 'electrodomesticos', PIEZA: 'piezas' }
   const tabla = tablaMap[form.value.tipo_producto]
   if (!tabla) return
   const res = await (window as any).electron.invoke('db:getAll', tabla)
@@ -560,7 +567,7 @@ async function solicitarOtpEliminarGarantia() {
       total: garantias.length,
     })
     if (res.success) {
-      deleteOtpEmail.value = res.data?.email || ''
+    deleteOtpEmail.value = res.data?.networkUrl || ''
       deleteOtpEnviado.value = true
       toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
     } else {
@@ -625,7 +632,7 @@ async function registrarGarantia() {
       cliente_nombre: form.value.cliente_nombre, cliente_telefono: form.value.cliente_telefono,
       fecha_venta: fechaVenta, fecha_vencimiento: fechaVenc.toISOString().split('T')[0],
       dias_garantia: form.value.dias_garantia, estado: form.value.estado || 'ACTIVA', nota: form.value.nota,
-      usuario: '', almacen_id: almacenStore.activeId || 0,
+      usuario: '', almacen_id: almacenStore.activeId || 0, almacen_uid: almacenStore.activeUid || '',
     }
     let res
     if (editandoId.value) {

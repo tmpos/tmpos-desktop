@@ -110,9 +110,11 @@ import InputNumber from 'primevue/inputnumber'
 import Checkbox from 'primevue/checkbox'
 import { useToast } from 'primevue/usetoast'
 import { useAlmacenStore } from '@/stores/almacen.store'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 const toast = useToast()
 const almacenStore = useAlmacenStore()
+const systemMode = useSystemModeStore()
 
 const loading = ref(true)
 const transferencias = ref<any[]>([])
@@ -126,11 +128,11 @@ const tablaOrigen = ref('')
 const busquedaProd = ref('')
 const productosOrigen = ref<any[]>([])
 
-const tablasInventario = [
-  { label: 'Accesorios', value: 'accesorios' },
+const tablasInventario = computed(() => [
+  { label: systemMode.productLabel, value: 'accesorios' },
   { label: 'Electrodomesticos', value: 'electrodomesticos' },
   { label: 'Piezas Taller', value: 'piezas' },
-]
+])
 
 const almacenesDestino = computed(() =>
   almacenesDisponibles.value.filter((a: any) => a.id !== form.value.origen_id)
@@ -148,12 +150,12 @@ const form = ref({ origen_id: null as number | null, destino_id: null as number 
 async function cargar() {
   loading.value = true
   try {
-    const [resTrans, resAlm] = await Promise.all([
+    const [resTrans] = await Promise.all([
       (window as any).electron.invoke('db:getAll', 'transferencias'),
-      (window as any).electron.invoke('db:getAll', 'almacenes'),
+      almacenStore.load(),
     ])
     if (resTrans.success) transferencias.value = resTrans.data || []
-    if (resAlm.success) almacenesDisponibles.value = resAlm.data || []
+    almacenesDisponibles.value = almacenStore.almacenes
   } catch {} finally { loading.value = false }
 }
 
@@ -162,8 +164,9 @@ async function cargarProductosOrigen() {
   try {
     const res = await (window as any).electron.invoke('db:getAll', tablaOrigen.value)
     if (res.success) {
+      const origen = almacenesDisponibles.value.find((a: any) => a.id === form.value.origen_id)
       let items = (res.data || []).filter((p: any) =>
-        Number(p.almacen_id) === form.value.origen_id || almacenStore.activeId === 1
+        p.almacen_uid ? String(p.almacen_uid) === String(origen?.uid || '') : Number(p.almacen_id) === form.value.origen_id
       )
       const texto = busquedaProd.value.toLowerCase().trim()
       if (texto) items = items.filter((p: any) => p.nombre?.toLowerCase().includes(texto))
@@ -194,12 +197,17 @@ async function realizarTransferencia() {
   guardando.value = true; error.value = ''
   try {
     const noTrans = `TR-${Date.now().toString(36).toUpperCase()}`
+    const origen = almacenesDisponibles.value.find((a: any) => a.id === form.value.origen_id)
+    const destino = almacenesDisponibles.value.find((a: any) => a.id === form.value.destino_id)
     const data = {
       no_transferencia: noTrans,
       origen_id: form.value.origen_id,
       destino_id: form.value.destino_id,
-      origen_nombre: almacenesDisponibles.value.find((a: any) => a.id === form.value.origen_id)?.nombre || '',
-      destino_nombre: almacenesDisponibles.value.find((a: any) => a.id === form.value.destino_id)?.nombre || '',
+      origen_uid: origen?.uid || '',
+      destino_uid: destino?.uid || '',
+      almacen_uid: origen?.uid || '',
+      origen_nombre: origen?.nombre || '',
+      destino_nombre: destino?.nombre || '',
       productos: JSON.stringify(items.map((p: any) => ({ id: p.id, nombre: p.nombre, cantidad: p.transferir }))),
       estado: 'COMPLETADA',
       usuario: '',
@@ -209,6 +217,8 @@ async function realizarTransferencia() {
       items: items.map((p: any) => ({ id: p.id, cantidad: p.transferir })),
       origen_id: form.value.origen_id,
       destino_id: form.value.destino_id,
+      origen_uid: origen?.uid || '',
+      destino_uid: destino?.uid || '',
       transferencia: data,
     })
     if (!res.success) throw new Error(res.error)

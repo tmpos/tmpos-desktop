@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick } from 'vue'
 import Button from 'primevue/button'
+import { useSystemModeStore } from '@/stores/systemMode'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
@@ -14,6 +15,7 @@ import Toast from 'primevue/toast'
 import QRCode from 'qrcode'
 import JsBarcode from 'jsbarcode'
 
+const systemMode = useSystemModeStore()
 const toast = useToast()
 
 interface Elemento {
@@ -397,7 +399,7 @@ onMounted(async () => {
             <Button label="Modelo" icon="pi pi-tag" class="w-full !justify-start !text-[11px]" size="small" severity="success" text @click="agregarPredefinido('modelo')" />
             <Button label="Color" icon="pi pi-palette" class="w-full !justify-start !text-[11px]" size="small" severity="success" text @click="agregarPredefinido('color')" />
             <Button label="Capacidad" icon="pi pi-database" class="w-full !justify-start !text-[11px]" size="small" severity="success" text @click="agregarPredefinido('capacidad')" />
-            <Button label="Barcode {IMEI}" icon="pi pi-barcode" class="w-full !justify-start !text-[11px]" size="small" severity="success" text @click="agregarPredefinido('imei')" />
+          <Button v-if="systemMode.isCellphoneStore" label="Barcode {IMEI}" icon="pi pi-barcode" class="w-full !justify-start !text-[11px]" size="small" severity="success" text @click="agregarPredefinido('imei')" />
             <Button label="Cliente Taller" icon="pi pi-user" class="w-full !justify-start !text-[11px]" size="small" severity="help" text @click="agregarPredefinido('cliente_taller')" />
             <Button label="No. Orden" icon="pi pi-hashtag" class="w-full !justify-start !text-[11px]" size="small" severity="help" text @click="agregarPredefinido('orden_taller')" />
             <Button label="Barcode Orden" icon="pi pi-barcode" class="w-full !justify-start !text-[11px]" size="small" severity="help" text @click="agregarPredefinido('barcode_orden')" />

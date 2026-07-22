@@ -30,28 +30,12 @@ const form = ref({
   password: '',
 })
 
-function decodeBase64(str: string): string {
-  let valor = str.trim()
-  try {
-    for (let intento = 0; intento < 5; intento++) {
-      const base64 = valor.startsWith('b64:') ? valor.slice(4) : valor
-      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) break
-      const padded = base64.padEnd(base64.length + ((4 - base64.length % 4) % 4), '=')
-      const decoded = atob(padded)
-      if (!base64.includes('=') && !decoded.startsWith('b64:') && !/^[A-Za-z0-9+/]+={1,2}$/.test(decoded)) break
-      valor = decoded
-    }
-  } catch (_) {}
-  return valor
-}
-
-function encodeBase64(str: string): string {
-  try { return `b64:${btoa(str)}` } catch { return str }
-}
-
-// Permite pegar una clave antigua que ya esta en Base64 sin codificarla dos veces.
-function normalizarPasswordParaGuardar(str: string): string {
-  return decodeBase64(str)
+function passwordInfo(value: unknown) {
+  const texto = String(value || '')
+  return {
+    length: texto.length,
+    format: texto.startsWith('b64:') ? 'b64-prefixed' : texto.includes('=') ? 'base64-padded' : 'plain-or-unpadded',
+  }
 }
 
 async function cargarConfig() {
@@ -60,11 +44,19 @@ async function cargarConfig() {
     const res = await window.db.getAll('correo')
     if (res.success && res.data?.length) {
       const row = res.data[0]
+      console.info('[CorreoConfig] Configuracion leida de DB', {
+        id: row.id,
+        email: row.email || '',
+        activo: Boolean(row.activo),
+        password: passwordInfo(row.password),
+      })
       registroId.value = row.id
       form.value = {
         activo: Boolean(row.activo),
         email: row.email || '',
-        password: row.password ? decodeBase64(row.password) : '',
+        // Mostrar exactamente lo almacenado. La decodificacion para SMTP se
+        // realiza solamente en el proceso principal y nunca modifica este valor.
+        password: String(row.password || ''),
       }
       otpVerificado.value = false
     } else if (!res.success) {
@@ -88,8 +80,15 @@ async function guardar() {
     const data = {
       activo: form.value.activo ? 1 : 0,
       email: form.value.email.trim().toLowerCase(),
-      password: form.value.password ? encodeBase64(normalizarPasswordParaGuardar(form.value.password)) : '',
+      // No codificar, decodificar ni agregar prefijos al guardar.
+      password: form.value.password.trim(),
     }
+    console.info('[CorreoConfig] Guardando configuracion', {
+      id: registroId.value,
+      email: data.email,
+      activo: Boolean(data.activo),
+      password: passwordInfo(data.password),
+    })
 
     let res
     if (registroId.value) {
@@ -99,6 +98,22 @@ async function guardar() {
     }
 
     if (res.success) {
+      const verificacion = registroId.value
+        ? await window.db.getById('correo', registroId.value)
+        : await window.db.getAll('correo')
+      const guardado = registroId.value
+        ? verificacion.data
+        : (verificacion.data || []).find((row: any) => String(row.email || '') === data.email)
+      const coincide = String(guardado?.password || '') === data.password
+      console.info('[CorreoConfig] Verificacion posterior al guardado', {
+        success: verificacion.success,
+        coincideExactamente: coincide,
+        passwordEnDB: passwordInfo(guardado?.password),
+      })
+      if (!verificacion.success || !coincide) {
+        toast.add({ severity: 'error', summary: 'Error', detail: 'La contrasena SMTP no quedo guardada exactamente como fue introducida', life: 5000 })
+        return
+      }
       toast.add({ severity: 'success', summary: 'Guardado', detail: 'Configuracion de correo actualizada', life: 2500 })
       await cargarConfig()
     } else {
