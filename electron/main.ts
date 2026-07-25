@@ -1277,6 +1277,37 @@ function setupIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('db:clearAllData', async () => {
+    try {
+      const tablasSistema = new Set([
+        'licencia', 'configuracion', 'usuarios', 'empresa', 'almacenes',
+        'tmcloud_config', 'schema_migrations', 'sync_deletes',
+        'otp_local_config', 'impresoras_config', 'correo',
+      ])
+      const tablas = db!.prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`).all() as { name: string }[]
+      const resultados: string[] = []
+      const errores: string[] = []
+      const deleteAll = db!.transaction(() => {
+        for (const { name } of tablas) {
+          if (tablasSistema.has(name)) continue
+          try {
+            const count = db!.prepare(`DELETE FROM "${name}"`).run()
+            db!.prepare(`DELETE FROM sqlite_sequence WHERE name = ?`).run(name)
+            resultados.push(`${name} (${count.changes} registros)`)
+          } catch (e: any) {
+            errores.push(`${name}: ${e.message}`)
+          }
+        }
+        db!.prepare(`DELETE FROM sync_deletes`).run()
+      })
+      deleteAll()
+      console.log('[db:clearAllData]', { resultados, errores })
+      return { success: true, data: { resultados, errores } }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
   ipcMain.handle('config:get', (_event, clave: string) => {
     try {
       const row = db!.prepare(`SELECT valor FROM configuracion WHERE clave = ?`).get(clave) as any

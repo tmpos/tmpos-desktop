@@ -5,6 +5,7 @@ import InputText from 'primevue/inputtext'
 import InputSwitch from 'primevue/inputswitch'
 import Select from 'primevue/select'
 import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
@@ -14,6 +15,8 @@ const serverUrl = ref('')
 const copiando = ref(false)
 const shadeSeleccionada = ref(theme.colorShade || '500')
 const shadeTopbar = ref('500')
+const dialogoLimpiar = ref(false)
+const limpiando = ref(false)
 
 const config = ref({
   app_nombre: 'TMPOS',
@@ -73,6 +76,26 @@ async function copiarUrl() {
     toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo copiar', life: 2000 })
   }
   copiando.value = false
+}
+
+async function limpiarTodosLosDatos() {
+  limpiando.value = true
+  try {
+    const res = await window.electron.invoke('db:clearAllData') as any
+    if (res.success) {
+      const total = res.data.resultados.length
+      const errores = res.data.errores.length
+      const detalle = res.data.resultados.join(', ')
+      toast.add({ severity: 'success', summary: `${total} tablas limpiadas`, detail: errores ? `${errores} errores` : 'Todos los datos fueron eliminados', life: 4000 })
+      console.log('[Limpiar datos]', res.data)
+    } else {
+      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudieron limpiar los datos', life: 4000 })
+    }
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 4000 })
+  }
+  limpiando.value = false
+  dialogoLimpiar.value = false
 }
 
 onMounted(cargarServerUrl)
@@ -270,6 +293,28 @@ onMounted(cargarServerUrl)
               </div>
             </div>
           </div>
+
+          <div class="rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-5 space-y-4">
+            <h3 class="font-semibold flex items-center gap-2 text-sm text-red-600 dark:text-red-400">
+              <i class="pi pi-exclamation-triangle"></i>
+              Zona de Peligro
+            </h3>
+            <p class="text-xs text-surface-500">Elimina todos los datos de las tablas del sistema. Se conservan licencia, usuarios, empresa, almacenes y configuracion.</p>
+            <Button severity="danger" outlined icon="pi pi-trash" label="Borrar todos los datos" @click="dialogoLimpiar = true" />
+          </div>
+
+          <Dialog v-model:visible="dialogoLimpiar" header="Confirmar" modal :closable="false" class="w-96">
+            <div class="space-y-4">
+              <div class="flex items-center gap-3 p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                <i class="pi pi-exclamation-triangle text-red-500 text-xl"></i>
+                <p class="text-sm text-surface-700 dark:text-surface-300">Esta accion eliminara todos los registros de clientes, productos, facturas, inventario y demas tablas. No se puede deshacer. Se conservan licencia, usuarios, empresa y configuracion.</p>
+              </div>
+              <div class="flex justify-end gap-2">
+                <Button label="Cancelar" severity="secondary" text @click="dialogoLimpiar = false" :disabled="limpiando" />
+                <Button label="Borrar todo" severity="danger" icon="pi pi-trash" :loading="limpiando" @click="limpiarTodosLosDatos" />
+              </div>
+            </div>
+          </Dialog>
 
           <div v-if="serverUrl" class="rounded-xl border border-primary-200 dark:border-primary-800 bg-primary-50 dark:bg-primary-900/20 p-5 space-y-3">
             <h3 class="font-semibold flex items-center gap-2 text-sm text-primary">
