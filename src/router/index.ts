@@ -10,6 +10,7 @@ import VentasView from '@/views/VentasView.vue'
 import ReportesView from '@/views/ReportesView.vue'
 import ContactosView from '@/views/ContactosView.vue'
 import ConfiguracionView from '@/views/ConfiguracionView.vue'
+import LicenseView from '@/views/LicenseView.vue'
 import ComprasView from '@/views/ComprasView.vue'
 import TransferenciasView from '@/views/TransferenciasView.vue'
 import SoporteView from '@/views/SoporteView.vue'
@@ -40,6 +41,12 @@ const router = createRouter({
       name: 'login',
       component: LoginView,
       meta: { requiresAuth: false },
+    },
+    {
+      path: '/license',
+      name: 'license',
+      component: LicenseView,
+      meta: { requiresAuth: true },
     },
     {
       path: '/',

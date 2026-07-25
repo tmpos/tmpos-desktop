@@ -1419,6 +1419,7 @@ function setupIpcHandlers(): void {
     const url = datosServidor.project_url || licencia.project_url || proyecto.project_url || datosServidor.url_supabase || datosServidor.supabase_url || datosServidor.urlSupabase || ''
     const publicKey = datosServidor.public_key || licencia.public_key || proyecto.public_key || datosServidor.supabase_anon_key || datosServidor.anon_key || ''
     const secretKey = datosServidor.secret_key || licencia.secret_key || proyecto.secret_key || datosServidor.role_key || datosServidor.supabase_service_role || datosServidor.service_role || ''
+    console.log('[TMCloud][guardarCredencialesTmCloud]', { tieneUrl: Boolean(url), tienePublicKey: Boolean(publicKey), tieneSecretKey: Boolean(secretKey), secretKeyLength: secretKey?.length, keysEnData: Object.keys(datosServidor).filter(k => k.includes('secret') || k.includes('role') || k.includes('key')) })
     if (url || publicKey || secretKey) {
       const row = db!.prepare(`SELECT id FROM tmcloud_config WHERE id = 1`).get() as any
       if (row) {
@@ -1436,9 +1437,10 @@ function setupIpcHandlers(): void {
   function guardarSupabaseDesdeLicencia(datosServidor: any) {
     if (!datosServidor || typeof datosServidor !== 'object') return
 
-    const url = datosServidor.url_supabase || datosServidor.supabase_url || datosServidor.urlSupabase || ''
+    const url = datosServidor.project_url || datosServidor.url_supabase || datosServidor.supabase_url || datosServidor.urlSupabase || ''
     const publicKey = datosServidor.public_key || datosServidor.supabase_anon_key || datosServidor.anon_key || datosServidor.publicKey || ''
-    const roleKey = datosServidor.role_key || datosServidor.supabase_service_role || datosServidor.service_role || datosServidor.roleKey || ''
+    const roleKey = datosServidor.secret_key || datosServidor.role_key || datosServidor.supabase_service_role || datosServidor.service_role || datosServidor.roleKey || datosServidor.secretKey || ''
+    console.log('[TMCloud][guardarSupabaseDesdeLicencia]', { tieneUrl: Boolean(url), tienePublicKey: Boolean(publicKey), tieneRoleKey: Boolean(roleKey), camposData: Object.keys(datosServidor).filter(k => k.includes('secret') || k.includes('role') || k.includes('key') || k.includes('url') || k.includes('public')) })
 
     if (url || publicKey || roleKey) {
       const row = db!.prepare(`SELECT id FROM tmcloud_config WHERE id = 1`).get() as any
@@ -1477,8 +1479,9 @@ function setupIpcHandlers(): void {
     const telefono = valor('telefono', 'telefono_empresa', 'celular', 'whatsapp')
     const email = valor('email', 'correo', 'correo_empresa', 'email_empresa').toLowerCase()
     const direccion = valor('direccion', 'direccion_empresa', 'domicilio')
+    const logo = valor('logo', 'logo_url', 'logo_base64', 'imagen', 'image')
 
-    if (!nombre && !legal && !encargado && !telefono && !email && !direccion) return
+    if (!nombre && !legal && !encargado && !telefono && !email && !direccion && !logo) return
 
     const empresaLocal = db!.prepare(`SELECT id FROM empresa ORDER BY rowid ASC LIMIT 1`).get() as any
     if (empresaLocal?.id) {
@@ -1490,14 +1493,15 @@ function setupIpcHandlers(): void {
             telefono = COALESCE(NULLIF(?, ''), telefono),
             email = COALESCE(NULLIF(?, ''), email),
             direccion = COALESCE(NULLIF(?, ''), direccion),
+            logo = COALESCE(NULLIF(?, ''), logo),
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).run(nombre, legal, encargado, telefono, email, direccion, empresaLocal.id)
+      `).run(nombre, legal, encargado, telefono, email, direccion, logo, empresaLocal.id)
     } else {
       db!.prepare(`
-        INSERT INTO empresa (nombre, legal, encargado, telefono, email, direccion, uid, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(nombre || 'MI EMPRESA', legal, encargado, telefono, email, direccion, generarUid())
+        INSERT INTO empresa (nombre, legal, encargado, telefono, email, direccion, logo, uid, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).run(nombre || 'MI EMPRESA', legal, encargado, telefono, email, direccion, logo, generarUid())
     }
   }
 
@@ -1767,6 +1771,15 @@ function setupIpcHandlers(): void {
             }
             const parsed = parseLicenciaServerResponse(body, validarCoincidencia ? licencia : undefined, validarDispositivo)
             if (parsed.success && parsed.data) {
+              console.log('[buscarLicenciaServidor] Data del servidor:', {
+                campos: Object.keys(parsed.data),
+                secret_key: parsed.data.secret_key ? parsed.data.secret_key.substring(0, 8) + '...' : '(vacio)',
+                role_key: parsed.data.role_key ? parsed.data.role_key.substring(0, 8) + '...' : '(vacio)',
+                public_key: parsed.data.public_key ? parsed.data.public_key.substring(0, 8) + '...' : '(vacio)',
+                project_url: parsed.data.project_url || '(vacio)',
+                tieneEmpresa: Boolean(parsed.data.empresa),
+                nombre: parsed.data.nombre || '(vacio)',
+              })
               guardarCredencialesTmCloud(parsed.data)
             }
             finish(parsed)
@@ -2908,11 +2921,23 @@ function setupIpcHandlers(): void {
   ipcMain.handle('licencia:fetchConfig', async (_event, codigo: string) => {
     try {
       const result = await buscarLicenciaServidor(String(codigo || '').trim().toUpperCase(), false, false)
+      console.log('[fetchConfig] resultado buscarLicenciaServidor:', {
+        success: result?.success,
+        tieneData: Boolean(result?.data),
+        camposData: result?.data ? Object.keys(result.data) : [],
+        tieneSecretKey: Boolean(result?.data?.secret_key),
+        tieneRoleKey: Boolean(result?.data?.role_key),
+        tienePublicKey: Boolean(result?.data?.public_key),
+        tieneProjectUrl: Boolean(result?.data?.project_url),
+        tieneEmpresa: Boolean(result?.data?.empresa),
+        error: result?.error,
+      })
       if (!result.success || !result.data) return { success: false, error: result.error || 'Licencia no encontrada en el servidor' }
       const d = result.data
       guardarSupabaseDesdeLicencia(d)
       guardarLicenciaLocal({ estado: (d.estado || d.status || 'PENDIENTE').toUpperCase(), nombre: d.nombre || d.almacen || '', fecha_inicio_prueba: d.created_at || d.fecha_inicio, fecha_vencimiento: d.proximopago || d.fecha_vencimiento, datosServidor: d })
-      return { success: true, data: { mensaje: 'TM Cloud y datos de la empresa actualizados correctamente' } }
+      const camposServer = Object.keys(d)
+      return { success: true, data: { mensaje: 'TM Cloud y datos de la empresa actualizados correctamente', serverFields: camposServer, tieneSecretKey: Boolean(d.secret_key), tienePublicKey: Boolean(d.public_key), tieneProjectUrl: Boolean(d.project_url), tieneEmpresa: Boolean(d.empresa), secretKeyPreview: d.secret_key ? d.secret_key.substring(0, 10) + '...' : null, publicKeyPreview: d.public_key ? d.public_key.substring(0, 10) + '...' : null, projectUrl: d.project_url || null } }
     } catch (e: any) { return { success: false, error: e.message } }
   })
 

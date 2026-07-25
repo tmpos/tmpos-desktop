@@ -25,12 +25,8 @@ const verficando = ref(true)
 const pinContainer = ref<HTMLElement | null>(null)
 
 const verificandoLicencia = ref(true)
-const licenciaVencida = ref(false)
 const licenciaEquipo = ref('')
 const licenciaCifrada = ref('')
-const licenciaError = ref('')
-const licenciaNoEncontrada = ref(false)
-const licenciaEquipoNoAutorizado = ref(false)
 const licenciaDias = ref<number | null>(null)
 const mostrarDiasLicencia = ref(false)
 const companyName = ref('')
@@ -103,7 +99,6 @@ async function verificarLicenciaApp() {
   }
 
   verificandoLicencia.value = true
-  licenciaError.value = ''
 
   try {
     const macResult = await withTimeout(
@@ -111,14 +106,13 @@ async function verificarLicenciaApp() {
       LICENCIA_TIMEOUT_MS,
       'licencia:getMacAddress'
     ) as any
-    console.log('[Login] MAC result:', macResult)
 
     if (macResult.success) {
       licenciaEquipo.value = macResult.data.mac
       licenciaCifrada.value = macResult.data.cifrada
     }
 
-    console.log('[Login] Verificando licencia online; se usara la copia local solo si falla la conexion')
+    console.log('[Login] Verificando licencia...')
     const result = await withTimeout(
       window.electron.invoke('licencia:verificar'),
       LICENCIA_TIMEOUT_MS,
@@ -126,43 +120,16 @@ async function verificarLicenciaApp() {
     ) as any
     console.log('[Login] Resultado licencia:', JSON.stringify(result))
 
-    licenciaNoEncontrada.value = false
-    licenciaEquipoNoAutorizado.value = false
     const data = result.data
-
-    if (result.success && data) {
-      if (data.codigoLicencia) licenciaRegistroCodigo.value = data.codigoLicencia
-      licenciaDias.value = data.diasRestantes ?? null
-      const estado = data.estado || result.estado
-      if (estado === 'activo' || estado === 'pendiente') {
-        verificandoLicencia.value = false
-        licenciaVencida.value = false
-      } else {
-        verificandoLicencia.value = false
-        licenciaVencida.value = true
-        licenciaError.value = data.mensaje || 'Licencia no registrada'
-        if (estado === 'no_encontrada') licenciaNoEncontrada.value = true
-        if (estado === 'equipo_no_autorizado') licenciaEquipoNoAutorizado.value = true
-      }
-    } else {
-      if (data?.codigoLicencia) licenciaRegistroCodigo.value = data.codigoLicencia
-      verificandoLicencia.value = false
-      licenciaVencida.value = true
-      licenciaError.value = data?.mensaje || result.error || 'No se pudo verificar la licencia'
-      if (result.estado === 'no_encontrada') licenciaNoEncontrada.value = true
-      if (result.estado === 'equipo_no_autorizado' || /no esta (autorizado|permitido)/i.test(licenciaError.value)) licenciaEquipoNoAutorizado.value = true
-    }
+    if (data?.codigoLicencia) licenciaRegistroCodigo.value = data.codigoLicencia
+    licenciaDias.value = data?.diasRestantes ?? null
   } catch (e: any) {
-    verificandoLicencia.value = false
-    licenciaVencida.value = true
-    licenciaError.value = e.message || 'Error validando licencia'
+    console.log('[Login] Error verificando licencia (no bloqueante):', e.message)
   } finally {
     verificandoLicencia.value = false
+    verficando.value = false
+    enfocarPin()
   }
-}
-
-async function verificarNuevamente() {
-  await verificarLicenciaApp()
 }
 
 async function solicitarRegistroEquipo() {
@@ -338,7 +305,7 @@ async function actualizarUsuariosDesdeApi() {
 }
 
 function enfocarPin() {
-  if (mode.value !== 'pin' || verificandoLicencia.value || licenciaVencida.value) return
+  if (mode.value !== 'pin' || verificandoLicencia.value) return
   nextTick(() => pinContainer.value?.focus())
 }
 
@@ -572,7 +539,7 @@ onMounted(async () => {
     }
   } catch (_) {}
 
-  await verificarLicenciaApp()
+  verificarLicenciaApp()
   // Adelantar la descarga para que los usuarios remotos esten disponibles al
   // momento de introducir el PIN, sin bloquear el modo offline.
   void actualizarUsuariosDesdeApi()
@@ -600,42 +567,12 @@ onUnmounted(() => {
 
     <Toast />
 
-    <div v-if="verificandoLicencia" class="flex flex-col items-center justify-center gap-4 relative z-10">
+    <div
+      v-if="verificandoLicencia"
+      class="flex flex-col items-center justify-center gap-4 relative z-10"
+    >
       <i class="pi pi-spin pi-spinner text-3xl text-white"></i>
       <p class="text-white text-sm">Verificando licencia...</p>
-    </div>
-
-    <div v-else-if="licenciaVencida" class="w-full max-w-sm p-8 rounded-2xl border border-white/10 bg-black/40 backdrop-blur-xl shadow-2xl relative z-10">
-      <div class="text-center">
-        <div class="w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center bg-red-500/20">
-          <i class="pi pi-exclamation-triangle text-2xl text-red-400"></i>
-        </div>
-        <h2 class="text-xl font-bold text-white mb-2">Licencia No Valida</h2>
-        <p class="text-sm text-gray-400 mb-4">{{ licenciaError || 'Su licencia no esta vigente.' }}</p>
-        <div class="bg-white/5 rounded-lg p-3 mb-4 text-left text-sm">
-          <div class="flex justify-between text-gray-400"><span>Codigo de Equipo:</span><span class="text-white font-mono text-xs">{{ licenciaEquipo || 'No disponible' }}</span></div>
-        </div>
-
-        <div class="text-sm text-gray-400 mb-4">
-          <p>Contactenos para activar su licencia:</p>
-          <p class="text-orange-400 font-medium">Contacta al administrador del sistema</p>
-        </div>
-
-        <div class="flex gap-2">
-          <button @click="verificarNuevamente" class="flex-1 py-2.5 rounded-lg text-white text-sm font-medium border border-white/20 hover:bg-white/10 transition-all"><i class="pi pi-refresh mr-1"></i>Verificar nuevamente</button>
-          <button v-if="licenciaNoEncontrada" @click="abrirDialogoRegistro()" class="flex-1 py-2.5 rounded-lg text-white text-sm font-medium transition-all" :style="{ backgroundColor: 'var(--p-primary-500)' }"><i class="pi pi-plus-circle mr-1"></i>Registrar</button>
-          <button v-if="licenciaEquipoNoAutorizado" @click="solicitarRegistroEquipo" :disabled="registroEquipoLoading" class="flex-1 py-2.5 rounded-lg text-white text-sm font-medium transition-all disabled:opacity-50" :style="{ backgroundColor: 'var(--p-primary-500)' }">
-            <i v-if="registroEquipoLoading" class="pi pi-spin pi-spinner mr-1"></i><i v-else class="pi pi-desktop mr-1"></i>{{ registroEquipoLoading ? 'Enviando...' : 'Registrar equipo' }}
-          </button>
-        </div>
-        <p v-if="registroEquipoError && !registroEquipoVisible" class="text-red-400 text-xs mt-3">{{ registroEquipoError }}</p>
-        <button
-          @click="abrirLicenciaManual"
-          class="w-full mt-2 py-2.5 rounded-lg text-white text-sm font-medium border border-white/20 hover:bg-white/10 transition-all"
-        >
-          <i class="pi pi-key mr-1"></i>Introducir licencia
-        </button>
-      </div>
     </div>
 
     <div

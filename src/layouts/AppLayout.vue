@@ -9,6 +9,7 @@ import { version } from '../../package.json'
 const route = useRoute()
 const toast = useToast()
 const isLogin = () => route.name === 'login'
+const isLicense = () => route.name === 'license'
 
 function onTmCloudLocalChange(event: Event) {
   const detail = (event as CustomEvent).detail || {}
@@ -27,7 +28,7 @@ onBeforeUnmount(() => window.removeEventListener('tmcloud:local-change', onTmClo
 
 <template>
   <Toast position="top-right" />
-  <div v-if="isLogin()" class="h-screen overflow-hidden bg-surface-100 dark:bg-surface-900">
+  <div v-if="isLogin() || isLicense()" class="h-screen overflow-hidden bg-surface-100 dark:bg-surface-900">
     <router-view />
   </div>
   <div v-else class="app-shell flex flex-col h-screen overflow-hidden text-surface-900 dark:text-surface-0">

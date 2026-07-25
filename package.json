@@ -1,6 +1,6 @@
 {
   "name": "TMPOS",
-  "version": "2.12.8",
+  "version": "2.12.9",
   "description": "TMPOS Desktop App",
   "main": "dist-electron/main.js",
   "scripts": {

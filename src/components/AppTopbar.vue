@@ -7,6 +7,8 @@ import { useSystemModeStore } from '@/stores/systemMode'
 import { useAlmacenStore } from '@/stores/almacen.store'
 import { useAlertas } from '@/composables/useAlertas'
 import { ensureConfigLoaded, getImageUrl } from '@/services/tmCloudClient'
+import { useToast } from 'primevue/usetoast'
+import Toast from 'primevue/toast'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 
@@ -18,6 +20,7 @@ const systemMode = useSystemModeStore()
 const almacenStore = useAlmacenStore()
 
 const { alertas, verificarAlertas, descartarAlerta, descartarTodas } = useAlertas()
+const toast = useToast()
 const alertasPanelVisible = ref(false)
 const userMenuVisible = ref(false)
 const userMenuRef = ref<HTMLElement | null>(null)
@@ -73,6 +76,8 @@ function refrescarEmpresa() {
 let licenciaInterval: ReturnType<typeof setInterval> | null = null
 let updateInterval: ReturnType<typeof setInterval> | null = null
 let licenciaVerificando = false
+const licenciaEstado = ref<'activa' | 'pendiente' | 'vencida' | 'bloqueada' | 'error' | ''>('')
+const licenciaDias = ref<number | null>(null)
 const updateDescargando = ref(false)
 const updateEstado = ref('')
 const updateVersionInfo = ref<any>(null)
@@ -97,14 +102,28 @@ async function verificarLicenciaPeriodicamente() {
     console.log('[AppTopbar] Verificando licencia...')
     const res = await (window as any).electron.invoke('licencia:verificar')
     console.log('[AppTopbar] Resultado licencia:', JSON.stringify(res))
-    if (licenciaAceptada(res)) return
-    if (licenciaDebeCerrarSesion(res)) {
-      console.log('[AppTopbar] Licencia no valida confirmada, cerrando sesion...')
-      auth.logout()
-      router.push('/login')
+    if (licenciaAceptada(res)) {
+      const estado = String(res?.data?.estado || res?.estado || '').toLowerCase()
+      licenciaEstado.value = estado as any
+      licenciaDias.value = res?.data?.diasRestantes ?? null
       return
     }
-    console.log('[AppTopbar] No se cerro sesion por resultado no concluyente:', res?.error || res?.data?.mensaje || res?.estado)
+    if (!res || !licenciaAceptada(res)) {
+      const rutaActual = router.currentRoute.value.name
+      if (rutaActual === 'license') return
+      console.log('[AppTopbar] Licencia no valida, redirigiendo a /license...')
+      if (!res) {
+        toast.add({ severity: 'warn', summary: 'Licencia no encontrada', detail: 'Este equipo no cuenta con una licencia activa.', life: 5000 })
+      } else if (licenciaDebeCerrarSesion(res)) {
+        const estado = String(res?.data?.estado || res?.estado || '').toLowerCase()
+        licenciaEstado.value = estado as any
+        toast.add({ severity: 'error', summary: 'Licencia ' + estado, detail: res?.data?.mensaje || res?.error || 'La licencia ha ' + estado, life: 6000 })
+      }
+      router.push('/license')
+      return
+    }
+    licenciaEstado.value = res?.data?.estado || res?.estado || 'activo'
+    licenciaDias.value = res?.data?.diasRestantes ?? null
   } catch (e) {
     console.log('[AppTopbar] Error verificando licencia:', e)
   } finally {
@@ -293,6 +312,7 @@ onUnmounted(() => {
 
 <template>
   <header class="app-topbar">
+    <Toast />
     <div class="app-topbar-inner">
       <div class="topbar-row topbar-brand-row">
         <div class="branding">
@@ -307,6 +327,10 @@ onUnmounted(() => {
           </div>
           <div class="brand-text cursor-pointer" v-if="empresaNombre" @click="router.push('/')">
             <span class="brand-name">{{ empresaNombre }}</span>
+            <span v-if="licenciaEstado && licenciaEstado !== 'activa'" class="ml-2 inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-medium cursor-pointer" :class="licenciaEstado === 'vencida' || licenciaEstado === 'bloqueada' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'" v-tooltip="'Licencia: ' + licenciaEstado + (licenciaDias !== null ? ' (' + licenciaDias + ' dias)' : '')" @click="router.push('/license')">
+              <i class="pi pi-exclamation-triangle text-[10px]"></i>
+              <span class="hidden sm:inline">{{ licenciaEstado }}</span>
+            </span>
           </div>
         </div>
 
