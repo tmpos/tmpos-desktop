@@ -101,16 +101,22 @@ async function registrarEquipo() {
         const empresaRows = await tmc.fetchTable('empresa')
         console.log('[LicenseView] Empresa desde la nube:', { cantidad: empresaRows.length, filas: empresaRows })
         if (empresaRows.length > 0) {
+          let logoLocal = ''
           const localRes = await window.db.getAll('empresa')
           if (localRes.success && localRes.data?.length > 0) {
+            logoLocal = localRes.data[0]?.logo || ''
             for (const row of localRes.data) {
               if (row.id) await window.db.delete('empresa', row.id)
             }
-            console.log('[LicenseView] Datos locales de empresa eliminados')
+            console.log('[LicenseView] Datos locales de empresa eliminados, logoLocal:', logoLocal ? logoLocal.substring(0, 30) + '...' : '(vacio)')
           }
           for (const row of empresaRows) {
             const clean = { ...row }
             delete clean.id
+            if (!clean.logo && logoLocal) {
+              clean.logo = logoLocal
+              console.log('[LicenseView] Logo local preservado en registro de empresa')
+            }
             await window.db.insert('empresa', clean)
           }
           console.log('[LicenseView] Datos de empresa insertados desde la nube:', empresaRows.length)
