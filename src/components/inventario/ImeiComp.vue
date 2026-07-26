@@ -554,6 +554,79 @@ async function bajarImeis() {
   } finally { sincronizandoBajar.value = false }
 }
 
+async function consultarImeiDialog() {
+  const imei = form.value.nombre.trim()
+  if (!imei || imei.length < 15) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Ingresa un IMEI valido (15 digitos)', life: 3000 })
+    return
+  }
+  consultaImeiServicio.value = 0
+  consultaImeiResultado.value = null
+  consultaImeiTelefonoSel.value = null
+  dialogConsultarImei.value = true
+}
+
+async function ejecutarConsultaImei() {
+  const imei = form.value.nombre.trim()
+  if (!imei || imei.length < 15) return
+  consultaImeiCargando.value = true
+  consultaImeiResultado.value = null
+  consultaImeiTelefonoSel.value = null
+  try {
+    const res = await window.electron.invoke('imei:consultar', imei, consultaImeiServicio.value) as any
+    if (res.success) {
+      consultaImeiResultado.value = res.data
+      if (res.data?.status === 'error') {
+        toast.add({ severity: 'error', summary: 'Error', detail: res.data.message || res.data.error || 'Error en la consulta', life: 5000 })
+      } else {
+        const coincidentes = telefonosCoincidentes.value
+        if (coincidentes.length === 1) {
+          consultaImeiTelefonoSel.value = coincidentes[0].id
+        } else if (coincidentes.length > 1) {
+          toast.add({ severity: 'info', summary: 'Multiples coincidencias', detail: `${coincidentes.length} telefonos coinciden con el modelo. Selecciona uno.`, life: 3000 })
+        }
+      }
+    } else {
+      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo conectar al servidor', life: 5000 })
+    }
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 5000 })
+  } finally {
+    consultaImeiCargando.value = false
+  }
+}
+
+function aplicarTelefonoConsulta() {
+  const id = consultaImeiTelefonoSel.value
+  if (!id) return
+  const telefono = telefonos.value.find((t: any) => Number(t.id) === Number(id))
+  if (telefono) {
+    form.value.id_equi = telefono.id
+    form.value.equipo = telefono.nombre || ''
+  }
+  dialogConsultarImei.value = false
+}
+
+async function crearTelefonoDesdeConsulta() {
+  const nombre = telefonoDesdeConsulta.value
+  if (!nombre) return
+  consultaImeiCreandoTelefono.value = true
+  try {
+    const uid = crypto.randomUUID()
+    const res = await window.db.insert('telefonos', { nombre: String(nombre).toUpperCase(), uid, almacen_id: Number(almacenStore.activeId || 0), almacen_uid: String(almacenStore.activeUid || '') })
+    if (!res.success) throw new Error(res.error || 'No se pudo crear el telefono')
+    await cargarTelefonos()
+    const nuevo = telefonos.value.find((t: any) => t.uid === uid)
+    if (nuevo) form.value.id_equi = nuevo.id
+    toast.add({ severity: 'success', summary: 'Telefono creado', detail: `${nombre} creado y seleccionado`, life: 3000 })
+    dialogConsultarImei.value = false
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al crear telefono', life: 4000 })
+  } finally {
+    consultaImeiCreandoTelefono.value = false
+  }
+}
+
 function abrirCrear() {
   isEditing.value = false
   selectedImei.value = null
@@ -665,7 +738,158 @@ const dialogCambioColorMultiple = ref(false)
 const nuevoColorMultiple = ref('')
 const dialogCambioCapacidadMultiple = ref(false)
 const nuevaCapacidadMultiple = ref('')
+const dialogConsultarImei = ref(false)
+const consultaImeiServicio = ref(0)
+const consultaImeiResultado = ref<any>(null)
+const consultaImeiCargando = ref(false)
+const consultaImeiCreandoTelefono = ref(false)
+const consultaImeiTelefonoSel = ref<any>(null)
+
+const telefonoDesdeConsulta = computed(() => {
+  const obj = consultaImeiResultado.value?.response?.object
+  if (!obj) return null
+  return obj.modelName || obj.model || ''
+})
+
+const telefonosCoincidentes = computed(() => {
+  const modelo = telefonoDesdeConsulta.value
+  if (!modelo) return []
+  const normalizado = modelo.toLowerCase().replace(/[^a-z0-9]/g, ' ')
+  const palabrasModelo = normalizado.split(/\s+/).filter(Boolean)
+  return telefonosAlmacenActual.value.filter((t: any) => {
+    const nom = String(t.nombre || '').toLowerCase().replace(/[^a-z0-9]/g, ' ')
+    return palabrasModelo.some(p => p.length > 2 && nom.includes(p))
+  })
+})
+
+const dialogAutoAsignar = ref(false)
+const autoAsignarServicio = ref(0)
+const autoAsignarCargando = ref(false)
+const autoAsignarProgreso = ref({ total: 0, procesados: 0, asignados: 0, creados: 0, errores: 0 })
+const autoAsignarResultados = ref<{ imei: string; ok: boolean }[]>([])
+
+async function abrirAutoAsignar() {
+  if (selectedImeis.value.length === 0) return
+  autoAsignarServicio.value = 0
+  autoAsignarResultados.value = []
+  autoAsignarProgreso.value = { total: selectedImeis.value.length, procesados: 0, asignados: 0, creados: 0, errores: 0 }
+  dialogAutoAsignar.value = true
+}
+
+function seleccionarImeisSinTelefono() {
+  const sinTelefono = imeisFiltrados.value.filter((imei: any) => !imei.id_equi || !imei.telefono_uid)
+  selectedImeis.value = sinTelefono
+  if (sinTelefono.length === 0) {
+    toast.add({ severity: 'info', summary: 'Sin pendientes', detail: 'Todos los IMEIs visibles ya tienen telefono y uid asignado', life: 3000 })
+  }
+}
+
+const AUTO_ASIGNAR_FILLER = new Set(['GALAXY', 'SERIES', 'EDITION', 'APPLE', '5G', '4G', 'LTE', 'DUAL', 'SIM'])
+
+function normalizarModelo(str: string) {
+  return String(str || '')
+    .replace(/\([^)]*\)/g, ' ')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
+function tokensModelo(str: string) {
+  return normalizarModelo(str).split(' ').filter(t => t && !AUTO_ASIGNAR_FILLER.has(t))
+}
+
+// Determina el nombre "legible" del modelo. En este servicio, para iPhone el campo
+// modelName trae el nombre sin marca (ej. "iPhone 11 Pro"), pero para Samsung/Google
+// los campos vienen al reves: model trae el nombre legible ("Galaxy S24 Ultra") y
+// modelName trae el codigo tecnico ("SM-S928U"). Se detecta cual campo tiene espacios
+// (legible) y se usa ese; si el modelo no incluye la marca, se le antepone.
+function resolverNombreModelo(obj: any): string {
+  const model = String(obj?.model || '').trim()
+  const modelName = String(obj?.modelName || '').trim()
+  let modelo = /\s/.test(modelName) ? modelName : (/\s/.test(model) ? model : (modelName || model))
+  const marca = String(obj?.brand || obj?.manufacturer || '').trim().split(/\s+/)[0] || ''
+  if (marca && marca.toUpperCase() !== 'APPLE' && !normalizarModelo(modelo).startsWith(normalizarModelo(marca))) {
+    modelo = `${marca} ${modelo}`
+  }
+  return modelo
+}
+
+async function ejecutarAutoAsignar() {
+  const imeis = [...selectedImeis.value]
+  autoAsignarCargando.value = true
+  autoAsignarProgreso.value = { total: imeis.length, procesados: 0, asignados: 0, creados: 0, errores: 0 }
+  autoAsignarResultados.value = []
+
+  const usoConteo = new Map<number, number>()
+  for (const i of imeis.value as any[]) {
+    if (i.id_equi) usoConteo.set(Number(i.id_equi), (usoConteo.get(Number(i.id_equi)) || 0) + 1)
+  }
+
+  for (const imei of imeis) {
+    const resultado = { imei: imei.nombre || imei.id, ok: false }
+    try {
+      const res = await window.electron.invoke('imei:consultar', imei.nombre, autoAsignarServicio.value) as any
+      if (res?.success && res.data?.response?.object) {
+        const modelo = resolverNombreModelo(res.data.response.object)
+        const tk = tokensModelo(modelo)
+        const candidatos = telefonosAlmacenActual.value.filter((t: any) => {
+          const tokensTelefono = tokensModelo(t.nombre)
+          if (tokensTelefono.length !== tk.length) return false
+          const setTelefono = new Set(tokensTelefono)
+          return tk.every(p => setTelefono.has(p))
+        })
+        candidatos.sort((a: any, b: any) => (usoConteo.get(Number(b.id)) || 0) - (usoConteo.get(Number(a.id)) || 0) || Number(a.id) - Number(b.id))
+        let telefono = candidatos[0] || null
+        if (!telefono && tk.length > 0) {
+          const nombreNuevo = tk.join(' ')
+          const uid = crypto.randomUUID()
+          const creado = await window.db.insert('telefonos', {
+            nombre: nombreNuevo,
+            uid,
+            almacen_id: Number(almacenStore.activeId || 0),
+            almacen_uid: String(almacenStore.activeUid || ''),
+          })
+          if (creado.success) {
+            telefonos.value.push({ id: creado.data.id, uid, nombre: nombreNuevo, almacen_id: Number(almacenStore.activeId || 0), almacen_uid: String(almacenStore.activeUid || '') })
+            telefono = telefonos.value.find((t: any) => t.uid === uid)
+            autoAsignarProgreso.value.creados++
+          }
+        }
+        if (telefono) {
+          usoConteo.set(Number(telefono.id), (usoConteo.get(Number(telefono.id)) || 0) + 1)
+          await window.db.update('imei', imei.id, {
+            id_equi: telefono.id,
+            telefono_uid: telefono.uid || '',
+            equipo: telefono.nombre || '',
+          })
+          resultado.ok = true
+          autoAsignarProgreso.value.asignados++
+        } else {
+          autoAsignarProgreso.value.errores++
+        }
+      } else {
+        autoAsignarProgreso.value.errores++
+      }
+    } catch {
+      autoAsignarProgreso.value.errores++
+    }
+    autoAsignarProgreso.value.procesados++
+    autoAsignarResultados.value.push(resultado)
+  }
+
+  autoAsignarCargando.value = false
+  await Promise.all([cargarImeis(), cargarTelefonos()])
+  toast.add({
+    severity: autoAsignarProgreso.value.errores > 0 ? 'warn' : 'success',
+    summary: 'Auto-asignacion completada',
+    detail: `${autoAsignarProgreso.value.asignados} asignados (${autoAsignarProgreso.value.creados} telefonos creados), ${autoAsignarProgreso.value.errores} errores de ${autoAsignarProgreso.value.total}`,
+    life: 5000,
+  })
+}
+
 const dialogCambioAlmacenMultiple = ref(false)
+const soloAlmacen = ref(false)
 const almacenesLista = ref<any[]>([])
 const almacenDestinoMultiple = ref<any>(null)
 const equipoDestinoAlmacen = ref<any>(null)
@@ -770,31 +994,39 @@ async function abrirCambiarAlmacenMultiple() {
   await Promise.all([almacenStore.load(), cargarTelefonos()])
   const almacenesOrigenUid = new Set(selectedImeis.value.map((imei: any) => String(imei.almacen_uid || almacenStore.activeUid || '')))
   almacenesLista.value = almacenStore.almacenes.filter((almacen: any) => !almacenesOrigenUid.has(String(almacen.uid || '')))
+  soloAlmacen.value = false
   almacenDestinoMultiple.value = null
   equipoDestinoAlmacen.value = null
   dialogCambioAlmacenMultiple.value = true
 }
 
 async function cambiarAlmacenMultiple() {
-  if (!almacenDestinoMultiple.value || !equipoDestinoAlmacen.value || selectedImeis.value.length === 0) return
+  if (!almacenDestinoMultiple.value || selectedImeis.value.length === 0) return
+  if (!soloAlmacen.value && !equipoDestinoAlmacen.value) return
   const destinoId = almacenDestinoMultiple.value.id || almacenDestinoMultiple.value
   const destinoUid = String(almacenDestinoMultiple.value.uid || '')
-  const equipoDestino = equipoDestinoAlmacen.value
   const cantidad = selectedImeis.value.length
   try {
     for (const imei of selectedImeis.value) {
-      const res = await window.db.update('imei', imei.id, {
+      const updates: Record<string, any> = {
         almacen_id: Number(destinoId),
         almacen_uid: destinoUid,
-        id_equi: Number(equipoDestino.id),
-        telefono_uid: equipoDestino.uid || '',
-        equipo: equipoDestino.nombre || '',
-      })
+      }
+      if (!soloAlmacen.value && equipoDestinoAlmacen.value) {
+        const equipoDestino = equipoDestinoAlmacen.value
+        updates.id_equi = Number(equipoDestino.id)
+        updates.telefono_uid = equipoDestino.uid || ''
+        updates.equipo = equipoDestino.nombre || ''
+      }
+      const res = await window.db.update('imei', imei.id, updates)
       if (!res.success) throw new Error(res.error || `No se pudo mover el IMEI ${imei.nombre || imei.id}`)
     }
     dialogCambioAlmacenMultiple.value = false
     selectedImeis.value = []
-    toast.add({ severity: 'success', summary: 'Almacen y equipo actualizados', detail: `${cantidad} IMEI(s) asignados a ${equipoDestino.nombre}`, life: 3000 })
+    const detalle = soloAlmacen.value
+      ? `${cantidad} IMEI(s) movidos a ${almacenDestinoMultiple.value.nombre}`
+      : `${cantidad} IMEI(s) asignados a ${equipoDestinoAlmacen.value.nombre}`
+    toast.add({ severity: 'success', summary: 'Almacen actualizado', detail: detalle, life: 3000 })
     await cargarImeis()
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al cambiar almacen y equipo', life: 4000 })
@@ -1256,6 +1488,7 @@ onMounted(async () => {
             </button>
           </div>
           <Button label="Nuevo IMEI" icon="pi pi-plus" @click="abrirCrear" />
+          <Button label="Sin telefono" icon="pi pi-search" severity="help" @click="seleccionarImeisSinTelefono" v-tooltip="'Seleccionar IMEIs sin telefono o uid asignado'" />
           <Button label="Subir" icon="pi pi-upload" severity="info" :loading="sincronizandoSubir" @click="subirImeis" v-tooltip="'Subir IMEIs al servidor'" />
           <Button label="Bajar" icon="pi pi-download" severity="warning" :loading="sincronizandoBajar" @click="bajarImeis" v-tooltip="'Descargar IMEIs del servidor'" />
         </div>
@@ -1267,6 +1500,7 @@ onMounted(async () => {
         <Button label="Reubicar en otro teléfono" icon="pi pi-mobile" severity="warn" size="small" @click="abrirCambiarEquipoMultiple" />
         <Button label="Color" icon="pi pi-palette" severity="help" size="small" @click="abrirCambiarColorMultiple" />
         <Button label="Capacidad" icon="pi pi-database" severity="info" size="small" @click="abrirCambiarCapacidadMultiple" />
+        <Button label="Auto-asignar telefono" icon="pi pi-magic" severity="info" size="small" @click="abrirAutoAsignar" />
         <Button label="Prov." icon="pi pi-truck" severity="info" size="small" @click="abrirCambiarProveedorMultiple" />
         <Button label="Almacen" icon="pi pi-warehouse" severity="success" size="small" @click="abrirCambiarAlmacenMultiple" />
         <Button label="Vender / Carrito" icon="pi pi-shopping-cart" severity="success" size="small" @click="abrirAccionVentaMultiple" />
@@ -1487,15 +1721,26 @@ onMounted(async () => {
         <div class="grid grid-cols-2 gap-3">
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">IMEI</label>
-            <InputText
-              v-model="form.nombre"
-              placeholder="IMEI del dispositivo (15 digitos)"
-              pattern="[0-9]{15}"
-              inputmode="numeric"
-              maxlength="15"
-              fluid
-              @focus="(e) => e.target.select()"
-            />
+            <div class="flex gap-2">
+              <InputText
+                v-model="form.nombre"
+                placeholder="IMEI del dispositivo (15 digitos)"
+                pattern="[0-9]{15}"
+                inputmode="numeric"
+                maxlength="15"
+                class="flex-1"
+                fluid
+                @focus="(e) => e.target.select()"
+              />
+              <Button
+                v-if="isEditing"
+                icon="pi pi-search"
+                severity="info"
+                outlined
+                v-tooltip="'Consultar IMEI externo'"
+                @click="consultarImeiDialog"
+              />
+            </div>
             <div v-if="imeiDuplicado" class="flex items-center gap-1.5 text-red-500 text-xs mt-1">
               <i class="pi pi-exclamation-circle"></i>
               <span>Este IMEI ya existe en la base de datos</span>
@@ -1509,6 +1754,8 @@ onMounted(async () => {
               optionLabel="nombre"
               optionValue="id"
               placeholder="Seleccionar"
+              filter
+              filterPlaceholder="Buscar equipo..."
               fluid
             />
           </div>
@@ -1628,6 +1875,78 @@ onMounted(async () => {
             <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="imeiDuplicado" @click="guardar" />
           </div>
         </div>
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogConsultarImei" header="Consultar IMEI" modal :style="{ width: '28rem' }">
+      <div class="flex flex-col gap-4 py-2">
+        <div class="flex items-center gap-2">
+          <label class="text-sm font-semibold whitespace-nowrap">Servicio:</label>
+          <InputText v-model.number="consultaImeiServicio" type="number" class="w-20" placeholder="0" @keydown.enter="ejecutarConsultaImei" />
+        </div>
+        <div class="flex items-center gap-2">
+          <InputText :value="form.nombre" placeholder="IMEI" disabled fluid />
+          <Button label="Consultar" icon="pi pi-search" :loading="consultaImeiCargando" @click="ejecutarConsultaImei" />
+        </div>
+        <div v-if="consultaImeiCargando" class="flex items-center justify-center py-8 text-surface-400 gap-2">
+          <i class="pi pi-spin pi-spinner"></i><span>Consultando IMEI...</span>
+        </div>
+        <div v-else-if="consultaImeiResultado" class="space-y-3">
+          <div v-if="consultaImeiResultado.response?.object" class="rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 divide-y divide-surface-200 dark:divide-surface-700 overflow-hidden">
+            <div class="px-4 py-2.5 text-sm flex items-center gap-2" :class="consultaImeiResultado.response.object.blacklistStatus ? 'bg-red-50 dark:bg-red-900/20' : 'bg-green-50 dark:bg-green-900/20'">
+              <i :class="consultaImeiResultado.response.object.blacklistStatus ? 'pi pi-times-circle text-red-500' : 'pi pi-check-circle text-green-500'"></i>
+              <span class="font-semibold" :class="consultaImeiResultado.response.object.blacklistStatus ? 'text-red-700 dark:text-red-400' : 'text-green-700 dark:text-green-400'">{{ consultaImeiResultado.response.object.blacklistStatus ? 'BLACKLISTEADO' : 'LIMPIO' }}</span>
+            </div>
+            <div v-for="(val, key) in { Modelo: consultaImeiResultado.response.object.model, Nombre: consultaImeiResultado.response.object.modelName, Fabricante: consultaImeiResultado.response.object.manufacturer, IMEI: consultaImeiResultado.response.object.imei }" :key="key" class="flex items-start gap-2 px-4 py-2.5 text-sm">
+              <span class="text-surface-400 font-medium min-w-[90px]">{{ key }}:</span><span class="font-medium break-all">{{ val }}</span>
+            </div>
+            <div class="px-4 py-3 border-t border-surface-200 dark:border-surface-700 space-y-3">
+              <p class="text-xs text-surface-500 font-medium">Asignar a telefono del almacen actual:</p>
+              <div class="flex gap-2">
+                <Select
+                  v-model="consultaImeiTelefonoSel"
+                  :options="telefonosAlmacenActual"
+                  optionLabel="nombre"
+                  optionValue="id"
+                  placeholder="Seleccionar telefono..."
+                  filter
+                  filterPlaceholder="Buscar telefono..."
+                  fluid
+                />
+                <Button label="Aplicar" icon="pi pi-check" :disabled="!consultaImeiTelefonoSel" @click="aplicarTelefonoConsulta" />
+              </div>
+              <Button v-if="telefonoDesdeConsulta" label="Crear telefono" icon="pi pi-plus" severity="info" outlined size="small" :loading="consultaImeiCreandoTelefono" class="w-full" @click="crearTelefonoDesdeConsulta" />
+            </div>
+          </div>
+          <div v-else class="p-4 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-sm text-red-600 dark:text-red-400 text-center">{{ consultaImeiResultado.message || consultaImeiResultado.error || 'Sin resultados' }}</div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cerrar" severity="secondary" text @click="dialogConsultarImei = false" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogAutoAsignar" header="Auto-asignar telefono" modal :style="{ width: '30rem' }">
+      <div class="flex flex-col gap-4 py-2">
+        <p class="text-sm text-surface-500">
+          Se consultara cada uno de los <strong>{{ autoAsignarProgreso.total }}</strong> IMEI(s) seleccionados por API, se
+          buscara un telefono existente que coincida con el modelo y, si no existe, se creara automaticamente y se
+          asignara su id/uid al IMEI.
+        </p>
+        <div class="flex items-center gap-2">
+          <label class="text-sm font-semibold whitespace-nowrap">Servicio:</label>
+          <InputText v-model.number="autoAsignarServicio" type="number" class="w-20" placeholder="0" :disabled="autoAsignarCargando" />
+        </div>
+        <div v-if="autoAsignarCargando || autoAsignarProgreso.procesados > 0" class="rounded-lg border border-surface-200 dark:border-surface-700 p-3 space-y-2 text-sm">
+          <div class="flex justify-between"><span>Procesados</span><strong>{{ autoAsignarProgreso.procesados }} / {{ autoAsignarProgreso.total }}</strong></div>
+          <div class="flex justify-between text-green-600"><span>Asignados</span><strong>{{ autoAsignarProgreso.asignados }}</strong></div>
+          <div class="flex justify-between text-blue-600"><span>Telefonos creados</span><strong>{{ autoAsignarProgreso.creados }}</strong></div>
+          <div class="flex justify-between text-red-500"><span>Errores</span><strong>{{ autoAsignarProgreso.errores }}</strong></div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cerrar" severity="secondary" text :disabled="autoAsignarCargando" @click="dialogAutoAsignar = false" />
+        <Button label="Ejecutar" icon="pi pi-magic" :loading="autoAsignarCargando" @click="ejecutarAutoAsignar" />
       </template>
     </Dialog>
 
@@ -1773,7 +2092,11 @@ onMounted(async () => {
       :style="{ width: '30rem' }"
     >
       <div class="space-y-4 pt-2">
-        <p class="text-sm">Mover <strong>{{ selectedImeis.length }}</strong> IMEI(s) a otro almacen y asignarlos a uno de sus equipos:</p>
+        <p class="text-sm">Mover <strong>{{ selectedImeis.length }}</strong> IMEI(s) a otro almacen:</p>
+        <div class="flex items-center justify-between gap-2">
+          <label class="text-sm font-semibold">Solo cambiar almacen (sin equipo)</label>
+          <ToggleSwitch v-model="soloAlmacen" />
+        </div>
         <div class="space-y-1.5">
           <label class="text-sm font-semibold">Almacen destino</label>
           <Select
@@ -1788,7 +2111,7 @@ onMounted(async () => {
             No hay otro almacen disponible para realizar el traslado.
           </p>
         </div>
-        <div class="space-y-1.5">
+        <div v-if="!soloAlmacen" class="space-y-1.5">
           <label class="text-sm font-semibold">Equipo del almacen destino</label>
           <Select
             v-model="equipoDestinoAlmacen"
@@ -1809,7 +2132,12 @@ onMounted(async () => {
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogCambioAlmacenMultiple = false" />
-        <Button label="Mover y Asignar" icon="pi pi-warehouse" :disabled="!almacenDestinoMultiple || !equipoDestinoAlmacen" @click="cambiarAlmacenMultiple" />
+        <Button
+          :label="soloAlmacen ? 'Mover solo almacen' : 'Mover y Asignar'"
+          :icon="soloAlmacen ? 'pi pi-warehouse' : 'pi pi-warehouse'"
+          :disabled="!almacenDestinoMultiple || (!soloAlmacen && !equipoDestinoAlmacen)"
+          @click="cambiarAlmacenMultiple"
+        />
       </template>
     </Dialog>
 

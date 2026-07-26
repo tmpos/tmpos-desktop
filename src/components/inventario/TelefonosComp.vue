@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
@@ -13,6 +13,7 @@ import Select from 'primevue/select'
 import Chip from 'primevue/chip'
 import SelectButton from 'primevue/selectbutton'
 import Fieldset from 'primevue/fieldset'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
@@ -20,11 +21,17 @@ import { envioElectron, encryptarPassword } from '@/funciones/funciones.js'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useAuthStore } from '@/stores/auth.store'
 
 const toast = useToast()
 const router = useRouter()
+const auth = useAuthStore()
 const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
 const telefonos = ref<any[]>([])
+const telefonosRaw = ref<any[]>([])
+const imeisDisponiblesRaw = ref<any[]>([])
+const verTodosAlmacenes = ref(false)
+const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
 const dialogVisible = ref(false)
@@ -41,6 +48,7 @@ const busqueda = ref('')
 const busquedaImeiTelefono = ref('')
 const imeisDelTelefono = ref<any[]>([])
 const imeisDisponibles = ref<any[]>([])
+const selectedTelefonos = ref<any[]>([])
 const flippedTelId = ref<number | null>(null)
 const imeiSearch = ref('')
 const proveedores = ref<any[]>([])
@@ -74,6 +82,11 @@ const imeiForm = ref({
   color: '', capacidad: '', bateria: '', estado: 'DISPONIBLE',
   fecha_venta: null as Date | null, comprador: '', proveedor: '', no_compra: '',
   precio_vendido: 0, hora_venta: '', no_factura: '', nota: '',
+})
+
+const telefonosAMoverHeader = computed(() => {
+  if (selectedTelefonos.value.length > 1) return `Mover ${selectedTelefonos.value.length} telefonos a otro Almacen`
+  return 'Mover Telefono a otro Almacen'
 })
 
 const telefonosFiltrados = computed(() => {
@@ -140,9 +153,54 @@ async function cargarTelefonos() {
       window.db.getAll('telefonos'),
       window.db.getAll('imei'),
     ])
-    if (res.success) telefonos.value = filterByAlmacen(res.data || [])
-    if (imeiRes.success) imeisDisponibles.value = filterByAlmacen(imeiRes.data || [])
+    if (res.success) {
+      telefonosRaw.value = res.data || []
+      telefonos.value = verTodosAlmacenes.value ? telefonosRaw.value : filterByAlmacen(res.data || [])
+    }
+    if (imeiRes.success) {
+      imeisDisponiblesRaw.value = imeiRes.data || []
+      imeisDisponibles.value = verTodosAlmacenes.value ? imeisDisponiblesRaw.value : filterByAlmacen(imeiRes.data || [])
+    }
   } catch (_) {}
+}
+
+watch(verTodosAlmacenes, () => {
+  if (verTodosAlmacenes.value) {
+    telefonos.value = telefonosRaw.value
+    imeisDisponibles.value = imeisDisponiblesRaw.value
+  } else {
+    telefonos.value = filterByAlmacen(telefonosRaw.value)
+    imeisDisponibles.value = filterByAlmacen(imeisDisponiblesRaw.value)
+  }
+})
+
+async function borrarSeleccionados() {
+  const seleccionados = selectedTelefonos.value
+  if (!seleccionados.length) return
+  const confirmar = confirm(`Borrar ${seleccionados.length} telefono(s) seleccionados?`)
+  if (!confirmar) return
+  for (const tel of seleccionados) {
+    if (tel.id) await window.db.delete('telefonos', tel.id)
+  }
+  selectedTelefonos.value = []
+  await cargarTelefonos()
+  toast.add({ severity: 'success', summary: 'Eliminados', detail: `${seleccionados.length} telefono(s) borrados`, life: 3000 })
+}
+
+async function abrirMoverSeleccionados() {
+  const seleccionados = selectedTelefonos.value
+  if (!seleccionados.length) return
+  selectedTelefono.value = seleccionados[0]
+  almacenDestino.value = null
+  cantidadImeisATrasladar.value = 0
+  try {
+    await almacenStore.load()
+    const almacenOrigenUid = String(seleccionados[0].almacen_uid || almacenStore.activeUid || '')
+    almacenesDestino.value = almacenStore.almacenes.filter((a: any) => String(a.uid || '') !== almacenOrigenUid)
+    dialogMoverAlmacen.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron cargar los almacenes', life: 4000 })
+  }
 }
 
 function abrirDetalle(tel: any) {
@@ -217,43 +275,48 @@ async function abrirMoverAlmacen(telefono?: any) {
 
 async function moverTelefonoAlmacen() {
   if (!selectedTelefono.value || !almacenDestino.value || moviendoAlmacen.value) return
-  const telefono = selectedTelefono.value
+  const telefonosAMover = selectedTelefonos.value.length ? selectedTelefonos.value : [selectedTelefono.value]
   const destinoId = Number(almacenDestino.value.id || almacenDestino.value)
   const destinoUid = String(almacenDestino.value.uid || '')
   moviendoAlmacen.value = true
+  let movidos = 0
 
   try {
     const imeiRes = await window.db.getAll('imei')
     if (!imeiRes.success) throw new Error(imeiRes.error || 'No se pudieron consultar los IMEI asociados')
 
-    const imeisDisponiblesTelefono = (imeiRes.data || []).filter((imei: any) =>
-      Number(imei.id_equi) === Number(telefono.id) && String(imei.estado || '').toUpperCase() === 'DISPONIBLE')
+    for (const telefono of telefonosAMover) {
+      const imeisDisponibles = (imeiRes.data || []).filter((imei: any) =>
+        Number(imei.id_equi) === Number(telefono.id) && String(imei.estado || '').toUpperCase() === 'DISPONIBLE')
 
-    const telefonoRes = await window.db.update('telefonos', telefono.id, { almacen_id: destinoId, almacen_uid: destinoUid })
-    if (!telefonoRes.success) throw new Error(telefonoRes.error || 'No se pudo mover el telefono')
+      const resTel = await window.db.update('telefonos', telefono.id, { almacen_id: destinoId, almacen_uid: destinoUid })
+      if (!resTel.success) throw new Error(resTel.error || `No se pudo mover ${telefono.nombre}`)
 
-    for (const imei of imeisDisponiblesTelefono) {
-      const res = await window.db.update('imei', imei.id, {
-        almacen_id: destinoId,
-        almacen_uid: destinoUid,
-        id_equi: telefono.id,
-        telefono_uid: telefono.uid || imei.telefono_uid || '',
-        equipo: telefono.nombre || imei.equipo || '',
-      })
-      if (!res.success) throw new Error(res.error || `No se pudo mover el IMEI ${imei.nombre || imei.id}`)
+      for (const imei of imeisDisponibles) {
+        const res = await window.db.update('imei', imei.id, {
+          almacen_id: destinoId,
+          almacen_uid: destinoUid,
+          id_equi: telefono.id,
+          telefono_uid: telefono.uid || imei.telefono_uid || '',
+          equipo: telefono.nombre || imei.equipo || '',
+        })
+        if (!res.success) throw new Error(res.error || `No se pudo mover el IMEI ${imei.nombre || imei.id}`)
+      }
+      movidos++
     }
 
     dialogMoverAlmacen.value = false
     detalleDialogVisible.value = false
+    selectedTelefonos.value = []
     toast.add({
       severity: 'success',
-      summary: 'Telefono trasladado',
-      detail: `${telefono.nombre} y ${imeisDisponiblesTelefono.length} IMEI(s) disponibles fueron movidos a ${almacenDestino.value.nombre}`,
+      summary: 'Telefono(s) trasladado(s)',
+      detail: `${movidos} telefono(s) movidos a ${almacenDestino.value.nombre}`,
       life: 4000,
     })
     await cargarTelefonos()
   } catch (error: any) {
-    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo trasladar el telefono', life: 4000 })
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron trasladar los telefonos', life: 4000 })
   } finally {
     moviendoAlmacen.value = false
   }
@@ -567,6 +630,10 @@ onMounted(async () => {
           <InputText v-model="busqueda" placeholder="Buscar telefono..." />
         </IconField>
         <div class="flex items-center gap-2">
+          <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
             <button
               class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"
@@ -591,9 +658,16 @@ onMounted(async () => {
         </div>
       </div>
 
+      <div v-if="selectedTelefonos.length > 0" class="flex items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
+        <span class="text-sm font-medium text-primary-700 dark:text-primary-300">{{ selectedTelefonos.length }} seleccionado(s)</span>
+        <Button label="Mover de almacen" icon="pi pi-warehouse" severity="success" size="small" @click="abrirMoverSeleccionados" />
+        <Button label="Borrar" icon="pi pi-trash" severity="danger" size="small" @click="borrarSeleccionados" />
+        <Button label="Deseleccionar" icon="pi pi-times" severity="secondary" text size="small" @click="selectedTelefonos = []" />
+      </div>
       <div v-if="viewMode === 'table'" class="telefonos-table-wrap">
         <DataTable
           :value="telefonosFiltrados"
+          v-model:selection="selectedTelefonos"
           :loading="loading"
           stripedRows
           paginator
@@ -602,8 +676,14 @@ onMounted(async () => {
           dataKey="id"
           responsiveLayout="scroll"
           class="telefonos-table"
-          @row-click="(e) => abrirDetalle(e.data)"
+          @row-click="(e) => {
+            const idx = selectedTelefonos.value.findIndex((s: any) => s.id === e.data.id)
+            if (idx >= 0) selectedTelefonos.value.splice(idx, 1)
+            else selectedTelefonos.value.push(e.data)
+          }"
+          @row-dblclick="(e) => abrirDetalle(e.data)"
         >
+          <Column selectionMode="multiple" headerStyle="width: 3rem" />
           <Column field="id" header="ID" style="width: 4rem" headerClass="hide-on-mobile" bodyClass="hide-on-mobile" />
           <Column field="nombre" header="Nombre" sortable style="min-width: 12rem" />
           <Column header="Acciones" style="width: 10rem">
@@ -832,12 +912,16 @@ onMounted(async () => {
       </div>
     </Dialog>
 
-    <Dialog v-model:visible="dialogMoverAlmacen" header="Mover Telefono a otro Almacen" modal :style="{ width: 'min(30rem, 95vw)' }">
+    <Dialog v-model:visible="dialogMoverAlmacen" :header="telefonosAMoverHeader" modal :style="{ width: 'min(30rem, 95vw)' }">
       <div class="space-y-4 pt-2">
         <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 p-3">
-          <p class="font-semibold">{{ selectedTelefono?.nombre }}</p>
+          <p class="font-semibold">{{ selectedTelefono?.nombre }}{{ selectedTelefonos.length > 1 ? ` y ${selectedTelefonos.length - 1} mas` : '' }}</p>
           <p class="text-xs text-surface-500 mt-1">
-            Tambien se moveran {{ cantidadImeisATrasladar }} IMEI(s) disponibles asociados a este telefono.
+            {{
+              selectedTelefonos.length > 1
+                ? `Se moveran los ${selectedTelefonos.length} telefonos seleccionados al almacen de destino.`
+                : `Tambien se moveran ${cantidadImeisATrasladar} IMEI(s) disponibles asociados a este telefono.`
+            }}
           </p>
         </div>
         <div class="space-y-1.5">
@@ -849,7 +933,7 @@ onMounted(async () => {
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacen" @click="dialogMoverAlmacen = false" />
-        <Button label="Mover Telefono" icon="pi pi-warehouse" severity="success" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="moverTelefonoAlmacen" />
+        <Button :label="selectedTelefonos.length > 1 ? `Mover ${selectedTelefonos.length} telefonos` : 'Mover Telefono'" icon="pi pi-warehouse" severity="success" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="moverTelefonoAlmacen" />
       </template>
     </Dialog>
 

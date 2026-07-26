@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -10,6 +10,7 @@ import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Fieldset from 'primevue/fieldset'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import QRCode from 'qrcode'
@@ -21,12 +22,17 @@ import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useEmpresa } from '@/composables/useEmpresa'
 import { useSystemModeStore } from '@/stores/systemMode'
+import { useAuthStore } from '@/stores/auth.store'
 
 const toast = useToast()
 const systemMode = useSystemModeStore()
 const { nombre: nombreEmpresa, cargar: cargarEmpresa } = useEmpresa()
-const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
+const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
+const auth = useAuthStore()
+const verTodosAlmacenes = ref(false)
+const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const accesorios = ref<any[]>([])
+const accesoriosRaw = ref<any[]>([])
 const marcas = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
@@ -57,6 +63,10 @@ const stockCantidad = ref(0)
 const selectedAccesorios = ref<any[]>([])
 const dialogCambioProveedorMulti = ref(false)
 const proveedorMultiSel = ref<any>(null)
+const dialogMoverAlmacenMulti = ref(false)
+const almacenDestinoMulti = ref<any>(null)
+const almacenesDestinoMulti = ref<any[]>([])
+const moviendoAlmacenMulti = ref(false)
 
 const camposArray = ['nombre', 'codigo_barra', 'costo', 'precio_venta', 'precio_min', 'precio_xmayor', 'cantidad', 'alerta', 'marca', 'categoria', 'proveedor_id']
 
@@ -218,11 +228,12 @@ async function cargarAccesorios() {
     if (res.success) {
       const marcaMap = new Map(marcas.value.map((m: any) => [m.id, m.nombre]))
       const catMap = new Map(categorias.value.map((c: any) => [c.id, c.nombre]))
-      accesorios.value = filterByAlmacen(res.data || []).map((a: any) => ({
+      accesoriosRaw.value = (res.data || []).map((a: any) => ({
         ...a,
         marca_nombre: marcaMap.get(a.marca) || '',
         categoria_nombre: catMap.get(a.categoria) || '',
       }))
+      accesorios.value = verTodosAlmacenes.value ? accesoriosRaw.value : filterByAlmacen(accesoriosRaw.value)
     }
   } catch (error) {
     console.error(error)
@@ -230,6 +241,11 @@ async function cargarAccesorios() {
     loading.value = false
   }
 }
+
+watch(verTodosAlmacenes, () => {
+  if (accesoriosRaw.value.length === 0) return
+  accesorios.value = verTodosAlmacenes.value ? accesoriosRaw.value : filterByAlmacen(accesoriosRaw.value)
+})
 
 function abrirCrear() {
   isEditing.value = false
@@ -532,13 +548,50 @@ function abrirCambioProveedorMulti() {
 
 async function aplicarCambioProveedorMulti() {
   if (!proveedorMultiSel.value) return
+  const cantidad = selectedAccesorios.value.length
   for (const acc of selectedAccesorios.value) {
     await window.db.update('accesorios', acc.id, { proveedor_id: proveedorMultiSel.value.id })
   }
   selectedAccesorios.value = []
   dialogCambioProveedorMulti.value = false
-  toast.add({ severity: 'success', summary: 'Proveedor actualizado', detail: `${selectedAccesorios.value.length} accesorio(s)`, life: 2000 })
+  toast.add({ severity: 'success', summary: 'Proveedor actualizado', detail: `${cantidad} accesorio(s)`, life: 2000 })
   await cargarAccesorios()
+}
+
+async function abrirMoverAlmacenMulti() {
+  if (selectedAccesorios.value.length === 0) return
+  almacenDestinoMulti.value = null
+  try {
+    await almacenStore.load()
+    const origenUid = String(selectedAccesorios.value[0].almacen_uid || almacenStore.activeUid || '')
+    almacenesDestinoMulti.value = almacenStore.almacenes.filter((a: any) => String(a.uid || '') !== origenUid)
+    dialogMoverAlmacenMulti.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron cargar los almacenes', life: 4000 })
+  }
+}
+
+async function aplicarMoverAlmacenMulti() {
+  if (!almacenDestinoMulti.value || moviendoAlmacenMulti.value) return
+  const destinoId = Number(almacenDestinoMulti.value.id || almacenDestinoMulti.value)
+  const destinoUid = String(almacenDestinoMulti.value.uid || '')
+  const destinoNombre = almacenDestinoMulti.value.nombre || ''
+  const cantidad = selectedAccesorios.value.length
+  moviendoAlmacenMulti.value = true
+  try {
+    for (const acc of selectedAccesorios.value) {
+      const res = await window.db.update('accesorios', acc.id, { almacen_id: destinoId, almacen_uid: destinoUid })
+      if (!res.success) throw new Error(res.error || `No se pudo mover ${acc.nombre}`)
+    }
+    dialogMoverAlmacenMulti.value = false
+    selectedAccesorios.value = []
+    toast.add({ severity: 'success', summary: 'Almacen actualizado', detail: `${cantidad} ${systemMode.isGeneralStore ? 'producto(s)' : 'accesorio(s)'} movidos a ${destinoNombre}`, life: 3000 })
+    await cargarAccesorios()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo cambiar el almacen', life: 4000 })
+  } finally {
+    moviendoAlmacenMulti.value = false
+  }
 }
 
 async function borrar() {
@@ -676,6 +729,10 @@ onMounted(async () => {
           <InputText v-model="busqueda" :placeholder="systemMode.isGeneralStore ? 'Buscar producto...' : 'Buscar accesorio...'" />
         </IconField>
         <div class="flex items-center gap-2">
+          <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
             <button
               class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"
@@ -703,6 +760,7 @@ onMounted(async () => {
       <div v-if="selectedAccesorios.length > 0" class="flex items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
         <span class="text-sm font-medium">{{ selectedAccesorios.length }} seleccionado(s)</span>
         <Button label="Cambiar Proveedor" icon="pi pi-truck" severity="info" size="small" @click="abrirCambioProveedorMulti" />
+        <Button label="Cambiar Almacen" icon="pi pi-warehouse" severity="success" size="small" @click="abrirMoverAlmacenMulti" />
         <Button label="Eliminar" icon="pi pi-trash" severity="danger" size="small" @click="confirmarBorrarMultiple" />
         <Button icon="pi pi-times" severity="secondary" text rounded size="small" @click="selectedAccesorios = []" v-tooltip="'Limpiar seleccion'" />
       </div>
@@ -1102,6 +1160,18 @@ onMounted(async () => {
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogCambioProveedorMulti = false" />
         <Button label="Aplicar" icon="pi pi-check" :disabled="!proveedorMultiSel" @click="aplicarCambioProveedorMulti" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogMoverAlmacenMulti" header="Cambiar Almacen" modal :style="{ width: '28rem' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm">Mover <strong>{{ selectedAccesorios.length }}</strong> {{ systemMode.isGeneralStore ? 'producto(s)' : 'accesorio(s)' }} a otro almacen:</p>
+        <Select v-model="almacenDestinoMulti" :options="almacenesDestinoMulti" optionLabel="nombre" placeholder="Seleccionar almacen destino..." fluid />
+        <p v-if="almacenesDestinoMulti.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacen disponible para el traslado.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacenMulti" @click="dialogMoverAlmacenMulti = false" />
+        <Button label="Aplicar" icon="pi pi-warehouse" :loading="moviendoAlmacenMulti" :disabled="!almacenDestinoMulti" @click="aplicarMoverAlmacenMulti" />
       </template>
     </Dialog>
 

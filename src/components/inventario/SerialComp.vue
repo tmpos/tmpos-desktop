@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -11,6 +12,7 @@ import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Calendar from 'primevue/calendar'
 import Fieldset from 'primevue/fieldset'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
@@ -19,11 +21,19 @@ import JsBarcode from 'jsbarcode'
 import QRCode from 'qrcode'
 import TicketFacturaPrint from '@/components/ventas/TicketFacturaPrint.vue'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useAuthStore } from '@/stores/auth.store'
 
 const toast = useToast()
+const router = useRouter()
+const auth = useAuthStore()
 const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
 const seriales = ref<any[]>([])
+const serialesRaw = ref<any[]>([])
 const electrodomesticos = ref<any[]>([])
+const electrodomesticosRaw = ref<any[]>([])
+const clientes = ref<any[]>([])
+const verTodosAlmacenes = ref(false)
+const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('table')
 const dialogVisible = ref(false)
@@ -33,6 +43,155 @@ const selectedSerial = ref<any>(null)
 const selectedSeriales = ref<any[]>([])
 const busqueda = ref('')
 const estadoFiltro = ref('DISPONIBLE')
+const dialogAccionVenta = ref(false)
+const dialogClienteExpress = ref(false)
+const dialogNuevoClienteExpress = ref(false)
+const serialParaVenta = ref<any>(null)
+const serialesParaVenta = ref<any[]>([])
+const preciosSerialVenta = ref<Record<number, number>>({})
+const clienteExpressSeleccionado = ref<any>({ id: null, nombre: 'AL CONTADO', telefono: '' })
+const busquedaClienteExpress = ref('')
+const nuevoClienteExpress = ref({ nombre: '', telefono: '', direccion: '', rnc: '' })
+
+const clientesExpressFiltrados = computed(() => {
+  const texto = busquedaClienteExpress.value.toLowerCase().trim()
+  if (!texto) return clientes.value
+  return clientes.value.filter((cliente: any) =>
+    String(cliente.nombre || '').toLowerCase().includes(texto) ||
+    String(cliente.telefono || '').toLowerCase().includes(texto) ||
+    String(cliente.rnc || '').toLowerCase().includes(texto)
+  )
+})
+
+function abrirAccionVenta(serial: any) {
+  abrirAccionVentaLista([serial])
+}
+
+function abrirAccionVentaMultiple() {
+  abrirAccionVentaLista(selectedSeriales.value)
+}
+
+function abrirAccionVentaLista(lista: any[]) {
+  if (!lista.length) return
+  const noDisponibles = lista.filter((serial: any) => String(serial.estado || '').toUpperCase() !== 'DISPONIBLE')
+  if (noDisponibles.length) {
+    toast.add({ severity: 'warn', summary: 'No disponible', detail: 'Solo puedes vender Seriales disponibles', life: 3000 })
+    return
+  }
+  const sinEquipo = lista.find((serial: any) => !serial.id_equi || !serial.electrodomestico_nombre)
+  if (sinEquipo) {
+    toast.add({ severity: 'warn', summary: 'Equipo requerido', detail: 'Asigna un electrodomestico a este Serial antes de venderlo', life: 3000 })
+    return
+  }
+  serialesParaVenta.value = [...lista]
+  serialParaVenta.value = serialesParaVenta.value[0]
+  preciosSerialVenta.value = Object.fromEntries(serialesParaVenta.value.map((serial: any) => [Number(serial.id), Number(serial.precio_venta || 0)]))
+  dialogAccionVenta.value = true
+}
+
+function obtenerSerialesParaVenta() {
+  return serialesParaVenta.value.length ? serialesParaVenta.value : (serialParaVenta.value ? [serialParaVenta.value] : [])
+}
+
+function precioSeleccionadoSerial(serial: any) {
+  return Number(preciosSerialVenta.value[Number(serial.id)] ?? serial.precio_venta ?? 0)
+}
+
+function usarPrecioSerial(serial: any, precio: any) {
+  preciosSerialVenta.value[Number(serial.id)] = Number(precio || 0)
+}
+
+function validarPreciosVentaSerial(serialesVenta: any[]) {
+  if (serialesVenta.some((serial: any) => precioSeleccionadoSerial(serial) <= 0)) {
+    toast.add({ severity: 'warn', summary: 'Precio requerido', detail: 'Cada Serial debe tener un precio mayor que cero', life: 3000 })
+    return false
+  }
+  return true
+}
+
+function itemPosDesdeSerial(serial: any, precio = Number(serial.precio_venta || 0)) {
+  return {
+    tipo: 'serial', serial_id: serial.id, serial_ids: [serial.id], serial: serial.nombre, seriales: [serial.nombre],
+    codigo: serial.nombre || '', nombre: serial.electrodomestico_nombre || '', electrodomestico_id: serial.id_equi,
+    color: serial.color || '', colores: serial.color ? [serial.color] : [],
+    capacidad: serial.capacidad || '', capacidades: serial.capacidad ? [serial.capacidad] : [],
+    precio: Number(precio || 0), precio_normal: Number(serial.precio_venta || precio || 0),
+    costo: Number(serial.costo || 0), cantidad: 1,
+  }
+}
+
+function agregarAlCarritoPos() {
+  const serialesVenta = obtenerSerialesParaVenta()
+  if (!serialesVenta.length) return
+  if (!validarPreciosVentaSerial(serialesVenta)) return
+  try {
+    const data = JSON.parse(localStorage.getItem('pos_cart_data') || '{}')
+    const cart = Array.isArray(data.cart) ? data.cart : []
+    const repetidos = serialesVenta.filter((serial: any) => cart.some((i: any) => i.tipo === 'serial' && (Number(i.serial_id) === Number(serial.id) || (i.serial_ids || []).map(Number).includes(Number(serial.id)))))
+    if (repetidos.length) {
+      toast.add({ severity: 'warn', summary: 'Ya agregado', detail: `${repetidos.length} Serial(es) ya están en el carrito del POS`, life: 3000 })
+      return
+    }
+    data.cart = [...cart, ...serialesVenta.map((serial: any) => itemPosDesdeSerial(serial, precioSeleccionadoSerial(serial)))]
+    localStorage.setItem('pos_cart_data', JSON.stringify(data))
+    dialogAccionVenta.value = false
+    router.push('/vender')
+  } catch (error) {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo agregar el Serial al carrito', life: 3000 })
+  }
+}
+
+function abrirClienteVentaExpress() {
+  clienteExpressSeleccionado.value = { id: null, nombre: 'AL CONTADO', telefono: '' }
+  busquedaClienteExpress.value = ''
+  dialogAccionVenta.value = false
+  dialogClienteExpress.value = true
+}
+
+function seleccionarClienteExpress(cliente: any) {
+  clienteExpressSeleccionado.value = cliente
+}
+
+function abrirNuevoClienteExpress() {
+  nuevoClienteExpress.value = { nombre: '', telefono: '', direccion: '', rnc: '' }
+  dialogNuevoClienteExpress.value = true
+}
+
+async function guardarNuevoClienteExpress() {
+  if (!nuevoClienteExpress.value.nombre.trim()) {
+    toast.add({ severity: 'warn', summary: 'Atención', detail: 'El nombre del cliente es requerido', life: 3000 })
+    return
+  }
+  const data = {
+    nombre: nuevoClienteExpress.value.nombre.trim().toUpperCase(), telefono: nuevoClienteExpress.value.telefono.trim(),
+    direccion: nuevoClienteExpress.value.direccion.trim().toUpperCase(), rnc: nuevoClienteExpress.value.rnc.trim(), email: '',
+  }
+  const res = await window.db.insert('clientes', data)
+  if (!res.success) {
+    toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo crear el cliente', life: 3000 })
+    return
+  }
+  const cliente = { id: res.data.id, ...data }
+  clientes.value.unshift(cliente)
+  clienteExpressSeleccionado.value = cliente
+  dialogNuevoClienteExpress.value = false
+  toast.add({ severity: 'success', summary: 'Cliente creado', detail: data.nombre, life: 2000 })
+}
+
+function completarVentaExpress() {
+  const serialesVenta = obtenerSerialesParaVenta()
+  if (!serialesVenta.length) return
+  if (!validarPreciosVentaSerial(serialesVenta)) return
+  const cliente = clienteExpressSeleccionado.value || { id: null, nombre: 'AL CONTADO', telefono: '' }
+  const data = {
+    cart: serialesVenta.map((serial: any) => itemPosDesdeSerial(serial, precioSeleccionadoSerial(serial))), cliente, clienteExpress: '', metodoPago: 'EFECTIVO',
+    descuento_fijo: 0, descuento_porc: 0, descuento_tipo: 'fijo', descuento_valor: 0,
+    nota: '', es_cotizacion: false, venta_express_pendiente: true,
+  }
+  localStorage.setItem('pos_cart_data', JSON.stringify(data))
+  dialogClienteExpress.value = false
+  router.push('/vender')
+}
 
 const ticketPrintRef = ref<any>(null)
 const reimprimiendo = ref(false)
@@ -158,7 +317,10 @@ async function cargarElectrodomesticos() {
   try {
     const res = await window.db.getAll('electrodomesticos')
     if (res.success) {
-      electrodomesticos.value = filterByAlmacen(res.data || [])
+      electrodomesticosRaw.value = res.data || []
+      electrodomesticos.value = puedeVerTodosAlmacenes.value && verTodosAlmacenes.value
+        ? electrodomesticosRaw.value
+        : filterByAlmacen(electrodomesticosRaw.value)
     }
   } catch (error) {
     console.error(error)
@@ -190,13 +352,22 @@ async function cargarSeriales() {
       window.db.getAll('proveedores'),
     ])
 
-    if (resElect.success) electrodomesticos.value = filterByAlmacen(resElect.data || [])
+    if (resElect.success) {
+      electrodomesticosRaw.value = resElect.data || []
+      electrodomesticos.value = puedeVerTodosAlmacenes.value && verTodosAlmacenes.value
+        ? electrodomesticosRaw.value
+        : filterByAlmacen(electrodomesticosRaw.value)
+    }
     if (resProv.success) proveedores.value = resProv.data || []
     if (resSerial.success) {
-      const equiposLocales = filterByAlmacen(resElect.data || [])
+      serialesRaw.value = resSerial.data || []
+      const equiposLocales = electrodomesticos.value
       const equiposPorId = new Map(equiposLocales.map((t: any) => [Number(t.id), t]))
       const equiposPorUid = new Map(equiposLocales.map((t: any) => [String(t.uid || ''), t]))
-      seriales.value = filterByAlmacen(resSerial.data || []).map((i: any) => ({
+      const lista = puedeVerTodosAlmacenes.value && verTodosAlmacenes.value
+        ? serialesRaw.value
+        : filterByAlmacen(serialesRaw.value)
+      seriales.value = lista.map((i: any) => ({
         ...i,
         id_equi: (i.equipo_uid && equiposPorUid.get(String(i.equipo_uid))?.id) || i.id_equi,
         electrodomestico_nombre: (i.equipo_uid && equiposPorUid.get(String(i.equipo_uid))?.nombre) || equiposPorId.get(Number(i.id_equi))?.nombre || i.equipo || '',
@@ -208,6 +379,11 @@ async function cargarSeriales() {
     loading.value = false
   }
 }
+
+watch(verTodosAlmacenes, () => {
+  selectedSeriales.value = []
+  cargarSeriales()
+})
 
 function formDefault() {
   return {
@@ -832,6 +1008,11 @@ onMounted(async () => {
     }
   } catch (_) {}
 
+  try {
+    const resClientes = await window.db.getAll('clientes')
+    if (resClientes.success) clientes.value = resClientes.data || []
+  } catch (_) {}
+
   await cargarElectrodomesticos()
   await cargarSeriales()
 })
@@ -858,6 +1039,10 @@ onMounted(async () => {
           />
         </div>
         <div class="flex items-center gap-2">
+          <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
             <button
               class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"
@@ -890,6 +1075,7 @@ onMounted(async () => {
         <Button label="Color" icon="pi pi-palette" severity="help" size="small" @click="abrirCambiarColorMultiple" />
         <Button label="Capacidad" icon="pi pi-database" severity="info" size="small" @click="abrirCambiarCapacidadMultiple" />
         <Button label="Prov." icon="pi pi-truck" severity="info" size="small" @click="abrirCambiarProveedorMultiple" />
+        <Button label="Vender / Carrito" icon="pi pi-shopping-cart" severity="success" size="small" @click="abrirAccionVentaMultiple" />
         <Button label="Imprimir Etiqueta" icon="pi pi-print" severity="warn" size="small" @click="abrirImprimirEtiqueta" />
         <Button label="Eliminar" icon="pi pi-trash" severity="danger" size="small" @click="confirmarBorrarMultiple" />
         <Button icon="pi pi-times" severity="secondary" text rounded size="small" @click="selectedSeriales = []" v-tooltip="'Limpiar seleccion'" />
@@ -912,6 +1098,7 @@ onMounted(async () => {
         <Column header="Acciones" style="width: 10rem">
           <template #body="{ data }">
             <div class="flex gap-1">
+              <Button icon="pi pi-shopping-cart" severity="success" text rounded size="small" @click.stop="abrirAccionVenta(data)" v-tooltip="'Vender o agregar al carrito'" />
               <Button icon="pi pi-print" severity="warn" text rounded size="small" @click.stop="abrirImprimirEtiquetaIndividual(data)" v-tooltip="'Imprimir etiqueta'" />
               <Button icon="pi pi-pencil" severity="info" text rounded size="small" @click.stop="abrirEditar(data)" v-tooltip="'Editar'" />
               <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click.stop="confirmarBorrar(data)" v-tooltip="'Eliminar'" />
@@ -974,6 +1161,15 @@ onMounted(async () => {
             <div class="font-bold text-primary text-xs">${{ (serial.precio_venta || 0).toFixed(2) }}</div>
             <div class="flex gap-1 mt-auto pt-1 border-t border-surface-100 dark:border-surface-700">
               <Button
+                icon="pi pi-shopping-cart"
+                severity="success"
+                text
+                rounded
+                size="small"
+                @click="abrirAccionVenta(serial)"
+                v-tooltip="'Vender o agregar al carrito'"
+              />
+              <Button
                 icon="pi pi-print"
                 severity="warn"
                 text
@@ -1005,6 +1201,76 @@ onMounted(async () => {
         </div>
       </div>
     </Fieldset>
+
+    <Dialog v-model:visible="dialogAccionVenta" header="Vender Serial" modal :style="{ width: 'min(28rem, 95vw)' }">
+      <div class="space-y-4 pt-1">
+        <div class="rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3">
+          <template v-if="serialesParaVenta.length === 1">
+            <p class="font-semibold">{{ serialParaVenta?.electrodomestico_nombre }}</p>
+            <p class="text-xs text-surface-500 font-mono">Serial: {{ serialParaVenta?.nombre }}</p>
+          </template>
+          <template v-else>
+            <p class="font-semibold">{{ serialesParaVenta.length }} Seriales seleccionados</p>
+            <p class="text-xs text-surface-500">Se venderan o agregaran juntos al carrito.</p>
+          </template>
+        </div>
+        <div class="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1">
+          <div v-for="serial in serialesParaVenta" :key="serial.id" class="rounded-lg border border-surface-200 dark:border-surface-700 p-2.5">
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <div class="min-w-0"><p class="font-medium text-sm truncate">{{ serial.electrodomestico_nombre }}</p><p class="text-xs text-surface-400 font-mono truncate">{{ serial.nombre }}</p></div>
+              <span class="font-semibold text-primary text-sm">${{ precioSeleccionadoSerial(serial).toFixed(2) }}</span>
+            </div>
+            <InputNumber v-model="preciosSerialVenta[serial.id]" mode="currency" currency="USD" locale="en-US" fluid inputClass="text-sm" />
+            <div class="flex gap-1 mt-2">
+              <Button label="Venta" size="small" text @click="usarPrecioSerial(serial, serial.precio_venta)" />
+              <Button label="Min." size="small" text severity="warn" @click="usarPrecioSerial(serial, serial.precio_min)" />
+              <Button label="Mayor" size="small" text severity="success" @click="usarPrecioSerial(serial, serial.precio_xmayor)" />
+            </div>
+          </div>
+        </div>
+        <div class="flex justify-between font-bold border-t border-surface-200 dark:border-surface-700 pt-2">
+          <span>Total</span>
+          <span class="text-primary">${{ serialesParaVenta.reduce((total, serial) => total + precioSeleccionadoSerial(serial), 0).toFixed(2) }}</span>
+        </div>
+        <p class="text-sm text-surface-500">Elige cómo deseas continuar con este equipo.</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Button label="Vender express" icon="pi pi-bolt" severity="success" class="!justify-start !py-4" @click="abrirClienteVentaExpress" />
+          <Button label="Agregar al carrito" icon="pi pi-cart-plus" outlined class="!justify-start !py-4" @click="agregarAlCarritoPos" />
+        </div>
+      </div>
+      <template #footer><Button label="Cancelar" severity="secondary" text @click="dialogAccionVenta = false" /></template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogClienteExpress" header="Cliente para venta express" modal :style="{ width: 'min(30rem, 95vw)' }">
+      <div class="space-y-3 pt-1">
+        <div class="flex items-center justify-between p-3 rounded-lg border border-primary-200 bg-primary-50 dark:bg-primary-900/20">
+          <div><p class="font-semibold text-sm">{{ clienteExpressSeleccionado?.nombre }}</p><p class="text-xs text-surface-500">Cliente seleccionado</p></div>
+          <Button label="Al contado" size="small" text @click="seleccionarClienteExpress({ id: null, nombre: 'AL CONTADO', telefono: '' })" />
+        </div>
+        <InputText v-model="busquedaClienteExpress" placeholder="Buscar por nombre, teléfono o RNC..." fluid />
+        <div class="max-h-56 overflow-y-auto flex flex-col gap-1">
+          <button v-for="cliente in clientesExpressFiltrados" :key="cliente.id" type="button" class="text-left p-2.5 rounded-lg border transition-colors" :class="clienteExpressSeleccionado?.id === cliente.id ? 'border-primary bg-primary-50 dark:bg-primary-900/20' : 'border-surface-200 dark:border-surface-700 hover:border-primary-300'" @click="seleccionarClienteExpress(cliente)">
+            <p class="font-medium text-sm">{{ cliente.nombre }}</p><p class="text-xs text-surface-400">{{ cliente.telefono || 'Sin teléfono' }}</p>
+          </button>
+          <p v-if="clientesExpressFiltrados.length === 0" class="text-center py-4 text-sm text-surface-400">No se encontraron clientes.</p>
+        </div>
+        <Button label="Nuevo cliente" icon="pi pi-user-plus" severity="info" text class="w-full" @click="abrirNuevoClienteExpress" />
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogClienteExpress = false" />
+        <Button label="Completar venta express" icon="pi pi-check" @click="completarVentaExpress" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogNuevoClienteExpress" header="Nuevo cliente" modal :style="{ width: 'min(26rem, 95vw)' }">
+      <div class="flex flex-col gap-3 pt-1">
+        <div><label class="text-sm font-semibold">Nombre *</label><InputText v-model="nuevoClienteExpress.nombre" fluid class="uppercase" /></div>
+        <div><label class="text-sm font-semibold">Teléfono</label><InputText v-model="nuevoClienteExpress.telefono" fluid /></div>
+        <div><label class="text-sm font-semibold">RNC / Cédula</label><InputText v-model="nuevoClienteExpress.rnc" fluid /></div>
+        <div><label class="text-sm font-semibold">Dirección</label><InputText v-model="nuevoClienteExpress.direccion" fluid class="uppercase" /></div>
+      </div>
+      <template #footer><Button label="Cancelar" severity="secondary" text @click="dialogNuevoClienteExpress = false" /><Button label="Guardar y seleccionar" icon="pi pi-check" @click="guardarNuevoClienteExpress" /></template>
+    </Dialog>
 
     <Dialog
       v-model:visible="dialogVisible"

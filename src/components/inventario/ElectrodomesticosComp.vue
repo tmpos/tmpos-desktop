@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -12,6 +12,7 @@ import Select from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
 import Chip from 'primevue/chip'
 import Fieldset from 'primevue/fieldset'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
@@ -19,10 +20,15 @@ import { envioElectron } from '@/funciones/funciones.js'
 import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useAuthStore } from '@/stores/auth.store'
 
 const toast = useToast()
+const auth = useAuthStore()
 const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
 const electrodomesticos = ref<any[]>([])
+const electrodomesticosRaw = ref<any[]>([])
+const verTodosAlmacenes = ref(false)
+const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
 const dialogVisible = ref(false)
@@ -31,6 +37,7 @@ const detalleDialogVisible = ref(false)
 const serialDialogVisible = ref(false)
 const isEditing = ref(false)
 const selectedElectrodomestico = ref<any>(null)
+const selectedElectrodomesticos = ref<any[]>([])
 const busqueda = ref('')
 const busquedaSerialElectrodomestico = ref('')
 const serialesDelElectrodomestico = ref<any[]>([])
@@ -82,6 +89,11 @@ function onBatchSerialKeydown(event: KeyboardEvent) {
 function removerSerialBatch(serial: string) {
   batchSeriales.value = batchSeriales.value.filter(s => s !== serial)
 }
+
+const electrodomesticosAMoverHeader = computed(() => {
+  if (selectedElectrodomesticos.value.length > 1) return `Mover ${selectedElectrodomesticos.value.length} electrodomesticos a otro Almacen`
+  return 'Mover Electrodomestico a otro Almacen'
+})
 
 const electrodomesticosFiltrados = computed(() => {
   const texto = busqueda.value.toLowerCase().trim()
@@ -173,7 +185,8 @@ async function cargarElectrodomesticos() {
   try {
     const res = await window.db.getAll('electrodomesticos')
     if (res.success) {
-      electrodomesticos.value = filterByAlmacen(res.data || [])
+      electrodomesticosRaw.value = res.data || []
+      electrodomesticos.value = verTodosAlmacenes.value ? electrodomesticosRaw.value : filterByAlmacen(res.data || [])
     }
   } catch (error) {
     console.error(error)
@@ -181,6 +194,10 @@ async function cargarElectrodomesticos() {
     loading.value = false
   }
 }
+
+watch(verTodosAlmacenes, () => {
+  electrodomesticos.value = verTodosAlmacenes.value ? electrodomesticosRaw.value : filterByAlmacen(electrodomesticosRaw.value)
+})
 
 async function cargarSerialesDelElectrodomestico(electrodomesticoId: number) {
   try {
@@ -220,6 +237,12 @@ function abrirEditar(electrodomestico: any) {
 
 function confirmarBorrar(electrodomestico = selectedElectrodomestico.value) {
   selectedElectrodomestico.value = electrodomestico
+  selectedElectrodomesticos.value = []
+  deleteDialogVisible.value = true
+}
+
+function confirmarBorrarMultiple() {
+  if (selectedElectrodomesticos.value.length === 0) return
   deleteDialogVisible.value = true
 }
 
@@ -437,42 +460,68 @@ async function abrirMoverAlmacen(electrodomestico?: any) {
   }
 }
 
+async function abrirMoverSeleccionados() {
+  const seleccionados = selectedElectrodomesticos.value
+  if (!seleccionados.length) return
+  selectedElectrodomestico.value = seleccionados[0]
+  almacenDestino.value = null
+  cantidadSerialesATrasladar.value = 0
+  try {
+    await almacenStore.load()
+    const almacenOrigenUid = String(seleccionados[0].almacen_uid || almacenStore.activeUid || '')
+    almacenesDestino.value = almacenStore.almacenes.filter((a: any) => String(a.uid || '') !== almacenOrigenUid)
+    dialogMoverAlmacen.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron cargar los almacenes', life: 4000 })
+  }
+}
+
 async function moverElectrodomesticoAlmacen() {
   if (!selectedElectrodomestico.value || !almacenDestino.value || moviendoAlmacen.value) return
-  const electrodomestico = selectedElectrodomestico.value
+  const electrodomesticosAMover = selectedElectrodomesticos.value.length ? selectedElectrodomesticos.value : [selectedElectrodomestico.value]
   const destinoId = Number(almacenDestino.value.id || almacenDestino.value)
   const destinoUid = String(almacenDestino.value.uid || '')
   moviendoAlmacen.value = true
+  let movidos = 0
+  let serialesMovidos = 0
 
   try {
     const serialRes = await window.db.getAll('serial')
     if (!serialRes.success) throw new Error(serialRes.error || 'No se pudieron consultar los seriales asociados')
-    const serialesDisponibles = (serialRes.data || []).filter((serial: any) =>
-      serialPerteneceElectrodomestico(serial, electrodomestico) && String(serial.estado || '').toUpperCase() === 'DISPONIBLE')
 
-    const equipoRes = await window.db.update('electrodomesticos', electrodomestico.id, {
-      almacen_id: destinoId,
-      almacen_uid: destinoUid,
-    })
-    if (!equipoRes.success) throw new Error(equipoRes.error || 'No se pudo mover el electrodomestico')
+    for (const electrodomestico of electrodomesticosAMover) {
+      const serialesDisponibles = (serialRes.data || []).filter((serial: any) =>
+        serialPerteneceElectrodomestico(serial, electrodomestico) && String(serial.estado || '').toUpperCase() === 'DISPONIBLE')
 
-    for (const serial of serialesDisponibles) {
-      const res = await window.db.update('serial', serial.id, {
+      const equipoRes = await window.db.update('electrodomesticos', electrodomestico.id, {
         almacen_id: destinoId,
         almacen_uid: destinoUid,
-        id_equi: electrodomestico.id,
-        equipo_uid: electrodomestico.uid || serial.equipo_uid || '',
-        equipo: electrodomestico.nombre || serial.equipo || '',
       })
-      if (!res.success) throw new Error(res.error || `No se pudo mover el serial ${serial.nombre || serial.id}`)
+      if (!equipoRes.success) throw new Error(equipoRes.error || `No se pudo mover ${electrodomestico.nombre}`)
+
+      for (const serial of serialesDisponibles) {
+        const res = await window.db.update('serial', serial.id, {
+          almacen_id: destinoId,
+          almacen_uid: destinoUid,
+          id_equi: electrodomestico.id,
+          equipo_uid: electrodomestico.uid || serial.equipo_uid || '',
+          equipo: electrodomestico.nombre || serial.equipo || '',
+        })
+        if (!res.success) throw new Error(res.error || `No se pudo mover el serial ${serial.nombre || serial.id}`)
+      }
+      movidos++
+      serialesMovidos += serialesDisponibles.length
     }
 
     dialogMoverAlmacen.value = false
     detalleDialogVisible.value = false
+    selectedElectrodomesticos.value = []
     toast.add({
       severity: 'success',
       summary: 'Electrodomestico trasladado',
-      detail: `${electrodomestico.nombre} y ${serialesDisponibles.length} serial(es) disponibles fueron movidos a ${almacenDestino.value.nombre}`,
+      detail: movidos > 1
+        ? `${movidos} electrodomesticos y ${serialesMovidos} serial(es) disponibles fueron movidos a ${almacenDestino.value.nombre}`
+        : `${electrodomesticosAMover[0].nombre} y ${serialesMovidos} serial(es) disponibles fueron movidos a ${almacenDestino.value.nombre}`,
       life: 4000,
     })
     await cargarElectrodomesticos()
@@ -495,6 +544,18 @@ async function borrar() {
   } catch (error) {
     toast.add({ severity: 'error', summary: 'Error', detail: 'Error al eliminar', life: 3000 })
   }
+}
+
+async function borrarMultiple() {
+  const seleccionados = selectedElectrodomesticos.value
+  const cantidad = seleccionados.length
+  for (const elec of seleccionados) {
+    await window.db.delete('electrodomesticos', elec.id)
+  }
+  selectedElectrodomesticos.value = []
+  deleteDialogVisible.value = false
+  toast.add({ severity: 'success', summary: 'Eliminados', detail: `${cantidad} electrodomestico(s) eliminados`, life: 3000 })
+  await cargarElectrodomesticos()
 }
 
 async function subirImagen() {
@@ -580,6 +641,10 @@ onMounted(async () => {
           <InputText v-model="busqueda" placeholder="Buscar electrodomestico..." />
         </IconField>
         <div class="flex items-center gap-2">
+          <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
             <button
               class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"
@@ -604,9 +669,17 @@ onMounted(async () => {
         </div>
       </div>
 
+      <div v-if="selectedElectrodomesticos.length > 0" class="flex items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
+        <span class="text-sm font-medium text-primary-700 dark:text-primary-300">{{ selectedElectrodomesticos.length }} seleccionado(s)</span>
+        <Button label="Mover de almacen" icon="pi pi-warehouse" severity="success" size="small" @click="abrirMoverSeleccionados" />
+        <Button label="Eliminar" icon="pi pi-trash" severity="danger" size="small" @click="confirmarBorrarMultiple" />
+        <Button label="Deseleccionar" icon="pi pi-times" severity="secondary" text size="small" @click="selectedElectrodomesticos = []" />
+      </div>
+
       <DataTable
         v-if="viewMode === 'table'"
         :value="electrodomesticosFiltrados"
+        v-model:selection="selectedElectrodomesticos"
         :loading="loading"
         stripedRows
         paginator
@@ -614,8 +687,14 @@ onMounted(async () => {
         :rowsPerPageOptions="[10, 25, 50]"
         dataKey="id"
         responsiveLayout="scroll"
-        @row-click="(e) => abrirDetalle(e.data)"
+        @row-click="(e) => {
+          const idx = selectedElectrodomesticos.findIndex((s: any) => s.id === e.data.id)
+          if (idx >= 0) selectedElectrodomesticos.splice(idx, 1)
+          else selectedElectrodomesticos.push(e.data)
+        }"
+        @row-dblclick="(e) => abrirDetalle(e.data)"
       >
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column field="id" header="ID" style="width: 5rem" />
         <Column field="nombre" header="Nombre" sortable />
         <Column header="Acciones" style="width: 10rem">
@@ -760,12 +839,16 @@ onMounted(async () => {
       </div>
     </Dialog>
 
-    <Dialog v-model:visible="dialogMoverAlmacen" header="Mover Electrodomestico a otro Almacen" modal :style="{ width: 'min(30rem, 95vw)' }">
+    <Dialog v-model:visible="dialogMoverAlmacen" :header="electrodomesticosAMoverHeader" modal :style="{ width: 'min(30rem, 95vw)' }">
       <div class="space-y-4 pt-2">
         <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 p-3">
-          <p class="font-semibold">{{ selectedElectrodomestico?.nombre }}</p>
+          <p class="font-semibold">{{ selectedElectrodomestico?.nombre }}{{ selectedElectrodomesticos.length > 1 ? ` y ${selectedElectrodomesticos.length - 1} mas` : '' }}</p>
           <p class="text-xs text-surface-500 mt-1">
-            Tambien se moveran {{ cantidadSerialesATrasladar }} serial(es) disponibles asociados a este electrodomestico.
+            {{
+              selectedElectrodomesticos.length > 1
+                ? `Se moveran los ${selectedElectrodomesticos.length} electrodomesticos seleccionados al almacen de destino.`
+                : `Tambien se moveran ${cantidadSerialesATrasladar} serial(es) disponibles asociados a este electrodomestico.`
+            }}
           </p>
         </div>
         <div class="space-y-1.5">
@@ -777,7 +860,7 @@ onMounted(async () => {
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacen" @click="dialogMoverAlmacen = false" />
-        <Button label="Mover Electrodomestico" icon="pi pi-warehouse" severity="success" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="moverElectrodomesticoAlmacen" />
+        <Button :label="selectedElectrodomesticos.length > 1 ? `Mover ${selectedElectrodomesticos.length} electrodomesticos` : 'Mover Electrodomestico'" icon="pi pi-warehouse" severity="success" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="moverElectrodomesticoAlmacen" />
       </template>
     </Dialog>
 
@@ -956,11 +1039,12 @@ onMounted(async () => {
     >
       <div class="flex items-center gap-3">
         <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span>Seguro que deseas eliminar <strong>{{ selectedElectrodomestico?.nombre }}</strong>?</span>
+        <span v-if="selectedElectrodomesticos.length > 1">Seguro que deseas eliminar los <strong>{{ selectedElectrodomesticos.length }}</strong> electrodomesticos seleccionados?</span>
+        <span v-else>Seguro que deseas eliminar <strong>{{ selectedElectrodomestico?.nombre }}</strong>?</span>
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
-        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="borrar" />
+        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="selectedElectrodomesticos.length > 1 ? borrarMultiple() : borrar()" />
       </template>
     </Dialog>
 

@@ -302,7 +302,7 @@ async function upsertLocal(tabla: string, cloudRow: any): Promise<'inserted' | '
   }
   const cleanRow = { ...cloudRow }
   if (tabla === 'imei') {
-    const telefonoUid = String(cleanRow.id_equi || '').trim()
+    const telefonoUid = String(cleanRow.telefono_uid || cleanRow.id_equi || '').trim()
     if (telefonoUid) {
       cleanRow.telefono_uid = telefonoUid
       const telefonos = await getLocalRows('telefonos')

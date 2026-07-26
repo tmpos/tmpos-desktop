@@ -40,8 +40,12 @@ export async function loadConfig(): Promise<TMCloudConfig> {
   return { url: '', key: '', serviceKey: '' }
 }
 
-export async function ensureConfigLoaded(): Promise<TMCloudConfig | null> {
-  if (currentConfig?.url && (currentConfig.key || currentConfig.serviceKey)) return currentConfig
+export function resetConfig() {
+  currentConfig = null
+}
+
+export async function ensureConfigLoaded(force = false): Promise<TMCloudConfig | null> {
+  if (!force && currentConfig?.url && (currentConfig.key || currentConfig.serviceKey)) return currentConfig
   const cfg = await loadConfig()
   if (!cfg.url || (!cfg.key && !cfg.serviceKey)) return null
   currentConfig = {

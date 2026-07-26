@@ -438,6 +438,10 @@ function initDatabase(): void {
           const asignar = db!.prepare(`UPDATE "${tabla.name}" SET almacen_uid = ? WHERE (almacen_uid IS NULL OR almacen_uid = '') AND almacen_id = ?`)
           for (const empresa of empresas) asignar.run(String(empresa.uid), Number(empresa.almacen_id) || Number(empresa.id))
           if (uidPrincipal) db!.prepare(`UPDATE "${tabla.name}" SET almacen_uid = ? WHERE (almacen_uid IS NULL OR almacen_uid = '') AND (almacen_id IS NULL OR almacen_id = 0)`).run(uidPrincipal)
+          try {
+            const fijarId = db!.prepare(`UPDATE "${tabla.name}" SET almacen_id = ? WHERE almacen_uid = ? AND almacen_uid <> '' AND (almacen_id IS NULL OR almacen_id != ?)`)
+            for (const empresa of empresas) fijarId.run(Number(empresa.id), String(empresa.uid), Number(empresa.id))
+          } catch (_) {}
         }
       }
     }
@@ -445,6 +449,11 @@ function initDatabase(): void {
       db!.exec(`UPDATE serial SET equipo_uid = (SELECT uid FROM electrodomesticos WHERE electrodomesticos.id = serial.id_equi) WHERE (equipo_uid IS NULL OR equipo_uid = '') AND id_equi IS NOT NULL`)
       db!.exec(`UPDATE serial SET equipo = (SELECT nombre FROM electrodomesticos WHERE electrodomesticos.id = serial.id_equi) WHERE (equipo IS NULL OR equipo = '') AND id_equi IS NOT NULL`)
       db!.exec(`UPDATE serial SET id_equi = (SELECT id FROM electrodomesticos WHERE electrodomesticos.uid = serial.equipo_uid) WHERE equipo_uid IS NOT NULL AND equipo_uid <> '' AND EXISTS (SELECT 1 FROM electrodomesticos WHERE electrodomesticos.uid = serial.equipo_uid)`)
+      try {
+        if (tableExists('imei') && tableExists('telefonos')) {
+          db!.exec(`UPDATE imei SET id_equi = (SELECT id FROM telefonos WHERE telefonos.uid = imei.telefono_uid) WHERE telefono_uid IS NOT NULL AND telefono_uid <> '' AND EXISTS (SELECT 1 FROM telefonos WHERE telefonos.uid = imei.telefono_uid)`)
+        }
+      } catch (_) {}
     }
     db!.prepare(`INSERT OR REPLACE INTO schema_migrations (version, detalle) VALUES (?, ?)`)
       .run(20260721, 'Relacion estable de almacenes mediante almacen_uid')
@@ -1016,6 +1025,10 @@ function setupIpcHandlers(): void {
     try {
       if (!data.uid) data.uid = generarUid()
       if (tabla === 'empresa') data.almacen_uid = data.uid
+      if (tabla !== 'empresa' && data.almacen_uid) {
+        const emp = db!.prepare(`SELECT id FROM empresa WHERE uid = ? LIMIT 1`).get(data.almacen_uid) as any
+        if (emp?.id) data.almacen_id = emp.id
+      }
       if (tabla === 'serial') {
         const equipo = data.equipo_uid
           ? db!.prepare(`SELECT id, uid, nombre FROM electrodomesticos WHERE uid = ? LIMIT 1`).get(data.equipo_uid) as any
@@ -1045,6 +1058,10 @@ function setupIpcHandlers(): void {
     try {
       const oldData = db!.prepare(`SELECT * FROM "${tabla}" WHERE id = ?`).get(id) as Record<string, any> || {}
       if (tabla === 'empresa') data.almacen_uid = data.uid || oldData.uid || oldData.almacen_uid || ''
+      if (tabla !== 'empresa' && data.almacen_uid) {
+        const emp = db!.prepare(`SELECT id FROM empresa WHERE uid = ? LIMIT 1`).get(data.almacen_uid) as any
+        if (emp?.id) data.almacen_id = emp.id
+      }
       if (tabla === 'serial' && (data.equipo_uid !== undefined || data.id_equi !== undefined)) {
         const equipo = data.equipo_uid
           ? db!.prepare(`SELECT id, uid, nombre FROM electrodomesticos WHERE uid = ? LIMIT 1`).get(data.equipo_uid) as any
@@ -1308,6 +1325,37 @@ function setupIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('db:clearEmpresaOnly', async () => {
+    try {
+      const count = db!.prepare(`DELETE FROM empresa`).run()
+      db!.prepare(`DELETE FROM sqlite_sequence WHERE name = 'empresa'`).run()
+      console.log('[db:clearEmpresaOnly] eliminados:', count.changes)
+      return { success: true, data: { eliminados: count.changes } }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('db:clearCloudData', async () => {
+    try {
+      const resultados: string[] = []
+      const limpiar = db!.transaction(() => {
+        const empCount = db!.prepare(`DELETE FROM empresa`).run()
+        db!.prepare(`DELETE FROM sqlite_sequence WHERE name = 'empresa'`).run()
+        resultados.push(`empresa (${empCount.changes} registros)`)
+        const tmCount = db!.prepare(`DELETE FROM tmcloud_config`).run()
+        db!.prepare(`DELETE FROM sqlite_sequence WHERE name = 'tmcloud_config'`).run()
+        resultados.push(`tmcloud_config (${tmCount.changes} registros)`)
+        db!.prepare(`DELETE FROM configuracion WHERE clave IN ('supabase_url', 'supabase_anon_key', 'supabase_service_role', 'tmcloud_url', 'tmcloud_key', 'tmcloud_service_key')`).run()
+      })
+      limpiar()
+      console.log('[db:clearCloudData]', { resultados })
+      return { success: true, data: { resultados } }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
   ipcMain.handle('config:get', (_event, clave: string) => {
     try {
       const row = db!.prepare(`SELECT valor FROM configuracion WHERE clave = ?`).get(clave) as any
@@ -1514,26 +1562,23 @@ function setupIpcHandlers(): void {
 
     if (!nombre && !legal && !encargado && !telefono && !email && !direccion && !logo) return
 
-    const empresaLocal = db!.prepare(`SELECT id FROM empresa ORDER BY rowid ASC LIMIT 1`).get() as any
+    const empresaLocal = db!.prepare(`SELECT id, nombre, legal, encargado, telefono, email, direccion, logo FROM empresa ORDER BY rowid ASC LIMIT 1`).get() as any
     if (empresaLocal?.id) {
-      db!.prepare(`
-        UPDATE empresa
-        SET nombre = COALESCE(NULLIF(?, ''), nombre),
-            legal = COALESCE(NULLIF(?, ''), legal),
-            encargado = COALESCE(NULLIF(?, ''), encargado),
-            telefono = COALESCE(NULLIF(?, ''), telefono),
-            email = COALESCE(NULLIF(?, ''), email),
-            direccion = COALESCE(NULLIF(?, ''), direccion),
-            logo = COALESCE(NULLIF(?, ''), logo),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(nombre, legal, encargado, telefono, email, direccion, logo, empresaLocal.id)
-    } else {
-      db!.prepare(`
-        INSERT INTO empresa (nombre, legal, encargado, telefono, email, direccion, logo, uid, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(nombre || 'MI EMPRESA', legal, encargado, telefono, email, direccion, logo, generarUid())
+      const cambios: string[] = []
+      const params: any[] = []
+      if (nombre && !empresaLocal.nombre) { cambios.push('nombre = ?'); params.push(nombre) }
+      if (legal && !empresaLocal.legal) { cambios.push('legal = ?'); params.push(legal) }
+      if (encargado && !empresaLocal.encargado) { cambios.push('encargado = ?'); params.push(encargado) }
+      if (telefono && !empresaLocal.telefono) { cambios.push('telefono = ?'); params.push(telefono) }
+      if (email && !empresaLocal.email) { cambios.push('email = ?'); params.push(email) }
+      if (direccion && !empresaLocal.direccion) { cambios.push('direccion = ?'); params.push(direccion) }
+      if (logo && !empresaLocal.logo) { cambios.push('logo = ?'); params.push(logo) }
+      if (cambios.length > 0) {
+        params.push(empresaLocal.id)
+        db!.prepare(`UPDATE empresa SET ${cambios.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...params)
+      }
     }
+    // No se inserta nunca una empresa automaticamente desde datos de licencia
   }
 
   function guardarLicenciaLocal(datos: any) {
@@ -1909,15 +1954,22 @@ function setupIpcHandlers(): void {
     const equipo = normalizarMac(mac)
     if (!equipo) return { success: false, error: 'No se pudo identificar este equipo' }
 
+    const d = result.data
+    const estado = (d.estado || d.status || 'PENDIENTE').toUpperCase()
+    guardarLicenciaLocal({ estado, nombre: d.nombre || d.almacen || '', fecha_inicio_prueba: d.created_at || d.fecha_inicio, fecha_vencimiento: d.proximopago || d.fecha_vencimiento, datosServidor: d })
+
     const dispositivos = obtenerDispositivosLicencia(result.data.authorized_devices ?? result.data.devices ?? result.data.dispositivos)
     if (dispositivos.includes(equipo)) {
-      const d = result.data
-      guardarLicenciaLocal({ estado: (d.estado || d.status || '').toUpperCase(), nombre: d.nombre || d.almacen || '', fecha_inicio_prueba: d.created_at || d.fecha_inicio, fecha_vencimiento: d.proximopago || d.fecha_vencimiento, datosServidor: d })
       return { success: true, yaRegistrado: true, mensaje: 'Este equipo ya esta registrado' }
     }
 
-    await registrarEquipoNoAutorizado(result.data, equipo)
-    return { success: true, pendiente: true, mensaje: 'Solicitud enviada. Espera a que el administrador active tu equipo.' }
+    try {
+      await registrarEquipoNoAutorizado(result.data, equipo)
+      return { success: true, pendiente: true, mensaje: 'Solicitud enviada. Espera a que el administrador active tu equipo.' }
+    } catch (e: any) {
+      console.log('[Licencia] No se pudo registrar equipo no autorizado (secret_key no disponible):', e.message)
+      return { success: true, pendiente: true, mensaje: 'Licencia configurada localmente. La activacion del equipo queda pendiente.' }
+    }
   }
 
   async function enviarEmailOtpEquipo(email: string, codigo: string, mac: string) {
@@ -2199,6 +2251,22 @@ function setupIpcHandlers(): void {
       ultimaVerificacionLocal: licenciaInicial?.ultima_verificacion || null,
       tmCloudUrl: getLicenciaApiUrl() || '(sin URL)',
     })
+
+    // Primero verificar offline: si la licencia local es valida, usarla sin esperar online
+    const offlineLocal = verificarLicenciaOffline()
+    if (offlineLocal.success) {
+      // Disparar verificacion online en background (no bloqueante) para refrescar datos
+      verificarLicenciaOnlineBackground(codigoLocal, VERIFY_TIMEOUT)
+      return {
+        ...offlineLocal,
+        nombreEmpresa: licenciaInicial?.nombre_empresa,
+        verificadoOnline: false,
+        mensaje: offlineLocal.estado === 'pendiente'
+          ? `Periodo de prueba: ${offlineLocal.diasRestantes} dia(s) restantes`
+          : 'Licencia activa (offline)',
+      }
+    }
+
     if (!codigoLocal) {
       const recuperada = await recuperarLicenciaDelProyecto(VERIFY_TIMEOUT)
       if (recuperada.success && recuperada.data) {
@@ -2211,6 +2279,11 @@ function setupIpcHandlers(): void {
           datosServidor: d,
         })
         codigoLocal = String(d.license_key || '').trim().toUpperCase()
+        const offlineNow = verificarLicenciaOffline()
+        if (offlineNow.success) {
+          verificarLicenciaOnlineBackground(codigoLocal, VERIFY_TIMEOUT)
+          return { ...offlineNow, nombreEmpresa: licenciaInicial?.nombre_empresa, verificadoOnline: false, mensaje: 'Licencia recuperada del proyecto' }
+        }
       }
     }
     if (codigoLocal) {
@@ -2288,6 +2361,21 @@ function setupIpcHandlers(): void {
     }
 
     return { success: false, estado: 'no_encontrada', mensaje: online.error || 'Licencia no encontrada en el servidor', verificadoOnline: true }
+  }
+
+  function verificarLicenciaOnlineBackground(codigoLocal: string, timeout: number): void {
+    if (!codigoLocal) return
+    buscarLicenciaServidor(codigoLocal, false, true, timeout).then((online: any) => {
+      if (online.success && online.data) {
+        const d = online.data
+        const estado = normalizarEstado(d.estado || d.status || '')
+        const vencimiento = d.expires_at || d.proximopago || d.fecha_vencimiento
+        guardarLicenciaLocal({ estado, nombre: d.nombre || d.almacen || d.project_name || '', fecha_inicio_prueba: d.created_at || d.fecha_inicio, fecha_vencimiento: vencimiento, datosServidor: d })
+        console.log('[Licencia][Background] Datos actualizados desde el servidor')
+      }
+    }).catch((e: any) => {
+      console.log('[Licencia][Background] Error actualizando desde servidor:', e.message)
+    })
   }
 
   async function registrarLicenciaOnline(payload: any): Promise<any> {
@@ -2946,6 +3034,17 @@ function setupIpcHandlers(): void {
         return { success: true, data: result.data }
       }
       return { success: false, error: result.error || 'No se pudo crear el proyecto' }
+    } catch (e: any) { return { success: false, error: e.message } }
+  })
+
+  ipcMain.handle('licencia:validarCloud', async (_event, codigo: string) => {
+    try {
+      const result = await buscarLicenciaServidor(String(codigo || '').trim().toUpperCase(), false, false)
+      console.log('[validarCloud] resultado:', { success: result?.success, tieneData: Boolean(result?.data), error: result?.error })
+      if (!result.success || !result.data) return { success: false, error: result.error || 'Licencia no encontrada en el servidor' }
+      const d = result.data
+      guardarSupabaseDesdeLicencia(d)
+      return { success: true, data: { mensaje: 'TM Cloud configurado correctamente' } }
     } catch (e: any) { return { success: false, error: e.message } }
   })
 

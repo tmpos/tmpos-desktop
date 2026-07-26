@@ -45,8 +45,19 @@ export const useAlmacenStore = defineStore('almacen', () => {
     } catch {}
   }
 
-  function select(id: number) {
-    const almacen = almacenes.value.find(a => Number(a.id) === Number(id))
+  // Varias empresas pueden compartir el mismo almacen_id numerico (dato duplicado o
+  // heredado de la nube), asi que buscamos primero por uid (siempre unico) y solo
+  // caemos al id numerico cuando no se paso un uid.
+  function encontrarAlmacen(idOrUid: number | string) {
+    if (typeof idOrUid === 'string') {
+      const porUid = almacenes.value.find(a => String(a.uid || '') === idOrUid)
+      if (porUid) return porUid
+    }
+    return almacenes.value.find(a => Number(a.id) === Number(idOrUid))
+  }
+
+  function select(idOrUid: number | string) {
+    const almacen = encontrarAlmacen(idOrUid)
     if (!almacen) return
     activeId.value = Number(almacen.id)
     activeUid.value = String(almacen.uid || '')
@@ -54,15 +65,15 @@ export const useAlmacenStore = defineStore('almacen', () => {
     localStorage.setItem('almacen_uid', activeUid.value)
   }
 
-  function setDefault(id: number) {
-    if (!almacenes.value.some(a => Number(a.id) === Number(id))) return false
-    defaultId.value = Number(id)
-    activeId.value = Number(id)
-    const almacen = almacenes.value.find(a => Number(a.id) === Number(id))
-    defaultUid.value = String(almacen?.uid || '')
+  function setDefault(idOrUid: number | string) {
+    const almacen = encontrarAlmacen(idOrUid)
+    if (!almacen) return false
+    defaultId.value = Number(almacen.id)
+    activeId.value = Number(almacen.id)
+    defaultUid.value = String(almacen.uid || '')
     activeUid.value = defaultUid.value
-    localStorage.setItem('almacen_default_id', String(id))
-    localStorage.setItem('almacen_id', String(id))
+    localStorage.setItem('almacen_default_id', String(defaultId.value))
+    localStorage.setItem('almacen_id', String(defaultId.value))
     localStorage.setItem('almacen_default_uid', defaultUid.value)
     localStorage.setItem('almacen_uid', activeUid.value)
     return true

@@ -791,6 +791,10 @@ onMounted(() => {
     <Dialog v-if="systemMode.isCellphoneStore" v-model:visible="dialogImei" header="Consultar IMEI" modal :style="{ width: '28rem' }" @after-hide="imeiResultado = null; imeiInput = ''">
       <div class="flex flex-col gap-4 py-2">
         <div class="flex items-center gap-2">
+          <label class="text-sm font-semibold whitespace-nowrap">Servicio:</label>
+          <InputText v-model.number="imeiServicio" type="number" class="w-20" placeholder="55" @keydown.enter="consultarImei" />
+        </div>
+        <div class="flex items-center gap-2">
           <InputText v-model="imeiInput" placeholder="IMEI (15 digitos)" class="flex-1" fluid maxlength="15" @keydown.enter="consultarImei" />
           <Button label="Consultar" icon="pi pi-search" :loading="imeiConsultando" @click="consultarImei" />
         </div>

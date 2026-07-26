@@ -23,22 +23,26 @@ export function useEmpresa() {
       await almacenStore.load()
       const empresas = await (window as any).electron.invoke('db:getAll', 'empresa')
       if (empresas?.success && Array.isArray(empresas.data) && empresas.data.length > 0) {
-        emp = empresas.data.find((item: any) =>
-          (almacenStore.activeUid && String(item.uid || item.almacen_uid) === String(almacenStore.activeUid)) ||
-          Number(item.almacen_id || item.id) === Number(almacenStore.activeId)
-        ) || empresas.data[0]
+        // El uid es siempre unico; el almacen_id numerico puede repetirse entre
+        // empresas (dato duplicado), asi que solo se usa como respaldo si ningun
+        // registro coincide por uid.
+        emp = (almacenStore.activeUid && empresas.data.find((item: any) => String(item.uid || item.almacen_uid || '') === String(almacenStore.activeUid)))
+          || empresas.data.find((item: any) => Number(item.almacen_id || item.id) === Number(almacenStore.activeId))
+          || empresas.data[0]
       }
 
       if (!emp) {
-        const almacenId = almacenStore.activeId || 0
-        const r = await (window as any).electron.invoke('db:insert', 'empresa', {
-          nombre: 'MI EMPRESA',
-          almacen_id: almacenId,
-          almacen_uid: almacenStore.activeUid || '',
-        })
-        if (r.success) {
-          const r2 = await (window as any).electron.invoke('db:getById', 'empresa', r.data.id)
-          if (r2.success) emp = r2.data
+        if (empresas?.success && Array.isArray(empresas.data) && empresas.data.length > 0) {
+          emp = empresas.data[0]
+        } else {
+          const r = await (window as any).electron.invoke('db:insert', 'empresa', {
+            nombre: 'MI EMPRESA',
+            almacen_uid: almacenStore.activeUid || '',
+          })
+          if (r.success) {
+            const r2 = await (window as any).electron.invoke('db:getById', 'empresa', r.data.id)
+            if (r2.success) emp = r2.data
+          }
         }
       }
       if (emp) {

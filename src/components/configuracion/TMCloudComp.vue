@@ -721,6 +721,8 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'uid', type: 'TEXT' },
     { name: 'nombre', type: 'TEXT' },
     { name: 'id_equi', type: 'INTEGER' },
+    { name: 'telefono_uid', type: 'TEXT' },
+    { name: 'equipo', type: 'TEXT' },
     { name: 'costo', type: 'REAL' },
     { name: 'precio_venta', type: 'REAL' },
     { name: 'precio_min', type: 'REAL' },
@@ -1034,29 +1036,73 @@ async function createTables() {
   creandoTablas.value = true
   const base = form.url.replace(/\/+$/, '')
   const key = form.serviceKey
-  const tableNames = Object.keys(TABLE_SCHEMAS)
-  const batch = tableNames.map(name => ({
-    name,
-    columns: TABLE_SCHEMAS[name].some(column => column.name === 'almacen_uid')
-      ? TABLE_SCHEMAS[name]
-      : [...TABLE_SCHEMAS[name], { name: 'almacen_uid', type: 'TEXT' }],
-  }))
 
   try {
-    const res = await fetch(`${base}/schema/tables/batch`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tables: batch }),
-    })
-    if (res.ok) {
-      const json = await res.json()
-      estado.value = { connected: true, error: json.data?.message || `${json.data?.created || 0} tablas OK` }
-    } else {
-      const err = await res.json().catch(()=>({}))
-      estado.value = { connected: false, error: err.error || 'Error creando tablas' }
+    // Fetch current cloud schema to know which tables/columns exist
+    let cloudSchema: Record<string, string[]> = {}
+    const schemaRes = await fetch(`${base}/schema`, { headers: { Authorization: `Bearer ${key}` } })
+    if (schemaRes.ok) {
+      const json = await schemaRes.json()
+      const data = json.data || {}
+      for (const [name, info] of Object.entries(data)) {
+        cloudSchema[name] = ((info as any).columns || []).map((c: any) => c.name)
+      }
     }
-  } catch (_e) {
-    estado.value = { connected: false, error: 'Error de red' }
+    console.log('[TMCloud] Schema del cloud:', cloudSchema)
+
+    const batch: any[] = []
+
+    for (const [name, columns] of Object.entries(TABLE_SCHEMAS)) {
+      const finalColumns = columns.some(c => c.name === 'almacen_uid')
+        ? columns
+        : [...columns, { name: 'almacen_uid', type: 'TEXT' }]
+
+      if (!cloudSchema[name]) {
+        console.log(`[TMCloud] Tabla nueva: "${name}"`)
+        batch.push({ name, columns: finalColumns })
+      } else {
+        const cloudCols = new Set(cloudSchema[name])
+        const missing = finalColumns.filter(c => !cloudCols.has(c.name))
+        if (missing.length > 0) {
+          console.log(`[TMCloud] Columnas faltantes en "${name}":`, missing.map(c => c.name))
+          batch.push({ name, columns: finalColumns })
+        }
+      }
+    }
+
+    const errores: string[] = []
+    let creadas = 0
+    let columnasAgregadas = 0
+
+    if (batch.length > 0) {
+      const body = JSON.stringify({ tables: batch })
+      console.log('[TMCloud] Enviando POST batch:', body)
+      const res = await fetch(`${base}/schema/tables/batch`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body,
+      })
+      const responseText = await res.text()
+      console.log('[TMCloud] Respuesta batch:', responseText)
+      if (res.ok) {
+        const json = JSON.parse(responseText)
+        creadas = json.data?.created || 0
+        columnasAgregadas = json.data?.columns_created || 0
+      } else {
+        try { const err = JSON.parse(responseText); errores.push(err.error || 'Error en la operacion') }
+        catch { errores.push(responseText || 'Error en la operacion') }
+      }
+    }
+
+    const partes: string[] = []
+    if (creadas > 0) partes.push(`${creadas} tablas creadas`)
+    if (columnasAgregadas > 0) partes.push(`${columnasAgregadas} columnas agregadas`)
+    if (errores.length > 0) partes.push(`Errores: ${errores.join(', ')}`)
+    if (partes.length === 0) partes.push('Sin cambios necesarios')
+
+    estado.value = { connected: true, error: partes.join('. ') }
+  } catch (e: any) {
+    estado.value = { connected: false, error: e.message || 'Error de red' }
   } finally {
     creandoTablas.value = false
   }

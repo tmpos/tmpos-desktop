@@ -6,6 +6,8 @@ import InputOtp from 'primevue/inputotp'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import QRCode from 'qrcode'
+import * as tmc from '@/services/tmCloudClient'
+import * as tmSync from '@/services/tmCloudSyncService'
 
 const toast = useToast()
 const loading = ref(true)
@@ -66,20 +68,71 @@ async function cambiarLicencia() {
   nuevaLicenciaLoading.value = true
   nuevaLicenciaError.value = ''
   try {
-    const result = await window.electron.invoke('licencia:fetchConfig', codigo) as any
-    if (!result.success) {
-      nuevaLicenciaError.value = result.error || 'No se pudo validar la licencia'
+    await window.electron.invoke('db:clearCloudData')
+    const val = await window.electron.invoke('licencia:validarCloud', codigo) as any
+    if (!val.success) {
+      nuevaLicenciaError.value = val.error || 'No se pudo validar la licencia'
       return
     }
-    toast.add({ severity: 'success', summary: 'Licencia validada', detail: 'Registrando equipo...', life: 3000 })
-    const reg = await window.electron.invoke('licencia:solicitarRegistroEquipo', codigo) as any
-    if (reg.success) {
-      toast.add({ severity: 'success', summary: 'Equipo registrado', detail: reg.mensaje || 'Licencia actualizada', life: 4000 })
-      dialogoCambiarLicencia.value = false
-      await cargarLicencia()
-    } else {
+    toast.add({ severity: 'success', summary: 'TM Cloud configurado', detail: 'Registrando equipo...', life: 3000 })
+    const reg = await window.electron.invoke('licencia:solicitarRegistroEquipo', { licencia: codigo }) as any
+    if (!reg.success) {
       nuevaLicenciaError.value = reg.error || 'No se pudo registrar el equipo'
+      return
     }
+    toast.add({ severity: 'success', summary: 'Equipo registrado', detail: reg.mensaje || 'Licencia actualizada', life: 4000 })
+    tmc.resetConfig()
+    const config = await tmc.ensureConfigLoaded(true)
+    if (config) {
+      try {
+        await window.electron.invoke('db:clearEmpresaOnly')
+        const empresaRows = await tmc.fetchTable('empresa')
+        console.log('[CambiarLicencia] Empresa desde TM Cloud:', { cantidad: empresaRows.length })
+        for (const row of empresaRows) {
+          const clean = { ...row }
+          delete clean.id
+          await window.db.insert('empresa', clean)
+        }
+        if (empresaRows.length > 0) {
+          toast.add({ severity: 'success', summary: 'Empresa sincronizada', detail: `${empresaRows.length} registro(s) descargados`, life: 4000 })
+        }
+      } catch (e: any) {
+        console.log('[CambiarLicencia] Error descargando empresa desde TM Cloud:', e.message)
+      }
+      try {
+        const usuariosRows = await tmc.fetchTable('usuarios')
+        console.log('[CambiarLicencia] Usuarios desde TM Cloud:', { cantidad: usuariosRows.length })
+        if (usuariosRows.length > 0) {
+          const localUsers = await window.db.getAll('usuarios')
+          if (localUsers.success && localUsers.data?.length > 0) {
+            for (const row of localUsers.data) {
+              if (row.id) await window.db.delete('usuarios', row.id)
+            }
+          }
+          for (const row of usuariosRows) {
+            const clean = { ...row }
+            delete clean.id
+            await window.db.insert('usuarios', clean)
+          }
+          toast.add({ severity: 'success', summary: 'Usuarios sincronizados', detail: `${usuariosRows.length} usuario(s) descargados`, life: 4000 })
+        }
+      } catch (e: any) {
+        console.log('[CambiarLicencia] Error descargando usuarios desde TM Cloud:', e.message)
+      }
+      try {
+        toast.add({ severity: 'info', summary: 'Descargando datos', detail: 'Descargando productos y demas datos desde la nube...', life: 5000 })
+        const res = await tmSync.downloadAllTables()
+        if (res.success) {
+          toast.add({ severity: 'success', summary: 'Datos descargados', detail: res.message || 'Todos los datos se descargaron correctamente', life: 4000 })
+        } else {
+          toast.add({ severity: 'warn', summary: 'Descarga parcial', detail: res.message || 'Algunos datos no se pudieron descargar', life: 5000 })
+        }
+      } catch (e: any) {
+        console.log('[CambiarLicencia] Error en descarga completa:', e.message)
+      }
+    }
+    dialogoCambiarLicencia.value = false
+    await cargarLicencia()
   } catch (e: any) {
     nuevaLicenciaError.value = e.message || 'Error al cambiar licencia'
   } finally {

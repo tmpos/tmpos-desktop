@@ -20,7 +20,7 @@ const { empresa, cargar: cargarEmpresa, guardar: guardarEmpresa, nombre } = useE
 const loading = ref(false)
 const guardando = ref(false)
 const cambiandoTienda = ref(false)
-const tiendaSeleccionada = ref<number | null>(null)
+const tiendaSeleccionada = ref<string | null>(null)
 const deleteDialogVisible = ref(false)
 const eliminandoEmpresa = ref(false)
 
@@ -42,7 +42,7 @@ async function cargar() {
   loading.value = true
   try {
     await cargarEmpresa()
-    tiendaSeleccionada.value = almacenStore.activeId || null
+    tiendaSeleccionada.value = almacenStore.activeUid || null
     if (empresa.value) {
       form.value = {
         nombre: empresa.value.nombre || '',
@@ -63,11 +63,11 @@ async function cargar() {
 }
 
 async function cambiarTienda() {
-  if ((!auth.isAdmin && !auth.isSoporte) || !tiendaSeleccionada.value || tiendaSeleccionada.value === almacenStore.activeId) return
+  if ((!auth.isAdmin && !auth.isSoporte) || !tiendaSeleccionada.value || tiendaSeleccionada.value === almacenStore.activeUid) return
   cambiandoTienda.value = true
   try {
-    const seleccionada = almacenStore.almacenes.find((item: any) => item.id === tiendaSeleccionada.value)
-    if (!seleccionada || !almacenStore.setDefault(tiendaSeleccionada.value)) return
+    const seleccionada = almacenStore.almacenes.find((item: any) => String(item.uid || '') === tiendaSeleccionada.value)
+    if (!seleccionada || !almacenStore.setDefault(seleccionada.uid)) return
     await (window as any).config.set('empresa_id', String(seleccionada.empresa_id || seleccionada.id))
     toast.add({ severity: 'success', summary: 'Tienda cambiada', detail: seleccionada.nombre, life: 2000 })
     setTimeout(() => window.location.reload(), 400)
@@ -96,7 +96,7 @@ async function eliminarEmpresa() {
     const res = await window.db.delete('empresa', empresaId)
     if (!res.success) throw new Error(res.error || 'No se pudo eliminar la empresa')
 
-    almacenStore.setDefault(Number(siguiente.id))
+    almacenStore.setDefault(siguiente.uid)
     await (window as any).config.set('empresa_id', String(siguiente.empresa_id || siguiente.id))
     deleteDialogVisible.value = false
     toast.add({ severity: 'success', summary: 'Empresa eliminada', detail: 'Se activará la siguiente empresa disponible', life: 2500 })
@@ -225,7 +225,7 @@ onMounted(async () => {
           v-model="tiendaSeleccionada"
           :options="almacenStore.almacenes"
           optionLabel="nombre"
-          optionValue="id"
+          optionValue="uid"
           class="w-full sm:w-64"
           :disabled="(!auth.isAdmin && !auth.isSoporte) || cambiandoTienda"
           @change="cambiarTienda"

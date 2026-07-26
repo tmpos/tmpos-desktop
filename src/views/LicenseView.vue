@@ -70,55 +70,71 @@ async function registrarEquipo() {
   licenciaLoading.value = true
   licenciaError.value = ''
   try {
-    console.log('[LicenseView] Llamando licencia:fetchConfig...')
-    const result = await withTimeout(
-      window.electron.invoke('licencia:fetchConfig', codigo),
+    console.log('[LicenseView] Limpiando datos previos de empresa y tm_cloud...')
+    await window.electron.invoke('db:clearCloudData')
+    console.log('[LicenseView] Llamando licencia:validarCloud...')
+    const val = await withTimeout(
+      window.electron.invoke('licencia:validarCloud', codigo),
       LICENCIA_TIMEOUT_MS,
-      'licencia:fetchConfig'
+      'licencia:validarCloud'
     ) as any
-    console.log('[LicenseView] Resultado fetchConfig:', JSON.stringify(result))
-    if (result.data) {
-      console.log('=== DATOS DEL SERVIDOR ===')
-      console.log('Campos recibidos:', result.data.serverFields)
-      console.log('tieneSecretKey:', result.data.tieneSecretKey)
-      console.log('tienePublicKey:', result.data.tienePublicKey)
-      console.log('tieneProjectUrl:', result.data.tieneProjectUrl)
-      console.log('tieneEmpresa:', result.data.tieneEmpresa)
-      console.log('secretKeyPreview:', result.data.secretKeyPreview)
-      console.log('publicKeyPreview:', result.data.publicKeyPreview)
-      console.log('projectUrl:', result.data.projectUrl)
-      console.log('===========================')
-    }
-    if (!result.success) {
-      licenciaError.value = result.error || 'No se pudo validar la licencia'
+    console.log('[LicenseView] Resultado validarCloud:', JSON.stringify(val))
+    if (!val.success) {
+      licenciaError.value = val.error || 'No se pudo validar la licencia'
       return
     }
     toast.add({ severity: 'success', summary: 'Licencia validada', detail: 'Conectando con la nube...', life: 3000 })
-    const config = await tmc.ensureConfigLoaded()
+    tmc.resetConfig()
+    const config = await tmc.ensureConfigLoaded(true)
     console.log('[LicenseView] TM Cloud config cargada:', { conectada: Boolean(config), url: config?.url?.substring(0, 50), tieneKey: Boolean(config?.key), tieneServiceKey: Boolean(config?.serviceKey) })
     if (config) {
       try {
+        await window.electron.invoke('db:clearEmpresaOnly')
         const empresaRows = await tmc.fetchTable('empresa')
         console.log('[LicenseView] Empresa desde la nube:', { cantidad: empresaRows.length, filas: empresaRows })
+        for (const row of empresaRows) {
+          const clean = { ...row }
+          delete clean.id
+          console.log('[LicenseView] Insertando empresa - tieneLogo:', Boolean(clean.logo), 'logoPreview:', clean.logo ? (clean.logo.substring(0, 40) + '...') : '(vacio)', 'campos:', Object.keys(clean))
+          await window.db.insert('empresa', clean)
+        }
         if (empresaRows.length > 0) {
-          const localRes = await window.db.getAll('empresa')
-          if (localRes.success && localRes.data?.length > 0) {
-            for (const row of localRes.data) {
-              if (row.id) await window.db.delete('empresa', row.id)
-            }
-            console.log('[LicenseView] Datos locales de empresa eliminados')
-          }
-          for (const row of empresaRows) {
-            const clean = { ...row }
-            delete clean.id
-            console.log('[LicenseView] Insertando empresa - tieneLogo:', Boolean(clean.logo), 'logoPreview:', clean.logo ? (clean.logo.substring(0, 40) + '...') : '(vacio)', 'campos:', Object.keys(clean))
-            await window.db.insert('empresa', clean)
-          }
           console.log('[LicenseView] Datos de empresa insertados desde la nube:', empresaRows.length)
-          toast.add({ severity: 'success', summary: 'Empresa sincronizada', detail: `Datos de empresa descargados (${empresaRows.length} registro(s))`, life: 3000 })
+          toast.add({ severity: 'success', summary: 'Empresa sincronizada', detail: `${empresaRows.length} registro(s) descargados`, life: 3000 })
         }
       } catch (e: any) {
         console.log('[LicenseView] Error descargando empresa:', e.message)
+      }
+      try {
+        const usuariosRows = await tmc.fetchTable('usuarios')
+        console.log('[LicenseView] Usuarios desde la nube:', { cantidad: usuariosRows.length })
+        if (usuariosRows.length > 0) {
+          const localUsers = await window.db.getAll('usuarios')
+          if (localUsers.success && localUsers.data?.length > 0) {
+            for (const row of localUsers.data) {
+              if (row.id) await window.db.delete('usuarios', row.id)
+            }
+          }
+          for (const row of usuariosRows) {
+            const clean = { ...row }
+            delete clean.id
+            await window.db.insert('usuarios', clean)
+          }
+          toast.add({ severity: 'success', summary: 'Usuarios sincronizados', detail: `${usuariosRows.length} usuario(s) descargados`, life: 3000 })
+        }
+      } catch (e: any) {
+        console.log('[LicenseView] Error descargando usuarios:', e.message)
+      }
+      try {
+        toast.add({ severity: 'info', summary: 'Descargando datos', detail: 'Descargando productos y demas datos desde la nube...', life: 5000 })
+        const res = await tmSync.downloadAllTables()
+        if (res.success) {
+          toast.add({ severity: 'success', summary: 'Datos descargados', detail: res.message || 'Todos los datos se descargaron correctamente', life: 4000 })
+        } else {
+          toast.add({ severity: 'warn', summary: 'Descarga parcial', detail: res.message || 'Algunos datos no se pudieron descargar', life: 5000 })
+        }
+      } catch (e: any) {
+        console.log('[LicenseView] Error en descarga completa:', e.message)
       }
     }
     console.log('[LicenseView] Llamando licencia:solicitarRegistroEquipo...')

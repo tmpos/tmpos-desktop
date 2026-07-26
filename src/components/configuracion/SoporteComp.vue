@@ -14,7 +14,9 @@ import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
+import { useAlmacenStore } from '@/stores/almacen.store'
 const toast = useToast()
+const almacenStore = useAlmacenStore()
 
 const tablas = ref<string[]>([])
 const tablaActiva = ref('')
@@ -66,6 +68,9 @@ const configPortable = ref<any>(null)
 const configPortableRuta = ref('')
 const configPortableResultado = ref('')
 const configPortableCargando = ref(false)
+const utilAlmacenUidTabla = ref('')
+const utilAlmacenUidCargando = ref(false)
+
 const adminTabla = ref('')
 const adminTablaInfo = ref<Record<string, any> | null>(null)
 const adminTablaCargando = ref(false)
@@ -533,6 +538,76 @@ async function verInfoTabla() {
   finally { utilCargando.value = false }
 }
 
+async function aplicarAlmacenUidATabla(tabla: string) {
+  try {
+    const cols = await window.electron.invoke('consultaservidor', 'getTableColumns', tabla, 'names') as any
+    const columnas: string[] = Array.isArray(cols) ? cols : []
+    const tieneAlmacenUid = columnas.includes('almacen_uid')
+    const almacenUid = String(almacenStore.activeUid || '')
+
+    if (!tieneAlmacenUid) {
+      await window.electron.invoke('consultaservidor', 'rawQuery', `ALTER TABLE "${tabla}" ADD COLUMN almacen_uid TEXT DEFAULT ''`)
+      if (almacenUid) {
+        await window.electron.invoke('consultaservidor', 'rawQuery', `UPDATE "${tabla}" SET almacen_uid = '${almacenUid.replace(/'/g, "''")}' WHERE almacen_uid IS NULL OR almacen_uid = ''`)
+      }
+      return { ok: true, accion: 'creada' }
+    }
+    if (!almacenUid) return { ok: false, error: 'Sin almacen activo' }
+    const res = await window.electron.invoke('consultaservidor', 'rawQuery', `UPDATE "${tabla}" SET almacen_uid = '${almacenUid.replace(/'/g, "''")}' WHERE almacen_uid IS NULL OR almacen_uid = ''`)
+    const afectados = res?.changes ?? res?.affected ?? 0
+    return { ok: true, accion: 'actualizada', afectados }
+  } catch (e: any) {
+    return { ok: false, error: e.message }
+  }
+}
+
+async function aplicarAlmacenUid() {
+  const tabla = utilAlmacenUidTabla.value
+  if (!tabla) return
+  utilAlmacenUidCargando.value = true
+  try {
+    const result = await aplicarAlmacenUidATabla(tabla)
+    if (result.ok) {
+      const msg = result.accion === 'creada'
+        ? `almacen_uid agregada a ${tabla}${almacenStore.activeUid ? ' y asignado el almacen actual' : ''}`
+        : `${result.afectados} registro(s) actualizados en ${tabla}`
+      toast.add({ severity: 'success', summary: 'Almacen UID', detail: msg, life: 3000 })
+    } else {
+      toast.add({ severity: 'warn', summary: 'Atencion', detail: result.error || 'Error al aplicar', life: 3000 })
+    }
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al aplicar almacen_uid', life: 4000 })
+  } finally {
+    utilAlmacenUidCargando.value = false
+  }
+}
+
+async function aplicarAlmacenUidTodas() {
+  if (!almacenStore.activeUid) {
+    toast.add({ severity: 'warn', summary: 'Sin almacen', detail: 'Selecciona un almacen primero', life: 3000 })
+    return
+  }
+  utilAlmacenUidCargando.value = true
+  const resultados = { creadas: 0, actualizadas: 0, errores: 0, total: 0 }
+  for (const tabla of tablas.value) {
+    const result = await aplicarAlmacenUidATabla(tabla)
+    resultados.total++
+    if (result.ok) {
+      if (result.accion === 'creada') resultados.creadas++
+      else resultados.actualizadas++
+    } else {
+      resultados.errores++
+    }
+  }
+  toast.add({
+    severity: resultados.errores > 0 ? 'warn' : 'success',
+    summary: 'Almacen UID en todas',
+    detail: `${resultados.total} tablas: ${resultados.creadas} columna creada, ${resultados.actualizadas} actualizadas, ${resultados.errores} errores`,
+    life: 4000,
+  })
+  utilAlmacenUidCargando.value = false
+}
+
 async function cargarAdminTablaInfo() {
   adminTablaInfo.value = null
   if (!adminTabla.value) return
@@ -785,6 +860,15 @@ onMounted(async () => { await cargarTablas() })
               <div class="flex gap-2">
                 <Select v-model="utilTablaExport" :options="tablas" placeholder="Seleccionar tabla" class="flex-1" fluid />
                 <Button label="Exportar" severity="info" :disabled="!utilTablaExport" @click="exportarSQL" :loading="utilCargando" />
+              </div>
+            </div>
+            <div class="md:col-span-2 rounded-lg border border-sky-200 dark:border-sky-900 bg-sky-50/40 dark:bg-sky-950/10 p-4 space-y-3">
+              <h4 class="font-semibold text-sm flex items-center gap-2"><i class="pi pi-warehouse text-sky-600"></i> Asignar almacen_uid a tabla</h4>
+              <p class="text-xs text-surface-500">Agrega la columna <code>almacen_uid</code> si no existe y asigna el almacen actual a los registros sin almacen.</p>
+              <div class="flex gap-2">
+                <Select v-model="utilAlmacenUidTabla" :options="tablas" placeholder="Seleccionar tabla" filter filterPlaceholder="Buscar tabla..." class="flex-1" fluid />
+                <Button label="Aplicar" icon="pi pi-check" severity="info" :disabled="!utilAlmacenUidTabla" :loading="utilAlmacenUidCargando" @click="aplicarAlmacenUid" />
+                <Button label="Todas" icon="pi pi-warehouse" severity="warn" :loading="utilAlmacenUidCargando" @click="aplicarAlmacenUidTodas" />
               </div>
             </div>
             <div class="md:col-span-2 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/10 p-4 space-y-3">
