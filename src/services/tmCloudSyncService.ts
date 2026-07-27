@@ -177,7 +177,9 @@ function sameData(a: any, b: any): boolean {
 
 interface CloudSyncChanges {
   updated: any[]
-  deleted: string[]
+  // El endpoint /sync?since= devuelve cada borrado como un objeto
+  // { uid, data, deleted_at }, no como un string suelto.
+  deleted: Array<{ uid: string } | string>
 }
 
 async function fetchCloudSyncAll(since?: string): Promise<Record<string, CloudSyncChanges> | null> {
@@ -286,8 +288,8 @@ async function recreateLocalTable(tabla: string, columns: ServerColumn[]): Promi
   }
 }
 
-async function upsertLocal(tabla: string, cloudRow: any): Promise<'inserted' | 'updated' | 'skipped'> {
-  const localRows = await getLocalRows(tabla)
+async function upsertLocal(tabla: string, cloudRow: any, preloadedRows?: any[]): Promise<'inserted' | 'updated' | 'skipped'> {
+  const localRows = preloadedRows ?? await getLocalRows(tabla)
   let existing = localRows.find((row: any) => row.uid === cloudRow.uid)
   // Una instalacion nueva crea usuarios iniciales con UID local. Al recibir los
   // definitivos desde la API se reconcilian por email/usuario para no duplicar
@@ -334,41 +336,28 @@ async function upsertLocal(tabla: string, cloudRow: any): Promise<'inserted' | '
 async function applyRealtimeChange(payload: any): Promise<void> {
   const tabla = String(payload?.table || '')
   if (!tabla || LOCAL_SYSTEM_TABLES.includes(tabla)) return
-  const eventType = String(payload?.eventType || payload?.type || '').toUpperCase()
-  const recordUid = payload?.record_uid || payload?.changes?.uid || payload?.new?.uid || payload?.old?.uid
-  if (!recordUid && eventType !== 'INSERT') return
+  // El servidor TMPBASE envia { type: 'event', event: 'record.deleted'|'record.created'|'record.updated',
+  // table, record, created_at }. El campo "type" siempre vale literalmente "event" (es el
+  // discriminador del mensaje de websocket, no el tipo de cambio); el tipo de cambio real
+  // esta en "event", y el registro completo (con su uid) viene siempre en "record".
+  const event = String(payload?.event || '').toLowerCase()
+  const record = payload?.record
+  const recordUid = record?.uid
+  if (!recordUid) return
 
-  if (eventType === 'DELETE') {
+  if (event === 'record.deleted') {
     const local = (await getLocalRows(tabla)).find((row: any) => row.uid === recordUid)
     if (local) await deleteLocalFromRealtime(tabla, local.id)
     notify({ running: false, tabla, progreso: `Realtime DELETE ${tabla}`, realtime: true })
     return
   }
 
-  if (eventType === 'INSERT') {
-    const row = payload.new || payload.changes
-    if (row?.uid) {
-      const action = await upsertLocal(tabla, row)
-      if (action === 'inserted' || action === 'updated') notifyLocalRealtimeChange('INSERT', tabla, row.uid)
-      notify({ running: false, tabla, progreso: `Realtime INSERT ${tabla}`, realtime: true })
+  if (event === 'record.created' || event === 'record.updated') {
+    const action = await upsertLocal(tabla, record)
+    if (action === 'inserted' || action === 'updated') {
+      notifyLocalRealtimeChange(event === 'record.created' ? 'INSERT' : 'UPDATE', tabla, recordUid)
     }
-    return
-  }
-
-  if (eventType === 'UPDATE') {
-    const local = (await getLocalRows(tabla)).find((row: any) => row.uid === recordUid)
-    if (!local) {
-      if (payload.new?.uid) {
-        const action = await upsertLocal(tabla, payload.new)
-        if (action === 'inserted' || action === 'updated') notifyLocalRealtimeChange('UPDATE', tabla, payload.new.uid)
-      }
-      return
-    }
-    const changes = payload.changes || payload.new || {}
-    const result = await (window as any).db.update(tabla, local.id, { ...changes, updated_at: changes.updated_at || nowSql() })
-    if (!result?.success) throw new Error(result?.error || `No se pudo aplicar realtime en ${tabla}`)
-    notifyLocalRealtimeChange('UPDATE', tabla, recordUid)
-    notify({ running: false, tabla, progreso: `Realtime UPDATE ${tabla}`, realtime: true })
+    notify({ running: false, tabla, progreso: `Realtime ${event} ${tabla}`, realtime: true })
   }
 }
 
@@ -453,7 +442,7 @@ async function syncTable(tabla: string, mode: SyncMode, incremental: boolean, sk
       for (const row of cloudRows) {
         if (row.uid) cloudByUid.set(row.uid, row)
         try {
-          const action = await upsertLocal(tabla, row)
+          const action = await upsertLocal(tabla, row, localBeforeDownload)
           if (action !== 'skipped') downloaded++
         } catch {
           errors++
@@ -559,6 +548,11 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
   let totalErrors = 0
   const completedAt = nowSql()
 
+  // Los borrados locales pendientes deben llegar a la nube ANTES de descargar.
+  // Si se descarga primero, un registro borrado localmente pero aun no borrado
+  // en la nube se vuelve a insertar (upsertLocal lo trata como nuevo) y "revive".
+  await syncDeletes()
+
   // --- DOWNLOAD from cloud (single call for ALL tables) ---
   if (incremental) {
     // En la primera sincronizacion no existe marca local. Consultar desde el
@@ -570,15 +564,23 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
           if (LOCAL_SYSTEM_TABLES.includes(tabla)) continue
           let tabDownloaded = 0
           let tabErrors = 0
+          // Se cargan las filas locales de esta tabla una sola vez y se
+          // reutilizan para cada fila actualizada/borrada del lote, en vez de
+          // volver a pedir la tabla completa por cada elemento (era el patron
+          // anterior y multiplicaba las consultas IPC en tablas grandes).
+          const localRows = await getLocalRows(tabla)
+          const localByUid = new Map<string, any>(localRows.filter((r: any) => r.uid).map((r: any) => [r.uid, r]))
           for (const row of (Array.isArray(change?.updated) ? change.updated : [])) {
             try {
-              const action = await upsertLocal(tabla, row)
+              const action = await upsertLocal(tabla, row, localRows)
               if (action !== 'skipped') tabDownloaded++
             } catch { tabErrors++ }
           }
-          for (const uid of (Array.isArray(change?.deleted) ? change.deleted : [])) {
+          for (const item of (Array.isArray(change?.deleted) ? change.deleted : [])) {
+            const uid = typeof item === 'string' ? item : item?.uid
+            if (!uid) continue
             try {
-              const local = (await getLocalRows(tabla)).find((r: any) => r.uid === uid)
+              const local = localByUid.get(uid)
               if (local) await (window as any).db.delete(tabla, local.id)
             } catch { tabErrors++ }
           }
@@ -711,10 +713,11 @@ export async function downloadAllTables(): Promise<SyncResult> {
     try {
       if (!(await ensureLocalTableExists(tabla, table.columns))) continue
       const cloudRows = await fetchCloudRows(tabla)
+      const localRows = await getLocalRows(tabla)
       for (const row of cloudRows) {
         if (row.uid) {
           try {
-            const action = await upsertLocal(tabla, row)
+            const action = await upsertLocal(tabla, row, localRows)
             if (action !== 'skipped') downloaded++
           } catch {
             errors++

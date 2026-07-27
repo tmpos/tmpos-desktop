@@ -69,6 +69,8 @@ active.value = primerPermiso()
 <template>
   <div>
     <SubMenu :items="items" :active="active" @select="onSelect" />
-    <component :is="components[active]" />
+    <KeepAlive>
+      <component :is="components[active]" />
+    </KeepAlive>
   </div>
 </template>

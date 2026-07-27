@@ -105,8 +105,10 @@ async function guardarExpress() {
   <div>
     <Toast />
     <SubMenu :items="items" :active="active" @select="onSelect" />
-    <component v-if="active && components[active]" :is="components[active]" :ref="setActiveComponentRef" />
-    <div v-else class="text-center py-16 text-surface-400">
+    <KeepAlive>
+      <component v-if="active && components[active]" :is="components[active]" :ref="setActiveComponentRef" />
+    </KeepAlive>
+    <div v-if="!(active && components[active])" class="text-center py-16 text-surface-400">
       <i class="pi pi-wrench text-3xl mb-2 block"></i>
       <p>No hay modulos disponibles para este usuario</p>
     </div>

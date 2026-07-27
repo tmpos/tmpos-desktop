@@ -29,6 +29,8 @@ active.value = items.value.length > 0 ? items.value[0].key : ''
 <template>
   <div>
     <SubMenu :items="items" :active="active" @select="onSelect" />
-    <component :is="components[active]" />
+    <KeepAlive>
+      <component :is="components[active]" />
+    </KeepAlive>
   </div>
 </template>
