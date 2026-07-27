@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { shallowRef, computed } from 'vue'
+import { shallowRef, computed, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
@@ -21,13 +22,16 @@ import AlanubeComp from '@/components/configuracion/AlanubeComp.vue'
 import ComprobantesElectronicosComp from '@/components/configuracion/ComprobantesElectronicosComp.vue'
 import OtpLocalComp from '@/components/configuracion/OtpLocalComp.vue'
 import ModoTiendaComp from '@/components/configuracion/ModoTiendaComp.vue'
+import OpenAIComp from '@/components/configuracion/OpenAIComp.vue'
 
 const auth = useAuthStore()
+const route = useRoute()
 
 const items = computed<SubMenuItem[]>(() => {
   const list: SubMenuItem[] = [
     { label: 'Empresa', icon: 'pi pi-building', key: 'empresa' },
     { label: 'Sistema', icon: 'pi pi-desktop', key: 'sistema' },
+    { label: 'OpenAI / Jarvis', icon: 'pi pi-sparkles', key: 'openai' },
     { label: 'Modo de tienda', icon: 'pi pi-shop', key: 'modo-tienda' },
     { label: 'Correo', icon: 'pi pi-envelope', key: 'correo' },
     { label: 'Notificaciones', icon: 'pi pi-bell', key: 'notificaciones' },
@@ -53,6 +57,7 @@ const items = computed<SubMenuItem[]>(() => {
 const components: Record<string, any> = {
   empresa: EmpresaComp,
   sistema: SistemaComp,
+  openai: OpenAIComp,
   'modo-tienda': ModoTiendaComp,
   correo: CorreoComp,
   notificaciones: NotificacionesComp,
@@ -71,7 +76,11 @@ const components: Record<string, any> = {
   'otp-local': OtpLocalComp,
 }
 
-const active = shallowRef('empresa')
+const active = shallowRef(String(route.query.section || 'empresa'))
+
+watch(() => route.query.section, (section) => {
+  if (section && components[String(section)]) active.value = String(section)
+})
 
 function onSelect(key: string) {
   active.value = key

@@ -26,6 +26,7 @@ import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAlmacenStore } from '@/stores/almacen.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { getImageUrl } from '@/services/tmCloudClient'
+import { useCloudRefresh } from '@/composables/useCloudRefresh'
 
 const toast = useToast()
 const router = useRouter()
@@ -1440,6 +1441,8 @@ onMounted(async () => {
   await cargarTelefonos()
   await cargarImeis()
 })
+
+useCloudRefresh(['imei', 'telefonos'], cargarImeis)
 </script>
 
 <template>
@@ -1511,6 +1514,7 @@ onMounted(async () => {
 
       <DataTable
         v-if="viewMode === 'table'"
+        class="imei-data-table"
         :value="imeisFiltrados"
         :loading="loading"
         stripedRows
@@ -2004,10 +2008,11 @@ onMounted(async () => {
           <div
             v-for="tel in equiposFiltradosMultiple"
             :key="tel.uid || tel.id"
-            class="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors text-sm"
-            :class="equipoSeleccionadoMultiple?.uid === tel.uid
-              ? 'bg-primary text-primary-contrast'
-              : 'hover:bg-surface-100 dark:hover:bg-surface-700'"
+            class="imei-equipo-option flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer border border-transparent text-sm"
+            :class="equipoSeleccionadoMultiple
+              && (equipoSeleccionadoMultiple.uid || equipoSeleccionadoMultiple.id) === (tel.uid || tel.id)
+                ? 'imei-equipo-option--selected bg-primary text-primary-contrast'
+                : ''"
             @click="equipoSeleccionadoMultiple = tel"
           >
             <i class="pi pi-mobile text-xs"></i>
@@ -2218,3 +2223,30 @@ onMounted(async () => {
     </Dialog>
   </div>
 </template>
+
+<style scoped>
+.imei-equipo-option {
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.imei-equipo-option:not(.imei-equipo-option--selected):hover {
+  background-color: rgba(59, 130, 246, 0.24) !important;
+  border-color: #3b82f6 !important;
+  color: #93c5fd !important;
+  transform: translateX(3px);
+}
+
+.imei-data-table :deep(.p-datatable-tbody > tr) {
+  cursor: pointer;
+  transition: background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.imei-data-table :deep(.p-datatable-tbody > tr:not(.p-datatable-row-selected):hover) {
+  background-color: rgba(59, 130, 246, 0.24) !important;
+  box-shadow: inset 4px 0 0 #3b82f6;
+}
+
+.imei-data-table :deep(.p-datatable-tbody > tr:not(.p-datatable-row-selected):hover > td) {
+  background-color: transparent !important;
+}
+</style>

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, dialog, safeStorage, session } from 'electron'
 import { join } from 'path'
 import { exec, execSync, spawn } from 'child_process'
 import path from 'path'
@@ -16,6 +16,36 @@ import { getMachineId, getMachineIdLegacy } from './machine-id'
 
 let mainWindow: BrowserWindow | null = null
 let db: InstanceType<typeof Database> | null = null
+
+const OPENAI_KEY_PREFIX = 'safe:v1:'
+
+function protectOpenAIKey(value: string): string {
+  if (!value || !safeStorage.isEncryptionAvailable()) return value
+  return OPENAI_KEY_PREFIX + safeStorage.encryptString(value).toString('base64')
+}
+
+function revealOpenAIKey(value: string): string {
+  if (!value.startsWith(OPENAI_KEY_PREFIX)) return value
+  try {
+    return safeStorage.decryptString(Buffer.from(value.slice(OPENAI_KEY_PREFIX.length), 'base64'))
+  } catch {
+    return ''
+  }
+}
+
+function getOpenAIError(data: any, status: number): string {
+  const code = String(data?.error?.code || data?.error?.type || '')
+  const message = String(data?.error?.message || '')
+  if (code === 'insufficient_quota' || /exceeded your current quota/i.test(message)) {
+    return 'La cuenta de API de OpenAI no tiene crédito o cuota disponible. ChatGPT y la API se facturan por separado; revisa Billing en platform.openai.com.'
+  }
+  if (code === 'model_not_found' || /model.*does not exist|access to it/i.test(message)) {
+    return 'La API key no tiene acceso al modelo seleccionado. Elige otro modelo en Configuración > OpenAI / Jarvis.'
+  }
+  if (status === 401) return 'La API key de OpenAI no es válida o fue revocada.'
+  if (status === 429) return 'OpenAI rechazó la solicitud por límite de uso. Revisa la cuota y los límites del proyecto de API.'
+  return message || `OpenAI respondió con HTTP ${status}`
+}
 
 type OtpLocalMode = 'fixed' | 'variable'
 
@@ -389,12 +419,16 @@ function initDatabase(): void {
     imei: { id_equi: 'INTEGER', telefono_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', color: "TEXT DEFAULT ''", capacidad: "TEXT DEFAULT ''", bateria: "TEXT DEFAULT ''", estado: "TEXT DEFAULT 'DISPONIBLE'", fecha_venta: "TEXT DEFAULT ''", comprador: "TEXT DEFAULT ''", proveedor: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", precio_vendido: 'REAL DEFAULT 0', hora_venta: "TEXT DEFAULT ''", no_factura: "TEXT DEFAULT ''", nota: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     serial: { id_equi: 'INTEGER', equipo_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', color: "TEXT DEFAULT ''", capacidad: "TEXT DEFAULT ''", bateria: "TEXT DEFAULT ''", estado: "TEXT DEFAULT 'DISPONIBLE'", almacen_id: 'INTEGER DEFAULT 0' },
     accesorios: { codigo_barra: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', cantidad: 'INTEGER DEFAULT 1', alerta: 'INTEGER DEFAULT 10', proveedor_id: 'INTEGER DEFAULT 0', imagen: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    piezas: { reservada: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
+    tecnicos: { tipo_comision: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision: 'REAL DEFAULT 0' },
     facturas: { costo: 'REAL DEFAULT 0', ganancia: 'REAL DEFAULT 0', financiera: "TEXT DEFAULT ''", turno_id: 'INTEGER DEFAULT 0', canal_venta: "TEXT DEFAULT ''", ncf: "TEXT DEFAULT ''", tipo_comprobante: "TEXT DEFAULT ''", comprobante_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
     clientes: { imagen: "TEXT DEFAULT ''", rnc: "TEXT DEFAULT ''", nota: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
-    ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", beneficio_empresa: 'REAL DEFAULT 0', beneficio_tecnico: 'REAL DEFAULT 0', porcentaje_tecnico: 'REAL DEFAULT 0', estado_pago_tecnico: "TEXT DEFAULT 'PENDIENTE'", almacen_id: 'INTEGER DEFAULT 0' },
+    ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", beneficio_empresa: 'REAL DEFAULT 0', beneficio_tecnico: 'REAL DEFAULT 0', porcentaje_tecnico: 'REAL DEFAULT 0', tipo_comision_tecnico: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision_tecnico: 'REAL DEFAULT 0', estado_pago_tecnico: "TEXT DEFAULT 'PENDIENTE'", almacen_id: 'INTEGER DEFAULT 0' },
     cuentas_cobrar: { pagos: "TEXT DEFAULT '[]'", fecha_vencimiento: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     cuentas_pagar: { pagos: "TEXT DEFAULT '[]'", fecha_vencimiento: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     gastos: { turno_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
+    caja_turnos: { monto_final: 'REAL DEFAULT 0', efectivo_esperado: 'REAL DEFAULT 0', diferencia: 'REAL DEFAULT 0', cierre_ciego: 'INTEGER DEFAULT 0' },
+    cuadres: { efectivo_esperado: 'REAL DEFAULT 0', efectivo_contado: 'REAL DEFAULT 0', diferencia: 'REAL DEFAULT 0', cierre_ciego: 'INTEGER DEFAULT 0' },
     perdidas: { detalle: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     transferencias: { origen_uid: "TEXT DEFAULT ''", destino_uid: "TEXT DEFAULT ''", almacen_uid: "TEXT DEFAULT ''" },
   }
@@ -563,6 +597,18 @@ function initDatabase(): void {
   }
 
   try { db!.exec(`CREATE TABLE IF NOT EXISTS movimientos_piezas (id INTEGER PRIMARY KEY AUTOINCREMENT,pieza_id INTEGER NOT NULL,pieza_nombre TEXT DEFAULT '',tipo TEXT DEFAULT '',cantidad_antes INTEGER DEFAULT 0,cantidad_despues INTEGER DEFAULT 0,referencia TEXT DEFAULT '',fecha TEXT DEFAULT '',hora TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`) } catch {} 
+  db!.exec(`CREATE TABLE IF NOT EXISTS reservas_piezas (id INTEGER PRIMARY KEY AUTOINCREMENT,orden_id INTEGER NOT NULL,pieza_id INTEGER NOT NULL,pieza_nombre TEXT DEFAULT '',cantidad REAL DEFAULT 1,estado TEXT DEFAULT 'RESERVADA',usuario TEXT DEFAULT '',liberada_at TEXT DEFAULT '',consumida_at TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db!.exec(`CREATE TABLE IF NOT EXISTS comisiones_tecnicos (id INTEGER PRIMARY KEY AUTOINCREMENT,orden_id INTEGER NOT NULL,tecnico_id INTEGER DEFAULT 0,tecnico_nombre TEXT DEFAULT '',tipo TEXT DEFAULT 'PORCENTAJE_MANO_OBRA',base REAL DEFAULT 0,valor REAL DEFAULT 0,monto REAL DEFAULT 0,estado TEXT DEFAULT 'PENDIENTE',fecha_pago TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db!.exec(`CREATE TABLE IF NOT EXISTS financiamientos (id INTEGER PRIMARY KEY AUTOINCREMENT,cliente_id INTEGER DEFAULT 0,cliente_nombre TEXT DEFAULT '',cliente_telefono TEXT DEFAULT '',factura_id INTEGER DEFAULT 0,no_factura TEXT DEFAULT '',frecuencia TEXT DEFAULT 'MENSUAL',cantidad_cuotas INTEGER DEFAULT 1,monto_original REAL DEFAULT 0,inicial REAL DEFAULT 0,tasa_interes REAL DEFAULT 0,total_financiado REAL DEFAULT 0,mora_porcentaje REAL DEFAULT 0,ingreso_mensual REAL DEFAULT 0,gastos_mensuales REAL DEFAULT 0,capacidad_pago REAL DEFAULT 0,garante_nombre TEXT DEFAULT '',garante_cedula TEXT DEFAULT '',garante_telefono TEXT DEFAULT '',documentos TEXT DEFAULT '[]',estado TEXT DEFAULT 'ACTIVO',proximo_vencimiento TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db!.exec(`CREATE TABLE IF NOT EXISTS cuotas_financiamiento (id INTEGER PRIMARY KEY AUTOINCREMENT,financiamiento_id INTEGER NOT NULL,numero INTEGER NOT NULL,fecha_vencimiento TEXT DEFAULT '',capital REAL DEFAULT 0,interes REAL DEFAULT 0,mora REAL DEFAULT 0,total REAL DEFAULT 0,pagado REAL DEFAULT 0,saldo REAL DEFAULT 0,estado TEXT DEFAULT 'PENDIENTE',pagos TEXT DEFAULT '[]',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db!.exec(`CREATE TABLE IF NOT EXISTS promociones (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,tipo TEXT DEFAULT 'DESCUENTO',valor REAL DEFAULT 0,cantidad_compra INTEGER DEFAULT 1,cantidad_gratis INTEGER DEFAULT 0,cantidad_minima REAL DEFAULT 1,productos TEXT DEFAULT '[]',fecha_inicio TEXT DEFAULT '',fecha_fin TEXT DEFAULT '',lista_precio TEXT DEFAULT '',prioridad INTEGER DEFAULT 0,combinable INTEGER DEFAULT 0,estado TEXT DEFAULT 'ACTIVA',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db!.exec(`CREATE TABLE IF NOT EXISTS listas_precios (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,tipo TEXT DEFAULT 'MINORISTA',descuento_porcentaje REAL DEFAULT 0,cantidad_minima REAL DEFAULT 1,estado TEXT DEFAULT 'ACTIVA',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db!.exec(`CREATE TABLE IF NOT EXISTS variantes_productos (id INTEGER PRIMARY KEY AUTOINCREMENT,producto_id INTEGER NOT NULL,sku TEXT DEFAULT '',codigo_barra TEXT DEFAULT '',talla TEXT DEFAULT '',color TEXT DEFAULT '',capacidad TEXT DEFAULT '',sabor TEXT DEFAULT '',presentacion TEXT DEFAULT '',costo REAL DEFAULT 0,precio REAL DEFAULT 0,precio_mayor REAL DEFAULT 0,cantidad REAL DEFAULT 0,alerta REAL DEFAULT 0,estado TEXT DEFAULT 'ACTIVA',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db!.exec(`CREATE TABLE IF NOT EXISTS niveles_fidelidad (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,puntos_desde REAL DEFAULT 0,multiplicador REAL DEFAULT 1,descuento REAL DEFAULT 0,estado TEXT DEFAULT 'ACTIVO',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db!.exec(`CREATE TABLE IF NOT EXISTS movimientos_puntos (id INTEGER PRIMARY KEY AUTOINCREMENT,cliente_id INTEGER NOT NULL,tipo TEXT DEFAULT 'GANADO',puntos REAL DEFAULT 0,saldo_anterior REAL DEFAULT 0,saldo_nuevo REAL DEFAULT 0,referencia TEXT DEFAULT '',vence_at TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db!.exec(`CREATE TABLE IF NOT EXISTS tarjetas_regalo (id INTEGER PRIMARY KEY AUTOINCREMENT,codigo TEXT NOT NULL UNIQUE,pin TEXT DEFAULT '',saldo_inicial REAL DEFAULT 0,saldo REAL DEFAULT 0,cliente_id INTEGER DEFAULT 0,fecha_vencimiento TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVA',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db!.exec(`CREATE TABLE IF NOT EXISTS portal_clientes (id INTEGER PRIMARY KEY AUTOINCREMENT,cliente_id INTEGER DEFAULT 0,token TEXT NOT NULL UNIQUE,email TEXT DEFAULT '',telefono TEXT DEFAULT '',permisos TEXT DEFAULT '[]',vence_at TEXT DEFAULT '',ultimo_acceso TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVO',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db!.exec(`CREATE TABLE IF NOT EXISTS pedidos_online (id INTEGER PRIMARY KEY AUTOINCREMENT,codigo TEXT DEFAULT '',cliente_id INTEGER DEFAULT 0,cliente_nombre TEXT DEFAULT '',cliente_telefono TEXT DEFAULT '',productos TEXT DEFAULT '[]',subtotal REAL DEFAULT 0,descuento REAL DEFAULT 0,envio REAL DEFAULT 0,total REAL DEFAULT 0,tipo_entrega TEXT DEFAULT 'RECOGIDA',direccion TEXT DEFAULT '',estado TEXT DEFAULT 'NUEVO',pago_estado TEXT DEFAULT 'PENDIENTE',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   try { db!.exec(`CREATE TABLE IF NOT EXISTS reclamaciones (id INTEGER PRIMARY KEY AUTOINCREMENT,no_reclamacion TEXT DEFAULT '',fecha_emision TEXT DEFAULT '',fecha_respuesta TEXT DEFAULT '',fecha_vencimiento TEXT DEFAULT '',no_factura TEXT DEFAULT '',nombre_cliente TEXT DEFAULT '',telefono TEXT DEFAULT '',whatsapp TEXT DEFAULT '',email TEXT DEFAULT '',institucion TEXT DEFAULT '',articulo TEXT DEFAULT '',fecha_compra TEXT DEFAULT '',no_factura_rel TEXT DEFAULT '',estado TEXT DEFAULT 'ABIERTA',resultado TEXT DEFAULT '',respuesta TEXT DEFAULT '',fecha_cierre TEXT DEFAULT '',representante TEXT DEFAULT '',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`) } catch {}
 
   function ensureTecnicosTable(): void {
@@ -1371,6 +1417,125 @@ function setupIpcHandlers(): void {
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('openai:getConfig', () => {
+    try {
+      const get = (clave: string) => {
+        const row = db!.prepare(`SELECT valor FROM configuracion WHERE clave = ?`).get(clave) as any
+        return String(row?.valor || '')
+      }
+      const apiKey = revealOpenAIKey(get('openai_api_key'))
+      return {
+        success: true,
+        data: {
+          enabled: get('openai_enabled') !== '0',
+          model: get('openai_model') || 'gpt-5.6-sol',
+          voice_enabled: get('openai_voice_enabled') !== '0',
+          voice: get('openai_voice') || 'es-DO',
+          has_api_key: Boolean(apiKey),
+          masked_api_key: apiKey ? `${apiKey.slice(0, 7)}••••••••${apiKey.slice(-4)}` : '',
+        },
+      }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('openai:saveConfig', (_event, payload: any = {}) => {
+    try {
+      const apiKey = String(payload.api_key || '').trim()
+      if (apiKey && !apiKey.startsWith('sk-')) {
+        return { success: false, error: 'La API key debe comenzar con sk-' }
+      }
+      if (apiKey) guardarConfigLocal('openai_api_key', protectOpenAIKey(apiKey), 'openai')
+      if (payload.clear_api_key) guardarConfigLocal('openai_api_key', '', 'openai')
+      guardarConfigLocal('openai_enabled', payload.enabled === false ? '0' : '1', 'openai')
+      guardarConfigLocal('openai_model', String(payload.model || 'gpt-5.6-sol'), 'openai')
+      guardarConfigLocal('openai_voice_enabled', payload.voice_enabled === false ? '0' : '1', 'openai')
+      guardarConfigLocal('openai_voice', String(payload.voice || 'es-DO'), 'openai')
+      const configured = Boolean(apiKey) || (!payload.clear_api_key && Boolean(
+        (db!.prepare(`SELECT valor FROM configuracion WHERE clave = 'openai_api_key'`).get() as any)?.valor
+      ))
+      guardarConfigLocal('openai_api_key_configured', configured ? '1' : '0', 'openai')
+      return { success: true, data: { has_api_key: configured } }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('openai:request', async (_event, payload: any = {}) => {
+    try {
+      const row = db!.prepare(`SELECT valor FROM configuracion WHERE clave = 'openai_api_key'`).get() as any
+      const apiKey = revealOpenAIKey(String(row?.valor || '')).trim()
+      if (!apiKey) return { success: false, error: 'OpenAI no está configurado. Agrega la API key en Configuración.' }
+      const response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(90000),
+      })
+      const data = await response.json().catch(() => ({})) as any
+      if (!response.ok) {
+        return { success: false, error: getOpenAIError(data, response.status) }
+      }
+      return { success: true, data }
+    } catch (error: any) {
+      const message = error?.name === 'TimeoutError'
+        ? 'OpenAI tardó demasiado en responder'
+        : error?.message || 'No se pudo conectar con OpenAI'
+      return { success: false, error: message }
+    }
+  })
+
+  ipcMain.handle('openai:transcribe', async (_event, payload: any = {}) => {
+    try {
+      const row = db!.prepare(`SELECT valor FROM configuracion WHERE clave = 'openai_api_key'`).get() as any
+      const apiKey = revealOpenAIKey(String(row?.valor || '')).trim()
+      if (!apiKey) return { success: false, error: 'OpenAI no está configurado. Agrega la API key en Configuración.' }
+
+      const base64 = String(payload.audio_base64 || '')
+      const audio = Buffer.from(base64, 'base64')
+      if (!audio.length) return { success: false, error: 'La grabación de audio está vacía' }
+      if (audio.length > 20 * 1024 * 1024) return { success: false, error: 'La grabación es demasiado grande' }
+
+      const allowedMimeTypes = new Set(['audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/wav', 'audio/ogg'])
+      const rawMimeType = String(payload.mime_type || 'audio/webm').split(';')[0].toLowerCase()
+      const mimeType = allowedMimeTypes.has(rawMimeType) ? rawMimeType : 'audio/webm'
+      const extension: Record<string, string> = {
+        'audio/webm': 'webm',
+        'audio/mp4': 'm4a',
+        'audio/mpeg': 'mp3',
+        'audio/wav': 'wav',
+        'audio/ogg': 'ogg',
+      }
+      const form = new FormData()
+      form.append('file', new Blob([audio], { type: mimeType }), `jarvis.${extension[mimeType] || 'webm'}`)
+      form.append('model', 'gpt-4o-mini-transcribe')
+      form.append('language', String(payload.language || 'es').slice(0, 2))
+      form.append('response_format', 'json')
+      form.append('prompt', 'Conversación en español sobre ventas, clientes, facturas, inventario, teléfonos e IMEI en el sistema TMPOS.')
+
+      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+        signal: AbortSignal.timeout(90000),
+      })
+      const data = await response.json().catch(() => ({})) as any
+      if (!response.ok) {
+        return { success: false, error: getOpenAIError(data, response.status) }
+      }
+      return { success: true, data: { text: String(data?.text || '').trim() } }
+    } catch (error: any) {
+      const message = error?.name === 'TimeoutError'
+        ? 'La transcripción tardó demasiado'
+        : error?.message || 'No se pudo transcribir el audio'
+      return { success: false, error: message }
     }
   })
 
@@ -2626,9 +2791,20 @@ function setupIpcHandlers(): void {
     } catch (e: any) { return { success: false, error: e.message } }
   })
 
-  ipcMain.handle('caja:cerrarTurno', async (_event, turnoId: number) => {
+  ipcMain.handle('caja:cerrarTurno', async (_event, turnoId: number, data: any = {}) => {
     try {
-      db!.prepare(`UPDATE caja_turnos SET estado = 'cerrado', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND estado = 'abierto'`).run(turnoId)
+      const contado = Number(data.monto_final || 0)
+      const esperado = Number(data.efectivo_esperado || 0)
+      db!.prepare(`UPDATE caja_turnos
+        SET estado = 'cerrado', monto_final = ?, efectivo_esperado = ?,
+            diferencia = ?, cierre_ciego = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND estado = 'abierto'`).run(
+        contado,
+        esperado,
+        Number(data.diferencia ?? (contado - esperado)),
+        data.cierre_ciego ? 1 : 0,
+        turnoId
+      )
       return { success: true }
     } catch (e: any) { return { success: false, error: e.message } }
   })
@@ -3874,18 +4050,77 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('enviar:cierreCaja', async (_event, payload: any) => {
     try {
-      // Los reportes de cierre usan el mismo SMTP confiable que los OTP.
-      const config = getOtpEmailConfig()
-      if (!config.email || !config.password) return { success: false, error: 'Configuracion de correo incompleta' }
-
-      const toEmail = getEmailEmpresa()
+      const toEmail = String(payload?.toEmail || getEmailEmpresa()).trim()
       if (!toEmail || !toEmail.includes('@')) {
         return { success: false, error: 'Configura un correo valido en los datos de la empresa' }
       }
-      if (!payload?.html) return { success: false, error: 'El reporte de cierre esta vacio' }
+
+      // Canal principal: API de TMPBASE/TM Cloud. La Secret Key permanece
+      // solamente en el proceso principal y nunca se expone al renderer.
+      const cloud = db!.prepare(`SELECT url, secret_key FROM tmcloud_config WHERE id = 1`).get() as any
+      const baseUrl = String(cloud?.url || '').replace(/\/+$/, '')
+      const secretKey = String(cloud?.secret_key || '').trim()
+      let apiError = ''
+      if (baseUrl && secretKey && /^https?:\/\//i.test(baseUrl)) {
+        try {
+          const response = await fetch(`${baseUrl}/mail/send`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${secretKey}`,
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            body: JSON.stringify({
+              template: 'cash_closing',
+              to: toEmail,
+              data: payload?.data || {},
+              send_now: true,
+            }),
+            signal: AbortSignal.timeout(20000),
+          })
+          const responseData = await response.json().catch(() => ({})) as any
+          if (!response.ok) {
+            throw new Error(
+              responseData?.error?.message ||
+              responseData?.message ||
+              `HTTP ${response.status}`
+            )
+          }
+          const mail = responseData?.data?.mail || responseData?.data || {}
+          const sent = String(mail.status || '').toLowerCase() === 'sent'
+          return {
+            success: true,
+            queued: !sent,
+            provider: 'TMPBASE API',
+            mailUid: mail.uid || '',
+            status: mail.status || 'pending',
+            message: sent
+              ? `Cierre enviado por TMPBASE a ${toEmail}`
+              : `Cierre encolado por TMPBASE para ${toEmail}`,
+            toEmail,
+          }
+        } catch (error: any) {
+          apiError = error?.name === 'TimeoutError'
+            ? 'La API de TMPBASE excedio el tiempo de espera'
+            : (error?.message || 'No se pudo usar la API de TMPBASE')
+          console.error('[CierreCaja][TMPBASE]', apiError)
+        }
+      } else {
+        apiError = 'TM Cloud no tiene URL y Secret Key configuradas'
+      }
+
+      // Respaldo local: si TMPBASE no responde, intentar el SMTP configurado
+      // para que el cierre del turno no se quede sin entregar.
+      const config = getOtpEmailConfig()
+      if (!config.email || !config.password) {
+        return {
+          success: false,
+          error: `${apiError}. El SMTP de respaldo tampoco esta configurado.`,
+        }
+      }
+      if (!payload?.html) return { success: false, error: `${apiError}. El reporte de cierre esta vacio.` }
 
       const attempts = getSmtpAttempts(config)
-
       let lastError: any = null
       for (const attempt of attempts) {
         try {
@@ -3898,12 +4133,21 @@ function setupIpcHandlers(): void {
             attempt.secure,
             config
           )
-          return { success: true, message: `Cierre enviado a ${toEmail}`, toEmail }
+          return {
+            success: true,
+            provider: 'SMTP local (respaldo)',
+            warning: apiError,
+            message: `Cierre enviado a ${toEmail} por SMTP de respaldo`,
+            toEmail,
+          }
         } catch (e: any) {
           lastError = e
         }
       }
-      return { success: false, error: `No se pudo enviar el cierre: ${lastError?.message || 'Error desconocido'}` }
+      return {
+        success: false,
+        error: `TMPBASE: ${apiError}. SMTP: ${lastError?.message || 'Error desconocido'}`,
+      }
     } catch (e: any) {
       return { success: false, error: e.message || 'Error al enviar el cierre de caja' }
     }
@@ -4155,13 +4399,27 @@ function createWindow() {
     webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, webSecurity: false },
     titleBarStyle: 'default',
   })
-  mainWindow.on('ready-to-show', () => { mainWindow?.maximize(); mainWindow?.show() })
+  mainWindow.on('ready-to-show', () => {
+    mainWindow?.maximize()
+    mainWindow?.show()
+    mainWindow?.focus()
+    mainWindow?.webContents.focus()
+  })
+  mainWindow.on('focus', () => mainWindow?.webContents.focus())
+  mainWindow.on('restore', () => {
+    mainWindow?.focus()
+    mainWindow?.webContents.focus()
+  })
   if (process.env.VITE_DEV_SERVER_URL) mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
   else mainWindow.loadFile(join(__dirname, '../dist/index.html'))
 }
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => permission === 'media')
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'media')
+  })
   initDatabase()
   setupIpcHandlers()
   await startLocalServer()

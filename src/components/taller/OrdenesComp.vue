@@ -77,7 +77,7 @@ const printers = ref<any[]>([])
 const printerSel = ref('')
 const escaneando = ref(false)
 
-const tecnicos = ref<{ nombre: string; porcentaje: number }[]>([])
+const tecnicos = ref<{ id?: number; nombre: string; porcentaje: number; tipo_comision?: string; valor_comision?: number }[]>([])
 const dialogNuevoTecnico = ref(false)
 const nuevoTecnicoForm = ref({ nombre: '', telefono: '', email: '', porcentaje: 0 })
 const nuevoTecnicoPorcentaje = ref(0)
@@ -255,6 +255,8 @@ const formDefault = () => ({
   beneficio_empresa: 0,
   beneficio_tecnico: 0,
   porcentaje_tecnico: 0,
+  tipo_comision_tecnico: 'PORCENTAJE_MANO_OBRA',
+  valor_comision_tecnico: 0,
   estado_pago_tecnico: 'PENDIENTE',
 })
 
@@ -304,21 +306,29 @@ watch(() => form.value.tecnico, (nombre) => {
     const encontrado = tecnicos.value.find(t => t.nombre === nombre)
     if (encontrado) {
       form.value.porcentaje_tecnico = encontrado.porcentaje
+      form.value.tipo_comision_tecnico = encontrado.tipo_comision || 'PORCENTAJE_MANO_OBRA'
+      form.value.valor_comision_tecnico = Number(encontrado.valor_comision ?? encontrado.porcentaje ?? 0)
     }
   }
 })
 
-watch(() => form.value.porcentaje_tecnico, (pct) => {
-  const mano = form.value.mano_obra || 0
-  form.value.beneficio_tecnico = Math.round((mano * (pct || 0) / 100) * 100) / 100
+function recalcularComisionTecnico() {
+  const tipo = form.value.tipo_comision_tecnico || 'PORCENTAJE_MANO_OBRA'
+  const valor = Number(form.value.valor_comision_tecnico ?? form.value.porcentaje_tecnico ?? 0)
+  const mano = Number(form.value.mano_obra || 0)
+  const piezas = Number(form.value.precio_pieza || 0)
+  const comision = tipo === 'MONTO_FIJO' ? valor : (tipo === 'PORCENTAJE_PIEZAS' ? piezas : mano) * valor / 100
+  form.value.beneficio_tecnico = Math.round(comision * 100) / 100
   form.value.beneficio_empresa = Math.round((mano - form.value.beneficio_tecnico) * 100) / 100
-})
+}
 
-watch(() => form.value.mano_obra, (mano) => {
-  const pct = form.value.porcentaje_tecnico || 0
-  form.value.beneficio_tecnico = Math.round(((mano || 0) * pct / 100) * 100) / 100
-  form.value.beneficio_empresa = Math.round(((mano || 0) - form.value.beneficio_tecnico) * 100) / 100
-})
+watch([
+  () => form.value.porcentaje_tecnico,
+  () => form.value.valor_comision_tecnico,
+  () => form.value.tipo_comision_tecnico,
+  () => form.value.mano_obra,
+  () => form.value.precio_pieza,
+], recalcularComisionTecnico)
 
 // ─── Funciones CRUD ───
 async function cargarOrdenes() {
@@ -333,7 +343,13 @@ async function cargarOrdenes() {
   }
   if (tecnicosRes.success) {
     tecnicos.value = (tecnicosRes.data || [])
-      .map((t: any) => ({ nombre: (t.nombre || '').toUpperCase(), porcentaje: t.porcentaje || 0 }))
+      .map((t: any) => ({
+        id: t.id,
+        nombre: (t.nombre || '').toUpperCase(),
+        porcentaje: Number(t.porcentaje || 0),
+        tipo_comision: t.tipo_comision || 'PORCENTAJE_MANO_OBRA',
+        valor_comision: Number(t.valor_comision ?? t.porcentaje ?? 0),
+      }))
       .filter(t => t.nombre)
       .sort((a, b) => a.nombre.localeCompare(b.nombre))
   }
@@ -392,6 +408,11 @@ async function abrirPiezaModal(orden: any) {
 async function seleccionarPiezaCard(pieza: any) {
   const orden = piezaOrdenActual.value
   if (!orden) return
+  const disponibles = Number(pieza.cantidad || 0) - Number(pieza.reservada || 0)
+  if (disponibles <= 0) {
+    toast.add({ severity: 'warn', summary: 'Sin disponibilidad', detail: 'Todas las unidades de esta pieza están reservadas.', life: 3000 })
+    return
+  }
   const texto = pieza.nombre || ''
   const nuevasPiezas = orden.piezas ? orden.piezas + '\n' + texto : texto
   const valorPieza = Number(pieza.precio_venta) || 0
@@ -403,6 +424,15 @@ async function seleccionarPiezaCard(pieza: any) {
     precio_pieza: nuevoPrecioPieza,
     total: nuevoTotal,
     pendiente: nuevoPendiente,
+  })
+  await window.db.update('piezas', pieza.id, { reservada: Number(pieza.reservada || 0) + 1 })
+  await window.db.insert('reservas_piezas', {
+    orden_id: orden.id,
+    pieza_id: pieza.id,
+    pieza_nombre: texto,
+    cantidad: 1,
+    estado: 'RESERVADA',
+    usuario: auth.user?.nombre || auth.user?.usuario || '',
   })
   orden.piezas = nuevasPiezas
   orden.precio_pieza = nuevoPrecioPieza
@@ -439,8 +469,17 @@ async function crearFacturaPieza() {
   }
   const res = await window.db.insert('facturas', factura)
   if (res.success) {
-    const nuevaCantidad = Math.max(0, cantidad - 1)
-    await window.db.update('piezas', piezaId, { cantidad: nuevaCantidad })
+    const piezaActualRes = await window.db.getById('piezas', piezaId)
+    const piezaActual = piezaActualRes.success ? piezaActualRes.data : {}
+    const cantidadActual = Number(piezaActual?.cantidad ?? cantidad)
+    const nuevaCantidad = Math.max(0, cantidadActual - 1)
+    await window.db.update('piezas', piezaId, {
+      cantidad: nuevaCantidad,
+      reservada: Math.max(0, Number(piezaActual?.reservada || 0) - 1),
+    })
+    const reservas = await window.db.getWhere('reservas_piezas', 'orden_id = ? AND pieza_id = ? AND estado = ?', [orden.id, piezaId, 'RESERVADA'])
+    const reserva = reservas.success ? reservas.data?.[0] : null
+    if (reserva) await window.db.update('reservas_piezas', reserva.id, { estado: 'CONSUMIDA', consumida_at: new Date().toISOString() })
     const ahora = new Date()
     await window.db.insert('movimientos_piezas', {
       pieza_id: piezaId,
@@ -846,6 +885,8 @@ async function guardar() {
       beneficio_empresa: form.value.beneficio_empresa || 0,
       beneficio_tecnico: form.value.beneficio_tecnico || 0,
       porcentaje_tecnico: form.value.porcentaje_tecnico || 0,
+      tipo_comision_tecnico: form.value.tipo_comision_tecnico,
+      valor_comision_tecnico: form.value.valor_comision_tecnico || 0,
       estado_pago_tecnico: form.value.estado_pago_tecnico,
     }
 

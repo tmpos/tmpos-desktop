@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { shallowRef, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
@@ -8,6 +9,7 @@ import UsuariosComp from '@/components/contactos/UsuariosComp.vue'
 import ProveedoresComp from '@/components/contactos/ProveedoresComp.vue'
 
 const auth = useAuthStore()
+const route = useRoute()
 
 const allItems: SubMenuItem[] = [
   { label: 'Clientes', icon: 'pi pi-user', key: 'clientes' },
@@ -29,7 +31,10 @@ function onSelect(key: string) {
   active.value = key
 }
 
-active.value = items.value.length > 0 ? items.value[0].key : ''
+const tabRuta = String(route.query.tab || '')
+active.value = items.value.some(item => item.key === tabRuta)
+  ? tabRuta
+  : (items.value[0]?.key || '')
 </script>
 
 <template>

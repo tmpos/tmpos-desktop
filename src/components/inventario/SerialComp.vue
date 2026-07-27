@@ -22,6 +22,7 @@ import QRCode from 'qrcode'
 import TicketFacturaPrint from '@/components/ventas/TicketFacturaPrint.vue'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAuthStore } from '@/stores/auth.store'
+import { useCloudRefresh } from '@/composables/useCloudRefresh'
 
 const toast = useToast()
 const router = useRouter()
@@ -1016,6 +1017,8 @@ onMounted(async () => {
   await cargarElectrodomesticos()
   await cargarSeriales()
 })
+
+useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
 </script>
 
 <template>

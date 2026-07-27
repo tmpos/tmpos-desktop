@@ -6,6 +6,11 @@ const combinaciones: { key: string; ctrl?: boolean; alt?: boolean; shift?: boole
 
 export function useAtajosTeclado(acciones: AccionMap) {
   function handler(e: KeyboardEvent) {
+    const target = e.target as HTMLElement | null
+    const tag = target?.tagName?.toLowerCase()
+    const escribiendo = tag === 'input' || tag === 'textarea' || tag === 'select' || Boolean(target?.isContentEditable)
+    if (escribiendo) return
+
     const key = e.key.toLowerCase()
     const ctrl = e.ctrlKey || e.metaKey
 

@@ -620,6 +620,48 @@ function createTables() {
     uid TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS reservas_piezas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, orden_id INTEGER NOT NULL, pieza_id INTEGER NOT NULL,
+    pieza_nombre TEXT DEFAULT '', cantidad REAL DEFAULT 1, estado TEXT DEFAULT 'RESERVADA',
+    usuario TEXT DEFAULT '', liberada_at TEXT DEFAULT '', consumida_at TEXT DEFAULT '',
+    uid TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS comisiones_tecnicos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, orden_id INTEGER NOT NULL, tecnico_id INTEGER DEFAULT 0,
+    tecnico_nombre TEXT DEFAULT '', tipo TEXT DEFAULT 'PORCENTAJE_MANO_OBRA',
+    base REAL DEFAULT 0, valor REAL DEFAULT 0, monto REAL DEFAULT 0,
+    estado TEXT DEFAULT 'PENDIENTE', fecha_pago TEXT DEFAULT '', uid TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS financiamientos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, cliente_id INTEGER DEFAULT 0, cliente_nombre TEXT DEFAULT '',
+    cliente_telefono TEXT DEFAULT '', factura_id INTEGER DEFAULT 0, no_factura TEXT DEFAULT '',
+    frecuencia TEXT DEFAULT 'MENSUAL', cantidad_cuotas INTEGER DEFAULT 1, monto_original REAL DEFAULT 0,
+    inicial REAL DEFAULT 0, tasa_interes REAL DEFAULT 0, total_financiado REAL DEFAULT 0,
+    mora_porcentaje REAL DEFAULT 0, ingreso_mensual REAL DEFAULT 0, gastos_mensuales REAL DEFAULT 0,
+    capacidad_pago REAL DEFAULT 0, garante_nombre TEXT DEFAULT '', garante_cedula TEXT DEFAULT '',
+    garante_telefono TEXT DEFAULT '', documentos TEXT DEFAULT '[]', estado TEXT DEFAULT 'ACTIVO',
+    proximo_vencimiento TEXT DEFAULT '', uid TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+  db.run(`CREATE TABLE IF NOT EXISTS cuotas_financiamiento (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, financiamiento_id INTEGER NOT NULL, numero INTEGER NOT NULL,
+    fecha_vencimiento TEXT DEFAULT '', capital REAL DEFAULT 0, interes REAL DEFAULT 0, mora REAL DEFAULT 0,
+    total REAL DEFAULT 0, pagado REAL DEFAULT 0, saldo REAL DEFAULT 0, estado TEXT DEFAULT 'PENDIENTE',
+    pagos TEXT DEFAULT '[]', uid TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+  db.run(`CREATE TABLE IF NOT EXISTS promociones (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,tipo TEXT DEFAULT 'DESCUENTO',valor REAL DEFAULT 0,cantidad_compra INTEGER DEFAULT 1,cantidad_gratis INTEGER DEFAULT 0,cantidad_minima REAL DEFAULT 1,productos TEXT DEFAULT '[]',fecha_inicio TEXT DEFAULT '',fecha_fin TEXT DEFAULT '',lista_precio TEXT DEFAULT '',prioridad INTEGER DEFAULT 0,combinable INTEGER DEFAULT 0,estado TEXT DEFAULT 'ACTIVA',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS listas_precios (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,tipo TEXT DEFAULT 'MINORISTA',descuento_porcentaje REAL DEFAULT 0,cantidad_minima REAL DEFAULT 1,estado TEXT DEFAULT 'ACTIVA',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS variantes_productos (id INTEGER PRIMARY KEY AUTOINCREMENT,producto_id INTEGER NOT NULL,sku TEXT DEFAULT '',codigo_barra TEXT DEFAULT '',talla TEXT DEFAULT '',color TEXT DEFAULT '',capacidad TEXT DEFAULT '',sabor TEXT DEFAULT '',presentacion TEXT DEFAULT '',costo REAL DEFAULT 0,precio REAL DEFAULT 0,precio_mayor REAL DEFAULT 0,cantidad REAL DEFAULT 0,alerta REAL DEFAULT 0,estado TEXT DEFAULT 'ACTIVA',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS niveles_fidelidad (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,puntos_desde REAL DEFAULT 0,multiplicador REAL DEFAULT 1,descuento REAL DEFAULT 0,estado TEXT DEFAULT 'ACTIVO',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS movimientos_puntos (id INTEGER PRIMARY KEY AUTOINCREMENT,cliente_id INTEGER NOT NULL,tipo TEXT DEFAULT 'GANADO',puntos REAL DEFAULT 0,saldo_anterior REAL DEFAULT 0,saldo_nuevo REAL DEFAULT 0,referencia TEXT DEFAULT '',vence_at TEXT DEFAULT '',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS tarjetas_regalo (id INTEGER PRIMARY KEY AUTOINCREMENT,codigo TEXT NOT NULL UNIQUE,pin TEXT DEFAULT '',saldo_inicial REAL DEFAULT 0,saldo REAL DEFAULT 0,cliente_id INTEGER DEFAULT 0,fecha_vencimiento TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVA',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS portal_clientes (id INTEGER PRIMARY KEY AUTOINCREMENT,cliente_id INTEGER DEFAULT 0,token TEXT NOT NULL UNIQUE,email TEXT DEFAULT '',telefono TEXT DEFAULT '',permisos TEXT DEFAULT '[]',vence_at TEXT DEFAULT '',ultimo_acceso TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVO',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS pedidos_online (id INTEGER PRIMARY KEY AUTOINCREMENT,codigo TEXT DEFAULT '',cliente_id INTEGER DEFAULT 0,cliente_nombre TEXT DEFAULT '',cliente_telefono TEXT DEFAULT '',productos TEXT DEFAULT '[]',subtotal REAL DEFAULT 0,descuento REAL DEFAULT 0,envio REAL DEFAULT 0,total REAL DEFAULT 0,tipo_entrega TEXT DEFAULT 'RECOGIDA',direccion TEXT DEFAULT '',estado TEXT DEFAULT 'NUEVO',pago_estado TEXT DEFAULT 'PENDIENTE',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
 }
 
 function migrateTables() {
@@ -678,8 +720,12 @@ function auditSchema() {
     accesorios: { imagen: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", proveedor_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
     facturas: { costo: 'REAL DEFAULT 0', ganancia: 'REAL DEFAULT 0', financiera: "TEXT DEFAULT ''", turno_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
     clientes: { imagen: "TEXT DEFAULT ''", rnc: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
-    ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", almacen_id: 'INTEGER DEFAULT 0' },
+    ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", tipo_comision_tecnico: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision_tecnico: 'REAL DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
+    piezas: { reservada: 'INTEGER DEFAULT 0' },
+    tecnicos: { tipo_comision: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision: 'REAL DEFAULT 0' },
     gastos: { metodo_pago: "TEXT DEFAULT 'EFECTIVO'", banco_id: 'INTEGER DEFAULT 0', banco_uid: "TEXT DEFAULT ''", banco_nombre: "TEXT DEFAULT ''" },
+    caja_turnos: { monto_final: 'REAL DEFAULT 0', efectivo_esperado: 'REAL DEFAULT 0', diferencia: 'REAL DEFAULT 0', cierre_ciego: 'INTEGER DEFAULT 0' },
+    cuadres: { efectivo_esperado: 'REAL DEFAULT 0', efectivo_contado: 'REAL DEFAULT 0', diferencia: 'REAL DEFAULT 0', cierre_ciego: 'INTEGER DEFAULT 0' },
     serial: { equipo_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''" },
     transferencias: { origen_uid: "TEXT DEFAULT ''", destino_uid: "TEXT DEFAULT ''", almacen_uid: "TEXT DEFAULT ''" },
   }

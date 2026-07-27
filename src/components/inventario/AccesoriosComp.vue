@@ -23,6 +23,7 @@ import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useEmpresa } from '@/composables/useEmpresa'
 import { useSystemModeStore } from '@/stores/systemMode'
 import { useAuthStore } from '@/stores/auth.store'
+import { useCloudRefresh } from '@/composables/useCloudRefresh'
 
 const toast = useToast()
 const systemMode = useSystemModeStore()
@@ -716,6 +717,8 @@ onMounted(async () => {
   const resProv = await window.db.getAll('proveedores')
   if (resProv.success) proveedores.value = resProv.data || []
 })
+
+useCloudRefresh(['accesorios'], cargarAccesorios)
 </script>
 
 <template>

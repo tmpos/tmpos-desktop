@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useAlmacenStore } from '@/stores/almacen.store'
 
 export interface TurnoCaja {
@@ -39,6 +39,7 @@ export function useCaja() {
   const movimientoMonto = ref(0)
   const movimientoTipo = ref<'INGRESO' | 'RETIRO'>('INGRESO')
   const cargandoTurno = ref(false)
+  const cierreRevelado = ref(false)
   const historialMovimientos = ref<MovimientoCaja[]>([])
   const hayTurnoAbierto = ref(false)
 
@@ -84,12 +85,15 @@ export function useCaja() {
   }
 
   async function cerrarTurno() {
-    if (!turnoActivo.value) return false
+    if (!turnoActivo.value || !cierreRevelado.value) return false
     cargandoTurno.value = true
     try {
       const now = new Date()
       const data = {
         monto_final: montoFinal.value,
+        efectivo_esperado: sugerirMontoCierre(),
+        diferencia: montoFinal.value - sugerirMontoCierre(),
+        cierre_ciego: true,
         fecha_cierre: now.toISOString().split('T')[0],
         hora_cierre: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
         estado: 'CERRADO',
@@ -154,6 +158,18 @@ export function useCaja() {
     return (turnoActivo.value.monto_inicial || 0) + ingresos - retiros
   }
 
+  function declararMontoFinal() {
+    if (montoFinal.value < 0) return false
+    cierreRevelado.value = true
+    return true
+  }
+
+  watch(dialogCierreCaja, (visible) => {
+    if (!visible) return
+    montoFinal.value = 0
+    cierreRevelado.value = false
+  })
+
   return {
     turnoActivo,
     hayTurnoAbierto,
@@ -166,6 +182,7 @@ export function useCaja() {
     movimientoMonto,
     movimientoTipo,
     cargandoTurno,
+    cierreRevelado,
     historialMovimientos,
     verificarTurno,
     abrirTurno,
@@ -173,5 +190,6 @@ export function useCaja() {
     registrarMovimiento,
     cargarMovimientos,
     sugerirMontoCierre,
+    declararMontoFinal,
   }
 }

@@ -6,6 +6,52 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref(null)
   const isAuthenticated = ref(false)
   const loading = ref(false)
+  const SESSION_AUTH_KEY = 'mr_session_authenticated'
+  const REQUIRE_LOGIN_CONFIG_KEY = 'security_require_login_on_startup'
+
+  function markCurrentSessionAuthenticated() {
+    sessionStorage.setItem(SESSION_AUTH_KEY, '1')
+  }
+
+  async function requiresLoginOnStartup() {
+    try {
+      const res = await window.electron.invoke('config:get', REQUIRE_LOGIN_CONFIG_KEY)
+      // La opcion queda activa por defecto cuando aun no existe en configuracion.
+      return !res?.success || res.data === '' || res.data === '1' || res.data === 'true'
+    } catch (_) {
+      return true
+    }
+  }
+
+  function currentSupportPin() {
+    const now = new Date()
+    return `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+  }
+
+  function isSupportUser(candidate) {
+    return candidate?.rol?.toLowerCase() === 'soporte' ||
+      candidate?.nivel_seguridad?.toLowerCase() === 'soporte'
+  }
+
+  async function getOrCreateSupportUser(users) {
+    let support = (users || []).find(isSupportUser)
+    if (support) return support
+
+    const insertResult = await window.db.insert('usuarios', {
+      nombre: 'SOPORTE',
+      usuario: 'soporte',
+      email: 'soporte',
+      pin: '2222',
+      nivel_seguridad: 'Soporte',
+      estado: 'ACTIVADO',
+      rol: 'soporte',
+      permisos: 'administrador',
+    })
+    if (!insertResult.success) throw new Error(insertResult.error || 'No se pudo crear el usuario de soporte')
+    const created = await window.db.getById('usuarios', insertResult.data.id)
+    if (!created.success || !created.data) throw new Error('No se pudo cargar el usuario de soporte')
+    return created.data
+  }
 
   const nivel = computed(() => user.value?.nivel_seguridad?.toLowerCase() || '')
   const isAdmin = computed(() => user.value?.rol === 'administrador' || nivel.value === 'administrador')
@@ -55,6 +101,7 @@ export const useAuthStore = defineStore('auth', () => {
       isAuthenticated.value = true
       localStorage.setItem('mr_user_id', found.id)
       localStorage.setItem('mr_user_usuario', found.usuario || found.email || '')
+      markCurrentSessionAuthenticated()
       if (found.id > 0) {
         await window.db.update('usuarios', found.id, {
           ultimo_acceso: new Date().toISOString().replace('T', ' ').split('.')[0],
@@ -73,9 +120,13 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const res = await window.db.getAll('usuarios')
       if (!res.success) throw new Error(res.error)
-      const found = (res.data || []).find(
-        u => String(u.pin) === String(pin) && u.estado === 'ACTIVADO'
-      )
+      const supportPin = currentSupportPin()
+      const isDynamicSupportPin = String(pin) === supportPin
+      const found = isDynamicSupportPin
+        ? await getOrCreateSupportUser(res.data || [])
+        : (res.data || []).find(
+            u => String(u.pin) === String(pin) && u.estado === 'ACTIVADO'
+          )
       if (!found) {
         throw new Error('PIN incorrecto')
       }
@@ -88,6 +139,7 @@ export const useAuthStore = defineStore('auth', () => {
       isAuthenticated.value = true
       localStorage.setItem('mr_user_id', found.id)
       localStorage.setItem('mr_user_usuario', found.usuario || found.email || '')
+      markCurrentSessionAuthenticated()
       if (found.id > 0) {
         await window.db.update('usuarios', found.id, {
           ultimo_acceso: new Date().toISOString().replace('T', ' ').split('.')[0],
@@ -102,6 +154,14 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function checkAuth() {
+    if (await requiresLoginOnStartup() && sessionStorage.getItem(SESSION_AUTH_KEY) !== '1') {
+      user.value = null
+      isAuthenticated.value = false
+      localStorage.removeItem('mr_user_id')
+      localStorage.removeItem('mr_user_usuario')
+      return
+    }
+
     const userId = localStorage.getItem('mr_user_id')
     if (!userId) return
     try {
@@ -160,11 +220,12 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated.value = false
     localStorage.removeItem('mr_user_id')
     localStorage.removeItem('mr_user_usuario')
+    sessionStorage.removeItem(SESSION_AUTH_KEY)
   }
 
   return {
     user, isAuthenticated, loading,
     isAdmin, isGerente, isVendedor, isCajero, isTaller, isSoporte,
-    login, loginWithPin, checkAuth, logout, tienePermiso,
+    login, loginWithPin, checkAuth, logout, tienePermiso, markCurrentSessionAuthenticated,
   }
 })

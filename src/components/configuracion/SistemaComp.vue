@@ -17,6 +17,8 @@ const shadeSeleccionada = ref(theme.colorShade || '500')
 const shadeTopbar = ref('500')
 const dialogoLimpiar = ref(false)
 const limpiando = ref(false)
+const solicitarClaveAlAbrir = ref(true)
+const guardandoSeguridad = ref(false)
 
 const config = ref({
   app_nombre: 'TMPOS',
@@ -66,6 +68,42 @@ async function cargarServerUrl() {
   } catch (_) {}
 }
 
+async function cargarSeguridad() {
+  try {
+    const res = await (window as any).config.get('security_require_login_on_startup')
+    solicitarClaveAlAbrir.value = !res?.success || res.data === '' || res.data === '1' || res.data === 'true'
+  } catch (_) {
+    solicitarClaveAlAbrir.value = true
+  }
+}
+
+async function guardarSeguridad(valor: boolean) {
+  const valorAnterior = solicitarClaveAlAbrir.value
+  solicitarClaveAlAbrir.value = valor
+  guardandoSeguridad.value = true
+  try {
+    const res = await (window as any).config.set('security_require_login_on_startup', valor ? '1' : '0')
+    if (!res?.success) throw new Error(res?.error || 'No se pudo guardar la configuracion')
+
+    // Autoriza la sesion abierta; la marca se elimina automaticamente al cerrar la app.
+    if (valor) sessionStorage.setItem('mr_session_authenticated', '1')
+
+    toast.add({
+      severity: 'success',
+      summary: 'Seguridad actualizada',
+      detail: valor
+        ? 'Se pedira la clave al volver a abrir TMPOS'
+        : 'TMPOS mantendra la sesion iniciada',
+      life: 3000,
+    })
+  } catch (e: any) {
+    solicitarClaveAlAbrir.value = valorAnterior
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 4000 })
+  } finally {
+    guardandoSeguridad.value = false
+  }
+}
+
 async function copiarUrl() {
   if (!serverUrl.value) return
   copiando.value = true
@@ -98,7 +136,10 @@ async function limpiarTodosLosDatos() {
   dialogoLimpiar.value = false
 }
 
-onMounted(cargarServerUrl)
+onMounted(() => {
+  cargarServerUrl()
+  cargarSeguridad()
+})
 </script>
 
 <template>
@@ -245,6 +286,25 @@ onMounted(cargarServerUrl)
         </div>
 
         <div class="space-y-5">
+          <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-5 space-y-4">
+            <h3 class="font-semibold flex items-center gap-2 text-sm">
+              <i class="pi pi-shield text-primary"></i>
+              Seguridad de Acceso
+            </h3>
+
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Pedir clave al abrir TMPOS</p>
+                <p class="text-xs text-surface-400">Solicita nuevamente el PIN o la contrasena despues de cerrar la aplicacion.</p>
+              </div>
+              <InputSwitch
+                :modelValue="solicitarClaveAlAbrir"
+                :disabled="guardandoSeguridad"
+                @update:modelValue="guardarSeguridad"
+              />
+            </div>
+          </div>
+
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-5 space-y-4">
             <h3 class="font-semibold flex items-center gap-2 text-sm">
               <i class="pi pi-cog text-primary"></i>

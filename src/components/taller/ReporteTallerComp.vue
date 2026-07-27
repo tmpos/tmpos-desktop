@@ -10,11 +10,13 @@ import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import { useAuthStore } from '@/stores/auth.store'
+import * as XLSX from 'xlsx'
 
 const toast = useToast()
 const auth = useAuthStore()
 const loading = ref(false)
 const generandoPdf = ref(false)
+const generandoExcel = ref(false)
 const dialogPdf = ref(false)
 const pdfUrl = ref('')
 const pdfNombre = ref('')
@@ -137,17 +139,17 @@ function buildReporteTallerHtml(emp: any, fechaActual: string, fmtNum: (n: numbe
 
   <div class="section">Resumen operativo</div>
   <table class="cards"><tr>
-    <td class="card"><div class="label">Ordenes</div><div class="value">${resumen.value.total}</div></td>
-    <td class="card amber"><div class="label">Pendientes</div><div class="value">${resumen.value.pendientes}</div></td>
-    <td class="card blue"><div class="label">En proceso</div><div class="value">${resumen.value.enProgreso}</div></td>
-    <td class="card green"><div class="label">Completadas</div><div class="value">${resumen.value.completadas}</div></td>
+    <td class="card"><div class="label">Ordenes</div><div class="value">${resumenFiltrado.value.total}</div></td>
+    <td class="card amber"><div class="label">Pendientes</div><div class="value">${resumenFiltrado.value.pendientes}</div></td>
+    <td class="card blue"><div class="label">En proceso</div><div class="value">${resumenFiltrado.value.enProgreso}</div></td>
+    <td class="card green"><div class="label">Completadas</div><div class="value">${resumenFiltrado.value.completadas}</div></td>
   </tr></table>
 
   <div class="section">Resumen financiero</div>
   <table class="cards"><tr>
-    <td class="card"><div class="label">Ingresos</div><div class="value">RD$ ${fmtNum(resumen.value.ingresos)}</div></td>
-    <td class="card"><div class="label">Costo piezas</div><div class="value">RD$ ${fmtNum(resumen.value.costoPiezas)}</div></td>
-    <td class="card green"><div class="label">Ganancia</div><div class="value">RD$ ${fmtNum(resumen.value.ganancia)}</div></td>
+    <td class="card"><div class="label">Ingresos</div><div class="value">RD$ ${fmtNum(resumenFiltrado.value.ingresos)}</div></td>
+    <td class="card"><div class="label">Costo piezas</div><div class="value">RD$ ${fmtNum(resumenFiltrado.value.costoPiezas)}</div></td>
+    <td class="card green"><div class="label">Ganancia</div><div class="value">RD$ ${fmtNum(resumenFiltrado.value.ganancia)}</div></td>
   </tr></table>
 
   <div class="section">Ordenes por estado</div>
@@ -202,6 +204,20 @@ const ordenesFiltradas = computed(() => {
     data = data.filter(o => o.tecnico === tecnicoFiltro.value)
   }
   return data
+})
+
+const resumenFiltrado = computed(() => {
+  const data = ordenesFiltradas.value
+  const completadas = data.filter(o => o.estado === 'COMPLETADO' || o.estado === 'ENTREGADO')
+  return {
+    total: data.length,
+    pendientes: data.filter(o => o.estado === 'RECIBIDO' || o.estado === 'PENDIENTE').length,
+    enProgreso: data.filter(o => o.estado === 'EN PROCESO').length,
+    completadas: completadas.length,
+    ingresos: data.reduce((s, o) => s + Number(o.total || 0), 0),
+    costoPiezas: data.reduce((s, o) => s + Number(o.precio_pieza || 0), 0),
+    ganancia: completadas.reduce((s, o) => s + Number(o.beneficio_empresa || 0), 0),
+  }
 })
 
 const ordenesPorEstado = computed(() => {
@@ -335,6 +351,133 @@ async function generarPDF() {
   }
 }
 
+function textoPeriodo(): string {
+  if (periodo.value === 'mes') return 'Este mes'
+  if (periodo.value === 'rango' && fechaDesde.value && fechaHasta.value) {
+    return `${fechaDesde.value.toLocaleDateString('es-DO')} - ${fechaHasta.value.toLocaleDateString('es-DO')}`
+  }
+  return 'Todos los registros'
+}
+
+async function generarExcel() {
+  if (!ordenesFiltradas.value.length) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Sin datos',
+      detail: 'No hay órdenes que coincidan con los filtros seleccionados.',
+      life: 3000,
+    })
+    return
+  }
+
+  generandoExcel.value = true
+  try {
+    const resEmp = await window.db.getAll('empresa')
+    const empresa = resEmp.success && resEmp.data?.length ? resEmp.data[0] : {}
+    const fechaGeneracion = new Date().toLocaleString('es-DO')
+
+    const resumenRows: (string | number)[][] = [
+      [empresa.nombre || 'MI EMPRESA'],
+      ['REPORTE DE TALLER'],
+      ['Período', textoPeriodo()],
+      ['Técnico', tecnicoFiltro.value || 'Todos'],
+      ['Generado', fechaGeneracion],
+      ['Usuario', auth.user?.nombre || '-'],
+      [],
+      ['RESUMEN OPERATIVO'],
+      ['Indicador', 'Valor'],
+      ['Órdenes', resumenFiltrado.value.total],
+      ['Pendientes', resumenFiltrado.value.pendientes],
+      ['En proceso', resumenFiltrado.value.enProgreso],
+      ['Completadas', resumenFiltrado.value.completadas],
+      [],
+      ['RESUMEN FINANCIERO'],
+      ['Concepto', 'Monto (RD$)'],
+      ['Ingresos', resumenFiltrado.value.ingresos],
+      ['Costo de piezas', resumenFiltrado.value.costoPiezas],
+      ['Ganancia', resumenFiltrado.value.ganancia],
+      [],
+      ['ÓRDENES POR ESTADO'],
+      ['Estado', 'Cantidad'],
+      ...ordenesPorEstado.value.map(item => [item.estado, item.cantidad]),
+    ]
+
+    const detalleRows = ordenesFiltradas.value.map((orden, index) => ({
+      '#': index + 1,
+      'No. orden': orden.no_orden || '',
+      'Fecha entrada': orden.fecha_entrada || '',
+      'Fecha entrega': orden.fecha_entrega || '',
+      Cliente: orden.nombre || '',
+      Teléfono: orden.telefono || '',
+      Equipo: orden.equipo || '',
+      'Marca / Modelo': orden.marca_modelo || '',
+      IMEI: orden.imei || '',
+      Serial: orden.serial || '',
+      Técnico: orden.tecnico || '',
+      Estado: orden.estado || '',
+      'Costo piezas': Number(orden.precio_pieza || 0),
+      'Mano de obra': Number(orden.mano_obra || 0),
+      Abono: Number(orden.abono || 0),
+      Pendiente: Number(orden.pendiente || 0),
+      Total: Number(orden.total || 0),
+      'Ganancia empresa': Number(orden.beneficio_empresa || 0),
+    }))
+
+    const workbook = XLSX.utils.book_new()
+    const resumenSheet = XLSX.utils.aoa_to_sheet(resumenRows)
+    const detalleSheet = XLSX.utils.json_to_sheet(detalleRows)
+
+    resumenSheet['!cols'] = [{ wch: 28 }, { wch: 24 }]
+    resumenSheet['!merges'] = [
+      XLSX.utils.decode_range('A1:B1'),
+      XLSX.utils.decode_range('A2:B2'),
+      XLSX.utils.decode_range('A8:B8'),
+      XLSX.utils.decode_range('A15:B15'),
+      XLSX.utils.decode_range('A21:B21'),
+    ]
+    resumenSheet['!autofilter'] = { ref: `A22:B${Math.max(22, 22 + ordenesPorEstado.value.length)}` }
+
+    detalleSheet['!cols'] = [
+      { wch: 6 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 24 }, { wch: 16 },
+      { wch: 20 }, { wch: 22 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 16 },
+      { wch: 15 }, { wch: 15 }, { wch: 13 }, { wch: 13 }, { wch: 15 }, { wch: 18 },
+    ]
+    detalleSheet['!autofilter'] = { ref: detalleSheet['!ref'] || 'A1:R1' }
+
+    for (const cell of ['B17', 'B18', 'B19']) {
+      if (resumenSheet[cell]) resumenSheet[cell].z = '"RD$" #,##0.00'
+    }
+    for (let row = 2; row <= detalleRows.length + 1; row++) {
+      for (const column of ['M', 'N', 'O', 'P', 'Q', 'R']) {
+        const cell = detalleSheet[`${column}${row}`]
+        if (cell) cell.z = '"RD$" #,##0.00'
+      }
+    }
+
+    XLSX.utils.book_append_sheet(workbook, resumenSheet, 'Resumen')
+    XLSX.utils.book_append_sheet(workbook, detalleSheet, 'Órdenes')
+
+    const fechaArchivo = new Date().toISOString().slice(0, 10)
+    XLSX.writeFile(workbook, `Reporte_Taller_${fechaArchivo}.xlsx`, { compression: true })
+    toast.add({
+      severity: 'success',
+      summary: 'Excel generado',
+      detail: `${detalleRows.length} órdenes exportadas correctamente.`,
+      life: 3000,
+    })
+  } catch (error: any) {
+    console.error('Error generando Excel:', error)
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: error?.message || 'No se pudo generar el archivo Excel.',
+      life: 3500,
+    })
+  } finally {
+    generandoExcel.value = false
+  }
+}
+
 function cerrarPdf() {
   if (pdfUrl.value) URL.revokeObjectURL(pdfUrl.value)
   pdfUrl.value = ''
@@ -380,10 +523,13 @@ onMounted(cargarDatos)
         </div>
         <div class="flex items-center gap-2">
           <Select v-model="periodo" :options="[{ label: 'Este Mes', value: 'mes' }, { label: 'Rango', value: 'rango' }, { label: 'Todos', value: 'todo' }]" optionLabel="label" optionValue="value" class="w-28" fluid />
-          <Calendar v-if="periodo === 'rango'" v-model="fechaDesde" placeholder="Desde" dateFormat="dd/mm/yy" fluid showIcon />
-          <Calendar v-if="periodo === 'rango'" v-model="fechaHasta" placeholder="Hasta" dateFormat="dd/mm/yy" fluid showIcon />
-          <Button label="PDF" icon="pi pi-file-pdf" severity="danger" :loading="generandoPdf" @click="generarPDF" />
-          <Button icon="pi pi-refresh" severity="secondary" @click="cargarDatos" />
+          <div v-if="periodo === 'rango'" key="filtros-rango" class="contents">
+            <Calendar v-model="fechaDesde" placeholder="Desde" dateFormat="dd/mm/yy" fluid showIcon />
+            <Calendar v-model="fechaHasta" placeholder="Hasta" dateFormat="dd/mm/yy" fluid showIcon />
+          </div>
+          <Button key="exportar-pdf" label="PDF" icon="pi pi-file-pdf" severity="danger" :loading="generandoPdf" @click="generarPDF" />
+          <Button key="exportar-excel" label="Excel" icon="pi pi-file-excel" severity="success" :loading="generandoExcel" @click="generarExcel" />
+          <Button key="refrescar-reporte" icon="pi pi-refresh" severity="secondary" @click="cargarDatos" />
         </div>
       </div>
 

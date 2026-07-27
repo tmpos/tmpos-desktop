@@ -30,8 +30,9 @@
         <div class="xl:col-span-2 space-y-4">
           <div class="p-5 rounded-xl text-white" :style="{ background: 'linear-gradient(135deg, #065f46, #047857)' }">
             <div class="flex items-center gap-2 text-sm opacity-90 mb-1"><i class="pi pi-money-bill"></i>Efectivo en Caja</div>
-            <div class="text-3xl font-extrabold mb-3">{{ formatMoney(efectivoEsperado) }}</div>
-            <div class="border-t border-white/20 pt-3 space-y-1 text-sm opacity-90">
+            <div v-if="!auth.isCajero" class="text-3xl font-extrabold mb-3">{{ formatMoney(efectivoEsperado) }}</div>
+            <div v-else class="text-lg font-bold mb-3 flex items-center gap-2"><i class="pi pi-eye-slash"></i>Oculto hasta declarar el conteo</div>
+            <div v-if="!auth.isCajero" class="border-t border-white/20 pt-3 space-y-1 text-sm opacity-90">
               <div class="flex justify-between"><span>Inicial:</span><span>{{ formatMoney(turnoActual.monto_inicial) }}</span></div>
               <div class="flex justify-between"><span>+ Ventas efectivo:</span><span class="text-green-300">{{ formatMoney(resumenVentas.efectivo) }}</span></div>
               <div class="flex justify-between"><span>+ Entradas:</span><span class="text-green-300">{{ formatMoney(turnoActual.entradas || 0) }}</span></div>
@@ -211,7 +212,7 @@
 
     <Dialog v-model:visible="showCierreModal" header="Conteo de Cierre de Caja" modal :style="{ width: '90%', maxWidth: '520px' }" :closable="!cerrandoTurno">
       <div class="flex flex-col gap-5">
-        <div class="rounded-xl bg-surface-50 dark:bg-surface-700/30 border border-surface-200 dark:border-surface-700 p-4">
+        <div v-if="!esCierreCiego || cierreRevelado" class="rounded-xl bg-surface-50 dark:bg-surface-700/30 border border-surface-200 dark:border-surface-700 p-4">
           <div class="flex justify-between items-end">
             <div>
               <span class="text-xs text-surface-500">Efectivo esperado</span>
@@ -229,6 +230,16 @@
             </span>
           </div>
         </div>
+        <div v-else class="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 p-4">
+          <div class="flex gap-3">
+            <i class="pi pi-shield text-blue-600 text-xl mt-0.5"></i>
+            <div>
+              <p class="font-semibold text-blue-900 dark:text-blue-100">Cierre ciego activado</p>
+              <p class="text-sm text-blue-700 dark:text-blue-300">Cuenta todo el efectivo y declara el resultado. El monto esperado y la diferencia se mostrarán después.</p>
+              <p class="text-xl font-bold mt-3">Declarado: {{ formatMoney(totalConteo) }}</p>
+            </div>
+          </div>
+        </div>
 
         <div>
           <h4 class="text-xs font-semibold text-surface-500 uppercase tracking-wider mb-2">Billetes</h4>
@@ -240,6 +251,7 @@
                   v-model.number="conteo[d.valor]"
                   type="number"
                   min="0"
+                  :disabled="cierreRevelado"
                   placeholder="0"
                   class="w-full h-10 px-2 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-700/50 text-sm text-center font-bold outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                 />
@@ -259,6 +271,7 @@
                   v-model.number="conteo[d.valor]"
                   type="number"
                   min="0"
+                  :disabled="cierreRevelado"
                   placeholder="0"
                   class="w-full h-10 px-2 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-700/50 text-sm text-center font-bold outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                 />
@@ -270,7 +283,11 @@
       </div>
       <template #footer>
         <button @click="showCierreModal = false" :disabled="cerrandoTurno" class="px-4 py-2 rounded-lg text-sm font-medium border border-surface-300 dark:border-surface-600 hover:bg-surface-100 dark:hover:bg-surface-700 disabled:opacity-50">Cancelar</button>
-        <button @click="showCierreModal = false; cerrarTurno()" :disabled="cerrandoTurno" class="px-4 py-2 rounded-lg text-white text-sm font-semibold bg-red-500 hover:bg-red-600 disabled:opacity-50 flex items-center gap-2">
+        <button v-if="esCierreCiego && !cierreRevelado" @click="declararConteo" :disabled="cerrandoTurno" class="px-4 py-2 rounded-lg text-white text-sm font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+          <i class="pi pi-lock"></i>
+          Declarar conteo
+        </button>
+        <button v-else @click="showCierreModal = false; cerrarTurno()" :disabled="cerrandoTurno" class="px-4 py-2 rounded-lg text-white text-sm font-semibold bg-red-500 hover:bg-red-600 disabled:opacity-50 flex items-center gap-2">
           <i class="pi" :class="cerrandoTurno ? 'pi-spin pi-spinner' : 'pi-times-circle'"></i>
           {{ cerrandoTurno ? 'Cerrando...' : 'Confirmar Cierre de Turno' }}
         </button>
@@ -300,6 +317,8 @@ const ultimasVentas = ref([])
 const cerrandoTurno = ref(false)
 
 const showCierreModal = ref(false)
+const cierreRevelado = ref(false)
+const esCierreCiego = computed(() => Boolean(auth.isCajero))
 const denominaciones = [
   { valor: 2000, label: '$2,000', tipo: 'billete' },
   { valor: 1000, label: '$1,000', tipo: 'billete' },
@@ -795,6 +814,71 @@ function construirEmailCierre(data) {
   </body></html>`
 }
 
+function construirDatosApiCierre(data) {
+  const texto = (value, limite = 160) => String(value || '').trim().slice(0, limite)
+  const totalContado = Object.entries(data.conteo || {})
+    .reduce((sum, [valor, cantidad]) => sum + (Number(valor) * Number(cantidad || 0)), 0)
+  const mapVenta = venta => ({
+    numero: texto(venta.no_factura || venta.id, 60),
+    cliente: texto(venta.nombre_cliente || 'Cliente General'),
+    metodo_pago: texto(venta.metodo_pago || 'EFECTIVO', 60),
+    total: Number(venta.total || 0),
+    fecha: texto(venta.created_at, 40),
+  })
+  const mapGasto = gasto => ({
+    descripcion: texto(gasto.comentario || gasto.descripcion || 'Gasto'),
+    metodo_pago: texto(gasto.metodo_pago || 'EFECTIVO', 60),
+    monto: Number(gasto.cantidad || gasto.monto || 0),
+    fecha: texto(gasto.created_at, 40),
+  })
+  const mapMovimiento = movimiento => ({
+    tipo: texto(movimiento.tipo, 40).toUpperCase(),
+    descripcion: texto(movimiento.descripcion),
+    monto: Number(movimiento.monto || 0),
+    fecha: texto(movimiento.created_at, 40),
+  })
+
+  return {
+    company_name: texto(data.empresa.nombre || data.empresa.legal || 'TMPOS SRL'),
+    company_legal_name: texto(data.empresa.legal),
+    company_rnc: texto(data.empresa.rnc, 40),
+    company_phone: texto(data.empresa.telefono, 60),
+    company_address: texto(data.empresa.direccion, 240),
+    shift_id: Number(data.turno.id || 0),
+    cashier: texto(data.turno.usuario_nombre || localStorage.getItem('mr_user_usuario') || 'Usuario'),
+    opened_at: texto(data.turno.created_at, 40),
+    closed_at: texto(data.cerradoEn, 40),
+    duration: texto(data.duracion, 40),
+    opening_amount: Number(data.turno.monto_inicial || 0),
+    sales_count: Number(data.resumen.cantidad || data.ventas.length || 0),
+    sales_total: Number(data.resumen.total || 0),
+    cash_sales: Number(data.resumen.efectivo || 0),
+    card_sales: Number(data.resumen.tarjeta || 0),
+    transfer_sales: Number(data.resumen.transferencia || 0),
+    entries_total: Number(data.totalEntradas || 0),
+    expenses_total: Number(data.totalGastos || 0),
+    withdrawals_total: Number(data.totalRetiros || 0),
+    expected_cash: Number(data.efectivoEsperado || 0),
+    counted_cash: totalContado,
+    difference: totalContado - Number(data.efectivoEsperado || 0),
+    observation: texto(data.turno.observacion, 500),
+    details_truncated: data.ventas.length > 50 || data.gastos.length > 50 || (data.entradas.length + data.retiros.length) > 50,
+    sales: data.ventas.slice(0, 50).map(mapVenta),
+    expenses: data.gastos.slice(0, 50).map(mapGasto),
+    movements: [...data.entradas, ...data.retiros]
+      .sort((a, b) => parseDbDate(a.created_at) - parseDbDate(b.created_at))
+      .slice(0, 50)
+      .map(mapMovimiento),
+    cash_count: Object.entries(data.conteo || {})
+      .filter(([, cantidad]) => Number(cantidad) > 0)
+      .map(([denomination, quantity]) => ({
+        denomination: Number(denomination),
+        quantity: Number(quantity),
+        total: Number(denomination) * Number(quantity),
+      })),
+  }
+}
+
 const totalConteo = computed(() => {
   let total = 0
   for (const d of denominaciones) {
@@ -807,15 +891,28 @@ const totalConteo = computed(() => {
 function abrirCierreTurno() {
   if (!turnoActual.value) return
   conteo.value = {}
+  cierreRevelado.value = !esCierreCiego.value
   showCierreModal.value = true
+}
+
+function declararConteo() {
+  cierreRevelado.value = true
 }
 
 async function cerrarTurno() {
   if (cerrandoTurno.value || !turnoActual.value) return
+  if (esCierreCiego.value && !cierreRevelado.value) return
   cerrandoTurno.value = true
   try {
     const cierre = await obtenerResumenCierre()
-    const resultadoCierre = await window.db.update('caja_turnos', cierre.turno.id, { estado: 'cerrado' })
+    const diferencia = totalConteo.value - cierre.efectivoEsperado
+    const resultadoCierre = await window.db.update('caja_turnos', cierre.turno.id, {
+      estado: 'cerrado',
+      monto_final: totalConteo.value,
+      efectivo_esperado: cierre.efectivoEsperado,
+      diferencia,
+      cierre_ciego: esCierreCiego.value ? 1 : 0,
+    })
     if (!resultadoCierre.success) throw new Error(resultadoCierre.error || 'No se pudo cerrar el turno')
 
     await window.electron.invoke('cuadre:realizar', {
@@ -828,17 +925,23 @@ async function cerrarTurno() {
       transferencia: cierre.resumen.transferencia,
       total_gastos: cierre.totalGastos,
       saldo_final: cierre.efectivoEsperado,
+      efectivo_esperado: cierre.efectivoEsperado,
+      efectivo_contado: totalConteo.value,
+      diferencia,
+      cierre_ciego: esCierreCiego.value ? 1 : 0,
       observacion: '',
     })
 
     const ticketHtml = construirTicketCierre(cierre)
     const emailHtml = construirEmailCierre(cierre)
+    const apiData = construirDatosApiCierre(cierre)
     const [impresionResult, correoResult] = await Promise.allSettled([
       window.electron.invoke('print:ticket', ticketHtml, cierre.impresora.printer_name || undefined),
       window.electron.invoke('enviar:cierreCaja', {
         toEmail: cierre.empresa.email || cierre.correo.email || '',
         subject: `Cierre de caja #${cierre.turno.id} - ${cierre.empresa.nombre || 'TMPOS SRL'}`,
         html: emailHtml,
+        data: apiData,
       }),
     ])
     const impresion = impresionResult.status === 'fulfilled'
@@ -852,7 +955,9 @@ async function cerrarTurno() {
     await cargarDatos()
     const mensajes = ['Turno cerrado correctamente.']
     mensajes.push(impresion?.success ? 'Ticket enviado a la impresora.' : `No se pudo imprimir: ${impresion?.error || 'Error desconocido'}`)
-    mensajes.push(correo?.success ? `Reporte enviado a ${correo.toEmail || cierre.empresa.email || cierre.correo.email}.` : `No se pudo enviar el correo: ${correo?.error || 'Error desconocido'}`)
+    mensajes.push(correo?.success
+      ? `${correo.queued ? 'Reporte encolado' : 'Reporte enviado'} a ${correo.toEmail || cierre.empresa.email || cierre.correo.email} mediante ${correo.provider || 'correo'}.`
+      : `No se pudo enviar el correo: ${correo?.error || 'Error desconocido'}`)
     alert(mensajes.join('\n'))
     auth.logout()
     await router.replace('/login')

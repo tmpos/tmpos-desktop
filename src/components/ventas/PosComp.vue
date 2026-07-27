@@ -5529,7 +5529,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
             </div>
           </div>
 
-          <div class="sticky bottom-0 border-t border-surface-200/50 dark:border-surface-700/50 rounded-b-xl">
+          <div class="pos-cart-summary sticky bottom-0 z-20 border-t border-surface-200/50 dark:border-surface-700/50 rounded-b-xl shadow-[0_-8px_20px_-16px_rgba(15,23,42,0.45)]">
             <div class="hidden lg:block px-4 py-2.5 space-y-1 border-b border-surface-200/50 dark:border-surface-700/30">
               <div class="flex justify-between text-xs"><span class="text-surface-500">Subtotal</span><span class="font-medium text-surface-800 dark:text-surface-100">${{ formatCurrency(subtotal) }}</span></div>
               <div class="flex items-center justify-between gap-2"><span class="text-xs text-surface-500 flex-shrink-0">Descuento</span><Button :label="descuento > 0 ? '$' + formatCurrency(descuento) : 'Agregar'" :severity="descuento > 0 ? 'warning' : 'secondary'" text size="small" class="!text-xs" @click="abrirDialogDescuento" /></div>
@@ -7402,16 +7402,22 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
     <!-- ==================== CAJA: CIERRE ==================== -->
     <Dialog v-model:visible="caja.dialogCierreCaja" header="Cierre de caja" modal :style="{ width: 'min(30rem, 95vw)' }">
       <div class="space-y-4 pt-2">
-        <div class="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3 text-sm space-y-1">
-          <p class="font-semibold">Resumen del turno</p>
-          <p class="text-xs text-surface-500">Apertura: RD$ {{ formatCurrency(caja.turnoActivo?.monto_inicial || 0) }}</p>
-          <p class="text-xs text-surface-500">Sugerido: RD$ {{ formatCurrency(caja.sugerirMontoCierre()) }}</p>
+        <div class="rounded-lg border p-3 text-sm space-y-1" :class="caja.cierreRevelado ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800' : 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'">
+          <p class="font-semibold">{{ caja.cierreRevelado ? 'Resultado del conteo' : 'Cierre ciego' }}</p>
+          <template v-if="caja.cierreRevelado">
+            <p class="text-xs text-surface-500">Esperado: RD$ {{ formatCurrency(caja.sugerirMontoCierre()) }}</p>
+            <p class="text-xs font-semibold" :class="caja.montoFinal === caja.sugerirMontoCierre() ? 'text-green-600' : 'text-red-600'">
+              Diferencia: RD$ {{ formatCurrency(caja.montoFinal - caja.sugerirMontoCierre()) }}
+            </p>
+          </template>
+          <p v-else class="text-xs text-surface-500">Declara primero el efectivo contado. El esperado permanece oculto.</p>
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm font-semibold">Monto final (RD$)</label>
-          <InputNumber v-model="caja.montoFinal" :min="0" fluid @focus="(e) => e.target.select()" />
+          <InputNumber v-model="caja.montoFinal" :min="0" :disabled="caja.cierreRevelado" fluid @focus="(e) => e.target.select()" />
         </div>
-        <Button label="Cerrar turno" icon="pi pi-check" :loading="caja.cargandoTurno" @click="caja.cerrarTurno(); sonidos.playCashRegister()" />
+        <Button v-if="!caja.cierreRevelado" label="Declarar monto" icon="pi pi-lock" @click="caja.declararMontoFinal()" />
+        <Button v-else label="Confirmar cierre" icon="pi pi-check" severity="danger" :loading="caja.cargandoTurno" @click="caja.cerrarTurno(); sonidos.playCashRegister()" />
       </div>
       <template #footer><Button label="Volver" severity="secondary" text @click="caja.dialogCierreCaja = false; caja.dialogAperturaCaja = true" /></template>
     </Dialog>
@@ -7828,6 +7834,17 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
 </template>
 
 <style scoped>
+.pos-cart-summary {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  opacity: 1;
+  isolation: isolate;
+}
+
+:global(.dark) .pos-cart-summary {
+  background-color: #1f2937 !important;
+}
+
 .backface-hidden {
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;

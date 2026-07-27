@@ -163,16 +163,23 @@ function timestamp(row: any): string {
   return String(row?.updated_at || row?.created_at || '')
 }
 
-function sameData(a: any, b: any): boolean {
-  const clean = (row: any) => {
-    const value = { ...row }
-    delete value.id
-    delete value._rowId
-    delete value.created_at
-    delete value.updated_at
-    return value
+// El esquema local tiene columnas legado que el servidor no conoce (campos
+// viejos de una integracion anterior, siempre null). Antes se comparaban los
+// dos objetos completos con JSON.stringify, asi que esas columnas de mas
+// hacian que CUALQUIER fila descargada pareciera "distinta" aunque nada
+// hubiera cambiado realmente -- por eso una sincronizacion podia reportar
+// "144 imei actualizados" sin que el usuario hubiera tocado nada. Ahora solo
+// se comparan los campos que realmente vienen en la fila del servidor.
+const IGNORED_COMPARE_FIELDS = new Set(['id', '_rowId', 'created_at', 'updated_at'])
+
+function sameData(existing: any, incoming: any): boolean {
+  for (const key of Object.keys(incoming || {})) {
+    if (IGNORED_COMPARE_FIELDS.has(key)) continue
+    const local = existing?.[key] ?? null
+    const remote = incoming[key] ?? null
+    if (String(local) !== String(remote)) return false
   }
-  return JSON.stringify(clean(a)) === JSON.stringify(clean(b))
+  return true
 }
 
 interface CloudSyncChanges {
@@ -182,6 +189,13 @@ interface CloudSyncChanges {
   deleted: Array<{ uid: string } | string>
 }
 
+// Devuelve null cuando la descarga realmente fallo (error de red, servidor
+// caido, respuesta invalida) para que el llamador NO avance la marca de
+// "ultimo_sync_tm". Si esa marca avanzara igual en un fallo, un borrado o
+// cambio ocurrido justo en ese momento quedaria fuera de rango en el
+// proximo "since" y nunca se volveria a descargar (revive/queda "pegado").
+// Solo se devuelve {} cuando el servidor confirmo una respuesta valida sin
+// cambios pendientes.
 async function fetchCloudSyncAll(since?: string): Promise<Record<string, CloudSyncChanges> | null> {
   const api = tmc.getCloudApi()
   if (!api) throw new Error('TM Cloud no configurado')
@@ -191,9 +205,7 @@ async function fetchCloudSyncAll(since?: string): Promise<Record<string, CloudSy
   try {
     const res = await fetch(url, { headers: tmc.authHeaders(api.key) })
     if (!res.ok) {
-      if (res.status === 404) return null
-      if (res.status === 400 || res.status === 429) return {}
-      throw new Error(await tmc.responseError(res))
+      return null
     }
     const json = await res.json()
     // Try various possible response shapes:
@@ -201,9 +213,9 @@ async function fetchCloudSyncAll(since?: string): Promise<Record<string, CloudSy
     //   2. { data: { changes: { table: { updated, deleted } } } }
     //   3. { data: { table: { updated, deleted } } }
     const raw = json.changes || json.data?.changes || json.data
-    if (!raw || typeof raw !== 'object') return {}
+    if (!raw || typeof raw !== 'object') return null
     return raw as Record<string, CloudSyncChanges>
-  } catch { return {} }
+  } catch { return null }
 }
 
 async function fetchCloudRows(tabla: string, since?: string): Promise<any[]> {
@@ -347,7 +359,10 @@ async function applyRealtimeChange(payload: any): Promise<void> {
 
   if (event === 'record.deleted') {
     const local = (await getLocalRows(tabla)).find((row: any) => row.uid === recordUid)
-    if (local) await deleteLocalFromRealtime(tabla, local.id)
+    if (local) {
+      await deleteLocalFromRealtime(tabla, local.id)
+      window.dispatchEvent(new CustomEvent('tmcloud:table-changed', { detail: { table: tabla, updated: 0, deleted: 1 } }))
+    }
     notify({ running: false, tabla, progreso: `Realtime DELETE ${tabla}`, realtime: true })
     return
   }
@@ -356,6 +371,7 @@ async function applyRealtimeChange(payload: any): Promise<void> {
     const action = await upsertLocal(tabla, record)
     if (action === 'inserted' || action === 'updated') {
       notifyLocalRealtimeChange(event === 'record.created' ? 'INSERT' : 'UPDATE', tabla, recordUid)
+      window.dispatchEvent(new CustomEvent('tmcloud:table-changed', { detail: { table: tabla, updated: 1, deleted: 0 } }))
     }
     notify({ running: false, tabla, progreso: `Realtime ${event} ${tabla}`, realtime: true })
   }
@@ -554,6 +570,11 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
   await syncDeletes()
 
   // --- DOWNLOAD from cloud (single call for ALL tables) ---
+  // Si la descarga falla (red, servidor, respuesta invalida), downloadOk queda
+  // en false y "ultimo_sync_tm" NO avanza: sin esto, un fallo puntual dejaba
+  // el proximo "since" mas adelante en el tiempo que un borrado/cambio real,
+  // y ese cambio jamas volvia a aparecer en ningun sync futuro.
+  let downloadOk = true
   if (incremental) {
     // En la primera sincronizacion no existe marca local. Consultar desde el
     // inicio permite descargar el proyecto antes de intentar subir defaults.
@@ -563,6 +584,7 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
         for (const [tabla, change] of Object.entries(changes)) {
           if (LOCAL_SYSTEM_TABLES.includes(tabla)) continue
           let tabDownloaded = 0
+          let tabDeleted = 0
           let tabErrors = 0
           // Se cargan las filas locales de esta tabla una sola vez y se
           // reutilizan para cada fila actualizada/borrada del lote, en vez de
@@ -581,19 +603,30 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
             if (!uid) continue
             try {
               const local = localByUid.get(uid)
-              if (local) await (window as any).db.delete(tabla, local.id)
+              if (local) { await (window as any).db.delete(tabla, local.id); tabDeleted++ }
             } catch { tabErrors++ }
           }
-          if (tabDownloaded > 0 || tabErrors > 0) {
+          if (tabDownloaded > 0 || tabDeleted > 0 || tabErrors > 0) {
             details.push({ tabla, downloaded: tabDownloaded, uploaded: 0, errors: tabErrors })
             totalDownloaded += tabDownloaded
             totalErrors += tabErrors
           }
+          // Avisa a los componentes visibles que tengan datos de esta tabla
+          // para que se refresquen solos (ver useCloudRefresh), en vez de
+          // esperar a que el usuario cambie de pantalla o recargue la app.
+          if (tabDownloaded > 0 || tabDeleted > 0) {
+            window.dispatchEvent(new CustomEvent('tmcloud:table-changed', {
+              detail: { table: tabla, updated: tabDownloaded, deleted: tabDeleted },
+            }))
+          }
         }
         notify({ running: true, progreso: `Descarga completada (${totalDownloaded} cambios)`, mode })
       } else {
-        // bulk endpoint not available (404) — skip download entirely
-        notify({ running: true, progreso: 'Bulk sync no disponible', mode })
+        // Fallo la descarga (red, servidor, endpoint no disponible, etc.):
+        // no se avanza la marca de sincronizacion, se reintentara en el
+        // proximo ciclo desde el mismo punto.
+        downloadOk = false
+        notify({ running: true, progreso: 'No se pudo descargar cambios; se reintentara', mode })
       }
   }
 
@@ -635,12 +668,18 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
         totalUploaded += ups
         totalErrors += result.errors
       }
+      // Igual que con la descarga: si hubo errores no se avanza la marca de
+      // subida de esta tabla, para que esas filas se reintenten en el
+      // proximo ciclo en vez de quedar "atrapadas" detras del watermark.
+      if (result.errors > 0) continue
       await setConfigValue(`last_sync_${tabla}`, completedAt)
     }
   }
 
   await syncDeletes()
-  await setConfigValue('ultimo_sync_tm', completedAt)
+  if (downloadOk) {
+    await setConfigValue('ultimo_sync_tm', completedAt)
+  }
   onSyncComplete?.(details)
 
   const result: SyncResult = {

@@ -262,6 +262,10 @@ function navigate(path: string) {
   router.push(path)
 }
 
+function irACaja() {
+  router.push({ path: '/contabilidad', query: { tab: 'caja' } })
+}
+
 async function cerrarSesion() {
   try {
     await window.electron.invoke('backup:create')
@@ -351,6 +355,17 @@ onUnmounted(() => {
         </div>
 
         <div class="topbar-end">
+          <button
+            v-if="auth.isCajero"
+            type="button"
+            class="cashier-caja-btn"
+            :class="{ 'cashier-caja-btn-active': route.path === '/contabilidad' && route.query.tab === 'caja' }"
+            title="Ir a Caja"
+            @click="irACaja"
+          >
+            <i class="pi pi-calculator"></i>
+            <span>Caja</span>
+          </button>
           <div class="relative">
             <button class="action-btn" @click="alertasPanelVisible = !alertasPanelVisible" title="Alertas">
               <i class="pi pi-bell action-icon" :class="alertas.length > 0 ? 'text-amber-400' : ''"></i>
@@ -655,6 +670,30 @@ onUnmounted(() => {
   align-items: center;
   gap: 0.35rem;
   flex-shrink: 0;
+}
+
+.cashier-caja-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.35rem;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid rgba(16, 185, 129, 0.55);
+  border-radius: 0.65rem;
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.cashier-caja-btn:hover,
+.cashier-caja-btn-active {
+  background: #059669;
+  border-color: #059669;
+  color: #fff;
+  transform: translateY(-1px);
 }
 
 .action-btn {

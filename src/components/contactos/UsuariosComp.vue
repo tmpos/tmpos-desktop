@@ -31,6 +31,8 @@ const deleteOtpLoading = ref(false)
 const deleteOtpConfirmando = ref(false)
 const isEditing = ref(false)
 const selectedUsuario = ref<any>(null)
+const selectedUsuarios = ref<any[]>([])
+const usuariosPendientesEliminar = ref<any[]>([])
 const busqueda = ref('')
 
 const roles = computed(() => {
@@ -134,6 +136,15 @@ function abrirEditar(usuario: any) {
 
 function confirmarBorrar(usuario: any) {
   selectedUsuario.value = usuario
+  usuariosPendientesEliminar.value = [usuario]
+  resetDeleteOtp()
+  deleteDialogVisible.value = true
+}
+
+function confirmarBorrarSeleccionados() {
+  if (!selectedUsuarios.value.length) return
+  usuariosPendientesEliminar.value = [...selectedUsuarios.value]
+  selectedUsuario.value = usuariosPendientesEliminar.value[0] || null
   resetDeleteOtp()
   deleteDialogVisible.value = true
 }
@@ -147,18 +158,27 @@ function resetDeleteOtp() {
   deleteOtpConfirmando.value = false
 }
 
+function cancelarBorrado() {
+  deleteDialogVisible.value = false
+  usuariosPendientesEliminar.value = []
+  resetDeleteOtp()
+}
+
 async function solicitarOtpEliminarUsuario() {
-  if (!selectedUsuario.value) return
+  if (!usuariosPendientesEliminar.value.length) return
+  const ids = usuariosPendientesEliminar.value.map(usuario => Number(usuario.id)).filter(Boolean)
   deleteOtpError.value = ''
   deleteOtp.value = ''
   deleteOtpLoading.value = true
   try {
     const res = await window.electron.invoke('facturas:solicitarOtpEliminar', {
-      id: selectedUsuario.value.id,
-      facturaIds: [selectedUsuario.value.id],
-      no_factura: `USUARIO-${selectedUsuario.value.id}`,
-      nombre_cliente: selectedUsuario.value.nombre || selectedUsuario.value.email || 'USUARIO',
-      cantidad: 1,
+      id: ids[0],
+      facturaIds: ids,
+      no_factura: ids.length > 1 ? `USUARIOS-${ids.length}` : `USUARIO-${ids[0]}`,
+      nombre_cliente: ids.length > 1
+        ? `${ids.length} USUARIOS`
+        : usuariosPendientesEliminar.value[0]?.nombre || usuariosPendientesEliminar.value[0]?.email || 'USUARIO',
+      cantidad: ids.length,
       total: 0,
     }) as any
     if (res.success) {
@@ -176,7 +196,8 @@ async function solicitarOtpEliminarUsuario() {
 }
 
 async function confirmarOtpEliminarUsuario(): Promise<boolean> {
-  if (!selectedUsuario.value) return false
+  if (!usuariosPendientesEliminar.value.length) return false
+  const ids = usuariosPendientesEliminar.value.map(usuario => Number(usuario.id)).filter(Boolean)
   const codigo = String(deleteOtp.value || '').replace(/\D/g, '')
   if (!/^\d{4}$/.test(codigo)) {
     deleteOtpError.value = 'Introduce el codigo de 4 digitos'
@@ -186,8 +207,8 @@ async function confirmarOtpEliminarUsuario(): Promise<boolean> {
   deleteOtpError.value = ''
   try {
     const res = await window.electron.invoke('facturas:confirmarOtpEliminar', {
-      facturaId: selectedUsuario.value.id,
-      facturaIds: [selectedUsuario.value.id],
+      facturaId: ids[0],
+      facturaIds: ids,
       codigo,
     }) as any
     if (!res.success) {
@@ -281,14 +302,31 @@ async function guardar() {
 async function borrar() {
   if (!await confirmarOtpEliminarUsuario()) return
   try {
-    const res = await window.db.delete('usuarios', selectedUsuario.value.id)
-    if (res.success) {
-      toast.add({ severity: 'success', summary: 'Exito', detail: 'Usuario eliminado', life: 3000 })
+    const resultados = await Promise.all(
+      usuariosPendientesEliminar.value.map(usuario => window.db.delete('usuarios', usuario.id))
+    )
+    const eliminados = resultados.filter(resultado => resultado.success).length
+    const errores = resultados.filter(resultado => !resultado.success).length
+    if (errores) {
+      toast.add({
+        severity: eliminados ? 'warn' : 'error',
+        summary: eliminados ? 'Eliminacion parcial' : 'Error',
+        detail: `${eliminados} eliminado(s), ${errores} no se pudieron eliminar`,
+        life: 4000,
+      })
+      if (!eliminados) return
     } else {
-      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo eliminar', life: 3000 })
-      return
+      toast.add({
+        severity: 'success',
+        summary: 'Exito',
+        detail: eliminados === 1 ? 'Usuario eliminado' : `${eliminados} usuarios eliminados`,
+        life: 3000,
+      })
     }
     deleteDialogVisible.value = false
+    selectedUsuarios.value = []
+    usuariosPendientesEliminar.value = []
+    selectedUsuario.value = null
     resetDeleteOtp()
     await cargarUsuarios()
   } catch (error) {
@@ -352,6 +390,23 @@ onMounted(async () => {
         </div>
       </div>
 
+      <div
+        v-if="viewMode === 'table' && selectedUsuarios.length"
+        class="flex items-center justify-between gap-3 mb-3 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/25 px-3 py-2"
+      >
+        <span class="text-sm font-medium">{{ selectedUsuarios.length }} usuario(s) seleccionado(s)</span>
+        <div class="flex items-center gap-2">
+          <Button
+            label="Eliminar seleccionados"
+            icon="pi pi-trash"
+            severity="danger"
+            size="small"
+            @click="confirmarBorrarSeleccionados"
+          />
+          <Button icon="pi pi-times" severity="secondary" text rounded size="small" v-tooltip="'Limpiar seleccion'" @click="selectedUsuarios = []" />
+        </div>
+      </div>
+
       <DataTable
         v-if="viewMode === 'table'"
         :value="usuariosFiltrados"
@@ -362,7 +417,9 @@ onMounted(async () => {
         :rowsPerPageOptions="[10, 25, 50]"
         dataKey="id"
         responsiveLayout="scroll"
+        v-model:selection="selectedUsuarios"
       >
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column header="Acciones" style="width: 8rem">
           <template #body="{ data }">
             <div class="flex gap-1">
@@ -477,7 +534,12 @@ onMounted(async () => {
       <div class="space-y-4">
         <div class="flex items-center gap-3">
           <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-          <span>Seguro que deseas eliminar <strong>{{ selectedUsuario?.nombre }}</strong>?</span>
+          <span v-if="usuariosPendientesEliminar.length === 1">
+            Seguro que deseas eliminar <strong>{{ usuariosPendientesEliminar[0]?.nombre }}</strong>?
+          </span>
+          <span v-else>
+            Seguro que deseas eliminar los <strong>{{ usuariosPendientesEliminar.length }} usuarios seleccionados</strong>?
+          </span>
         </div>
         <div class="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm text-amber-800 dark:text-amber-200">
           Esta accion requiere el codigo OTP enviado al correo de la empresa.
@@ -489,7 +551,7 @@ onMounted(async () => {
         <p v-if="deleteOtpError" class="text-sm text-red-500">{{ deleteOtpError }}</p>
       </div>
       <template #footer>
-        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false; resetDeleteOtp()" />
+        <Button label="Cancelar" severity="secondary" text @click="cancelarBorrado" />
         <Button
           v-if="!deleteOtpEnviado"
           label="Enviar OTP"
@@ -500,7 +562,7 @@ onMounted(async () => {
         />
         <Button
           v-else
-          label="Confirmar y eliminar"
+          :label="usuariosPendientesEliminar.length > 1 ? 'Eliminar seleccionados' : 'Confirmar y eliminar'"
           icon="pi pi-trash"
           severity="danger"
           :loading="deleteOtpConfirmando"

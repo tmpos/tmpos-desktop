@@ -348,6 +348,7 @@ async function validarAccesoSoporte() {
     auth.isAuthenticated = true
     localStorage.setItem('mr_user_id', soporte.id)
     localStorage.setItem('mr_user_usuario', soporte.usuario || soporte.email || '')
+    auth.markCurrentSessionAuthenticated()
     soporteDialogVisible.value = false
     router.push('/')
   } catch (e: any) {

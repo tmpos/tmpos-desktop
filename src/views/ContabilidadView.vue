@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { shallowRef, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
@@ -18,6 +19,7 @@ import ComprobantesComp from '@/components/contabilidad/ComprobantesComp.vue'
 import ComisionesComp from '@/components/contabilidad/ComisionesComp.vue'
 
 const auth = useAuthStore()
+const route = useRoute()
 
 const allItems: SubMenuItem[] = [
   { label: 'Caja', icon: 'pi pi-calculator', key: 'caja' },
@@ -63,7 +65,8 @@ function primerPermiso(): string {
   return items.value.length > 0 ? items.value[0].key : ''
 }
 
-active.value = primerPermiso()
+const tabRuta = String(route.query.tab || '')
+active.value = items.value.some(item => item.key === tabRuta) ? tabRuta : primerPermiso()
 </script>
 
 <template>

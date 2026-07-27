@@ -1,6 +1,6 @@
 {
   "name": "TMPOS",
-  "version": "2.12.11",
+  "version": "2.12.12",
   "description": "TMPOS Desktop App",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -46,7 +46,8 @@
     "sql.js": "^1.14.1",
     "sweetalert2": "^11.26.24",
     "vue": "^3.5.33",
-    "vue-router": "^5.0.6"
+    "vue-router": "^5.0.6",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@supabase/supabase-js": "^2.106.2",

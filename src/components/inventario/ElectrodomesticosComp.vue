@@ -21,6 +21,7 @@ import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected 
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAuthStore } from '@/stores/auth.store'
+import { useCloudRefresh } from '@/composables/useCloudRefresh'
 
 const toast = useToast()
 const auth = useAuthStore()
@@ -628,6 +629,8 @@ onMounted(async () => {
   const resProv = await window.db.getAll('proveedores')
   if (resProv.success) proveedores.value = resProv.data || []
 })
+
+useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
 </script>
 
 <template>
