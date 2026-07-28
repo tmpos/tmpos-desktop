@@ -546,7 +546,7 @@ function initDatabase(): void {
       if (!columns.includes('id')) {
         const copyColumns = ['nombre', ...requiredColumns].filter(column => columns.includes(column))
         db!.exec(`ALTER TABLE usuarios RENAME TO usuarios_old`)
-        db!.exec(`CREATE TABLE usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,usuario TEXT DEFAULT '',email TEXT DEFAULT '',password TEXT DEFAULT '',pin TEXT DEFAULT '',patron TEXT DEFAULT '',pregunta_secreta TEXT DEFAULT '',respuesta TEXT DEFAULT '',fecha TEXT DEFAULT '',nivel_seguridad TEXT DEFAULT 'Usuario',intentos_login TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVADO',permisos TEXT DEFAULT '',restrinciones TEXT DEFAULT '',porciento TEXT DEFAULT '',imagen TEXT DEFAULT '',rol TEXT DEFAULT 'vendedor',ultimo_acceso TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+        db!.exec(`CREATE TABLE usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,usuario TEXT DEFAULT '',email TEXT DEFAULT '',password TEXT DEFAULT '',pin TEXT DEFAULT '',patron TEXT DEFAULT '',pregunta_secreta TEXT DEFAULT '',respuesta TEXT DEFAULT '',fecha TEXT DEFAULT '',nivel_seguridad TEXT DEFAULT 'Usuario',intentos_login TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVADO',permisos TEXT DEFAULT '',restrinciones TEXT DEFAULT '',porciento TEXT DEFAULT '',imagen TEXT DEFAULT '',rol TEXT DEFAULT 'vendedor',ultimo_acceso TEXT DEFAULT '',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
         if (copyColumns.length > 0) {
           const columnsSql = copyColumns.map(column => `"${column}"`).join(', ')
           db!.exec(`INSERT INTO usuarios (${columnsSql}) SELECT ${columnsSql} FROM usuarios_old`)
@@ -558,7 +558,22 @@ function initDatabase(): void {
         }
       }
     } else {
-      db!.exec(`CREATE TABLE usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,usuario TEXT DEFAULT '',email TEXT DEFAULT '',password TEXT DEFAULT '',pin TEXT DEFAULT '',patron TEXT DEFAULT '',pregunta_secreta TEXT DEFAULT '',respuesta TEXT DEFAULT '',fecha TEXT DEFAULT '',nivel_seguridad TEXT DEFAULT 'Usuario',intentos_login TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVADO',permisos TEXT DEFAULT '',restrinciones TEXT DEFAULT '',porciento TEXT DEFAULT '',imagen TEXT DEFAULT '',rol TEXT DEFAULT 'vendedor',ultimo_acceso TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+      db!.exec(`CREATE TABLE usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,usuario TEXT DEFAULT '',email TEXT DEFAULT '',password TEXT DEFAULT '',pin TEXT DEFAULT '',patron TEXT DEFAULT '',pregunta_secreta TEXT DEFAULT '',respuesta TEXT DEFAULT '',fecha TEXT DEFAULT '',nivel_seguridad TEXT DEFAULT 'Usuario',intentos_login TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVADO',permisos TEXT DEFAULT '',restrinciones TEXT DEFAULT '',porciento TEXT DEFAULT '',imagen TEXT DEFAULT '',rol TEXT DEFAULT 'vendedor',ultimo_acceso TEXT DEFAULT '',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+    }
+
+    // "uid" no estaba en requiredColumns, asi que instalaciones cuyo "usuarios"
+    // ya tenia "id" (rama de arriba) pero no "uid" nunca lo recibian -- y el
+    // INSERT de defaults de mas abajo SIEMPRE referencia "uid", asi que la app
+    // no arrancaba (SqliteError: table usuarios has no column named uid).
+    // Se agrega aparte porque necesita un valor unico por fila, no un DEFAULT
+    // compartido como el resto de las columnas de texto.
+    if (!tableColumns('usuarios').includes('uid')) {
+      db!.exec(`ALTER TABLE usuarios ADD COLUMN "uid" TEXT DEFAULT ''`)
+    }
+    const filasSinUid = db!.prepare(`SELECT id FROM usuarios WHERE uid IS NULL OR uid = ''`).all() as any[]
+    if (filasSinUid.length > 0) {
+      const asignarUid = db!.prepare(`UPDATE usuarios SET uid = ? WHERE id = ?`)
+      for (const fila of filasSinUid) asignarUid.run(generarUid(), fila.id)
     }
 
     const defaults = [
@@ -1020,6 +1035,14 @@ function setupIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('db:getPath', () => {
+    try {
+      return { success: true, data: getDbPath() }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
   ipcMain.handle('db:getAll', (_event, tabla: string) => {
     try {
       // La empresa activa se devuelve primero para que tickets y reportes usen la tienda seleccionada.
@@ -1377,6 +1400,26 @@ function setupIpcHandlers(): void {
       db!.prepare(`DELETE FROM sqlite_sequence WHERE name = 'empresa'`).run()
       console.log('[db:clearEmpresaOnly] eliminados:', count.changes)
       return { success: true, data: { eliminados: count.changes } }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('db:clearProductos', async () => {
+    try {
+      const tablasProductos = ['telefonos', 'imei', 'accesorios', 'electrodomesticos', 'serial']
+      const resultados: string[] = []
+      const limpiar = db!.transaction(() => {
+        for (const name of tablasProductos) {
+          if (!db!.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?`).get(name)) continue
+          const count = db!.prepare(`DELETE FROM "${name}"`).run()
+          db!.prepare(`DELETE FROM sqlite_sequence WHERE name = ?`).run(name)
+          resultados.push(`${name} (${count.changes} registros)`)
+        }
+      })
+      limpiar()
+      console.log('[db:clearProductos]', { resultados })
+      return { success: true, data: { resultados } }
     } catch (error: any) {
       return { success: false, error: error.message }
     }

@@ -5,6 +5,58 @@ const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 // descargan ni se sobrescriben mediante sincronizacion o realtime.
 const LOCAL_SYSTEM_TABLES = ['configuracion', 'tmcloud_config', 'sync_deletes', 'bitacora', 'licencia', 'correo', 'otp_local_config']
 
+// imei depende de telefonos (telefono_uid) y serial depende de electrodomesticos
+// (equipo_uid): upsertLocal busca el id local del "padre" para resolver id_equi
+// en el momento en que procesa la fila. El servidor devuelve las tablas en
+// orden alfabetico, asi que en una instalacion nueva "imei" se procesaba antes
+// que "telefonos" -- la tabla local aun estaba vacia, y CADA imei quedaba con
+// id_equi null para siempre (nada vuelve a marcarlos como "cambiados" en
+// sincronizaciones futuras, asi que nunca se autocorregian). Esta prioridad
+// obliga a procesar primero las tablas "padre".
+const TABLE_DEPENDENCY_PRIORITY: Record<string, number> = {
+  telefonos: 0,
+  electrodomesticos: 0,
+  imei: 1,
+  serial: 1,
+}
+
+function sortTablesByDependency<T>(items: T[], getName: (item: T) => string): T[] {
+  return [...items].sort((a, b) => (TABLE_DEPENDENCY_PRIORITY[getName(a)] ?? 0.5) - (TABLE_DEPENDENCY_PRIORITY[getName(b)] ?? 0.5))
+}
+
+// Red de seguridad ademas del orden de descarga: si por cualquier motivo un
+// imei/serial quedo con id_equi vacio pero ya tiene el uid del telefono o
+// electrodomestico (telefono_uid/equipo_uid), lo reconecta usando lo que haya
+// localmente en ese momento. Barato de correr siempre: si no hay nada roto,
+// no actualiza nada.
+async function repairRelationalLinks(): Promise<void> {
+  try {
+    const [imeiRows, telefonos] = await Promise.all([getLocalRows('imei'), getLocalRows('telefonos')])
+    const telefonosByUid = new Map(telefonos.filter((t: any) => t.uid).map((t: any) => [String(t.uid), t]))
+    for (const imei of imeiRows) {
+      if (imei.id_equi) continue
+      const uid = String(imei.telefono_uid || '').trim()
+      if (!uid) continue
+      const telefono = telefonosByUid.get(uid)
+      if (!telefono) continue
+      await (window as any).db.update('imei', imei.id, { id_equi: telefono.id, equipo: telefono.nombre || imei.equipo || '' })
+    }
+  } catch { /* se reintenta en el proximo ciclo */ }
+
+  try {
+    const [serialRows, electrodomesticos] = await Promise.all([getLocalRows('serial'), getLocalRows('electrodomesticos')])
+    const equiposByUid = new Map(electrodomesticos.filter((t: any) => t.uid).map((t: any) => [String(t.uid), t]))
+    for (const serial of serialRows) {
+      if (serial.id_equi) continue
+      const uid = String(serial.equipo_uid || '').trim()
+      if (!uid) continue
+      const equipo = equiposByUid.get(uid)
+      if (!equipo) continue
+      await (window as any).db.update('serial', serial.id, { id_equi: equipo.id, equipo: equipo.nombre || serial.equipo || '' })
+    }
+  } catch { /* se reintenta en el proximo ciclo */ }
+}
+
 const SYSTEM_TABLE_DEFS: Record<string, string[]> = {
   configuracion: ['id INTEGER PRIMARY KEY AUTOINCREMENT', 'clave TEXT UNIQUE NOT NULL', 'valor TEXT DEFAULT ""', 'tipo TEXT DEFAULT "string"', 'categoria TEXT DEFAULT "general"', 'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP', 'updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP'],
   tmcloud_config: ['id INTEGER PRIMARY KEY AUTOINCREMENT', 'url TEXT NOT NULL DEFAULT ""', 'public_key TEXT NOT NULL DEFAULT ""', 'secret_key TEXT NOT NULL DEFAULT ""', 'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP', 'updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP'],
@@ -581,7 +633,8 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
     const lastSync = await getConfigValue('ultimo_sync_tm') || '1970-01-01 00:00:00'
     const changes = await fetchCloudSyncAll(lastSync)
       if (changes !== null) {
-        for (const [tabla, change] of Object.entries(changes)) {
+        const entradas = sortTablesByDependency(Object.entries(changes), ([tabla]) => tabla)
+        for (const [tabla, change] of entradas) {
           if (LOCAL_SYSTEM_TABLES.includes(tabla)) continue
           let tabDownloaded = 0
           let tabDeleted = 0
@@ -680,6 +733,7 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
   if (downloadOk) {
     await setConfigValue('ultimo_sync_tm', completedAt)
   }
+  await repairRelationalLinks()
   onSyncComplete?.(details)
 
   const result: SyncResult = {
@@ -742,7 +796,8 @@ export async function downloadAllTables(): Promise<SyncResult> {
   }
 
   const details: SyncDetail[] = []
-  for (const [index, table] of schema.entries()) {
+  const schemaOrdenado = sortTablesByDependency(schema, t => t.name)
+  for (const [index, table] of schemaOrdenado.entries()) {
     const tabla = table.name
     if (LOCAL_SYSTEM_TABLES.includes(tabla)) continue
     if (index > 0) await delay(350)
@@ -776,6 +831,7 @@ export async function downloadAllTables(): Promise<SyncResult> {
   const errors = details.reduce((total, item) => total + item.errors, 0)
   const completedAt = nowSql()
   await setConfigValue('ultimo_sync_tm', completedAt)
+  await repairRelationalLinks()
   onSyncComplete?.(details)
 
   const result: SyncResult = {

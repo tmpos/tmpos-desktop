@@ -72,6 +72,8 @@ async function registrarEquipo() {
   try {
     console.log('[LicenseView] Limpiando datos previos de empresa y tm_cloud...')
     await window.electron.invoke('db:clearCloudData')
+    console.log('[LicenseView] Limpiando productos locales antes de registrar la licencia...')
+    await window.electron.invoke('db:clearProductos')
     console.log('[LicenseView] Llamando licencia:validarCloud...')
     const val = await withTimeout(
       window.electron.invoke('licencia:validarCloud', codigo),

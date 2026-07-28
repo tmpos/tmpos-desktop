@@ -717,7 +717,26 @@ async function guardarPermisos(user: any) {
   finally { permGuardando.value = false }
 }
 
-onMounted(async () => { await cargarTablas() })
+const dbPath = ref('')
+
+async function cargarRutaDb() {
+  try {
+    const res = await (window as any).db.getPath()
+    if (res.success) dbPath.value = res.data
+  } catch (_) {}
+}
+
+async function copiarRutaDb() {
+  if (!dbPath.value) return
+  try {
+    await navigator.clipboard.writeText(dbPath.value)
+    toast.add({ severity: 'success', summary: 'Copiado', detail: 'Ruta de la base de datos copiada', life: 2000 })
+  } catch (_) {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo copiar la ruta', life: 3000 })
+  }
+}
+
+onMounted(async () => { await cargarTablas(); await cargarRutaDb() })
 </script>
 
 <template>
@@ -733,6 +752,15 @@ onMounted(async () => { await cargarTablas() })
           <Button label="Registrar Licencia" icon="pi pi-shield" severity="warn" size="small" @click="abrirDialogoLicencia" />
           <Button label="DevTools" icon="pi pi-code" severity="info" size="small" @click="abrirDevTools" />
         </div>
+      </div>
+
+      <div class="flex items-center justify-between gap-2 mb-4 p-3 rounded-lg bg-surface-50 dark:bg-surface-800/50 border border-surface-200 dark:border-surface-700 text-sm">
+        <div class="flex items-center gap-2 min-w-0">
+          <i class="pi pi-database text-surface-400"></i>
+          <span class="font-semibold whitespace-nowrap">Ruta de la base de datos:</span>
+          <span class="font-mono text-xs text-surface-500 truncate">{{ dbPath || 'Cargando...' }}</span>
+        </div>
+        <Button icon="pi pi-copy" label="Copiar" severity="secondary" text size="small" :disabled="!dbPath" @click="copiarRutaDb" />
       </div>
 
     <div class="flex flex-col lg:flex-row gap-4">

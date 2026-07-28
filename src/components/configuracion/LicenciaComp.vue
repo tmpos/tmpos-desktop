@@ -69,6 +69,7 @@ async function cambiarLicencia() {
   nuevaLicenciaError.value = ''
   try {
     await window.electron.invoke('db:clearCloudData')
+    await window.electron.invoke('db:clearProductos')
     const val = await window.electron.invoke('licencia:validarCloud', codigo) as any
     if (!val.success) {
       nuevaLicenciaError.value = val.error || 'No se pudo validar la licencia'

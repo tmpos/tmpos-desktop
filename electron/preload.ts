@@ -40,6 +40,7 @@ function withAlmacen(data: Record<string, unknown>) {
 }
 
 contextBridge.exposeInMainWorld('db', {
+  getPath: () => ipcRenderer.invoke('db:getPath'),
   getAll: (tabla: string) => ipcRenderer.invoke('db:getAll', tabla),
   getWhere: (tabla: string, where: string, params: unknown[] = []) => ipcRenderer.invoke('db:getWhere', tabla, where, params),
   getModified: (tabla: string, desde: string) => ipcRenderer.invoke('db:getModified', tabla, desde),
