@@ -91,8 +91,12 @@ async function regenerateCode() {
 
 async function copiarTexto(texto: string) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(texto)
-    return
+    try {
+      await navigator.clipboard.writeText(texto)
+      return
+    } catch (_) {
+      // Permiso denegado por Electron; usar el metodo de respaldo abajo.
+    }
   }
   const area = document.createElement('textarea')
   area.value = texto

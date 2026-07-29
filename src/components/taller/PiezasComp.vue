@@ -170,7 +170,7 @@ async function guardar() {
       if (res.success) {
         if (Number(data.cantidad) !== Number(cantidadAnterior)) {
           const ahora = new Date()
-          await window.db.insert('movimientos_piezas', {
+          await window.db.insert('movimientos_piezas', addAlmacenId({
             pieza_id: selectedPieza.value.id,
             pieza_nombre: data.nombre,
             tipo: 'AJUSTE',
@@ -179,7 +179,7 @@ async function guardar() {
             referencia: 'Edicion manual',
             fecha: ahora.toISOString().split('T')[0],
             hora: ahora.toTimeString().split(' ')[0].slice(0, 5),
-          })
+          }))
         }
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Pieza actualizada', life: 3000 })
       } else {
@@ -190,7 +190,7 @@ async function guardar() {
       const res = await window.db.insert('piezas', addAlmacenId(data))
       if (res.success) {
         const ahora = new Date()
-        await window.db.insert('movimientos_piezas', {
+        await window.db.insert('movimientos_piezas', addAlmacenId({
           pieza_id: res.data.id,
           pieza_nombre: data.nombre,
           tipo: 'ENTRADA',
@@ -199,7 +199,7 @@ async function guardar() {
           referencia: 'Creacion inicial',
           fecha: ahora.toISOString().split('T')[0],
           hora: ahora.toTimeString().split(' ')[0].slice(0, 5),
-        })
+        }))
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Pieza creada', life: 3000 })
       } else {
         toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo crear', life: 3000 })
@@ -288,10 +288,10 @@ async function guardarNuevoProveedor() {
   }
   guardandoProveedor.value = true
   try {
-    const res = await window.db.insert('proveedores', {
+    const res = await window.db.insert('proveedores', addAlmacenId({
       nombre: nuevoProveedorForm.value.nombre.trim().toUpperCase(),
       telefono: nuevoProveedorForm.value.telefono.trim(),
-    })
+    }))
     if (res.success) {
       form.value.proveedor = nuevoProveedorForm.value.nombre.trim().toUpperCase()
       dialogNuevoProveedor.value = false
@@ -509,7 +509,7 @@ onMounted(async () => {
 
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="subiendoImagen" @click="guardar" />
       </template>
     </Dialog>
 

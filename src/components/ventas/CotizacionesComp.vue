@@ -274,6 +274,8 @@ async function confirmarConvertir() {
         saldo: selectedCot.value.total,
         fecha_venta: fechaStr,
         estado: 'ACTIVA',
+        almacen_id: selectedCot.value.almacen_id || 0,
+        almacen_uid: selectedCot.value.almacen_uid || '',
       })
     }
     toast.add({ severity: 'success', summary: 'Convertida', detail: 'Cotizacion convertida a factura', life: 3000 })

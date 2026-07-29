@@ -18,8 +18,10 @@ import { useToast } from 'primevue/usetoast'
 import { encryptarPassword } from '@/funciones/funciones.js'
 import { getImageUrl, uploadImageSource, deleteImage } from '@/services/tmCloudClient'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const systemMode = useSystemModeStore()
+const { addAlmacenId } = useAlmacenFilter()
 const props = defineProps<{ orderId?: number | null; visible: boolean; initialData?: Record<string, any> | null }>()
 const emit = defineEmits<{ close: []; saved: [payload?: any] }>()
 
@@ -475,7 +477,7 @@ async function guardar() {
     if (isEditing.value && props.orderId) {
       res = await window.db.update('ordenes_taller', props.orderId, data)
     } else {
-      res = await window.db.insert('ordenes_taller', data)
+      res = await window.db.insert('ordenes_taller', addAlmacenId(data))
     }
     if (res.success) {
       toast.add({ severity: 'success', summary: 'Exito', detail: isEditing.value ? 'Orden actualizada' : 'Orden creada', life: 3000 })
@@ -578,7 +580,7 @@ onMounted(async () => {
     <div class="space-y-4 pt-2">
       <div class="flex justify-end gap-2">
         <Button label="Cancelar" severity="secondary" text @click="$emit('close')" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :loading="guardando" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :loading="guardando" :disabled="subiendoImagenes" @click="guardar" />
       </div>
 
       <Tabs v-model:value="activeTab">
@@ -813,7 +815,7 @@ onMounted(async () => {
 
       <div class="flex justify-end gap-2 pt-2">
         <Button label="Cancelar" severity="secondary" text @click="$emit('close')" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :loading="guardando" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :loading="guardando" :disabled="subiendoImagenes" @click="guardar" />
       </div>
     </div>
   </Dialog>

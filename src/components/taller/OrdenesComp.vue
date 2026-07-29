@@ -30,12 +30,14 @@ import QRCode from 'qrcode'
 import JsBarcode from 'jsbarcode'
 import { getImageUrl } from '@/services/tmCloudClient'
 import { useEmpresa } from '@/composables/useEmpresa'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 import { envioElectron, encryptarPassword } from '@/funciones/funciones.js'
 
 const toast = useToast()
 const route = useRoute()
 const { nombre: nombreEmpresa, cargar: cargarEmpresa } = useEmpresa()
+const { addAlmacenId } = useAlmacenFilter()
 
 // ─── Estado general ───
 const ordenes = ref<any[]>([])
@@ -426,14 +428,14 @@ async function seleccionarPiezaCard(pieza: any) {
     pendiente: nuevoPendiente,
   })
   await window.db.update('piezas', pieza.id, { reservada: Number(pieza.reservada || 0) + 1 })
-  await window.db.insert('reservas_piezas', {
+  await window.db.insert('reservas_piezas', addAlmacenId({
     orden_id: orden.id,
     pieza_id: pieza.id,
     pieza_nombre: texto,
     cantidad: 1,
     estado: 'RESERVADA',
     usuario: auth.user?.nombre || auth.user?.usuario || '',
-  })
+  }))
   orden.piezas = nuevasPiezas
   orden.precio_pieza = nuevoPrecioPieza
   orden.total = nuevoTotal
@@ -467,7 +469,7 @@ async function crearFacturaPieza() {
     estado_factura: 'PENDIENTE',
     vendedor: '',
   }
-  const res = await window.db.insert('facturas', factura)
+  const res = await window.db.insert('facturas', addAlmacenId(factura))
   if (res.success) {
     const piezaActualRes = await window.db.getById('piezas', piezaId)
     const piezaActual = piezaActualRes.success ? piezaActualRes.data : {}
@@ -481,7 +483,7 @@ async function crearFacturaPieza() {
     const reserva = reservas.success ? reservas.data?.[0] : null
     if (reserva) await window.db.update('reservas_piezas', reserva.id, { estado: 'CONSUMIDA', consumida_at: new Date().toISOString() })
     const ahora = new Date()
-    await window.db.insert('movimientos_piezas', {
+    await window.db.insert('movimientos_piezas', addAlmacenId({
       pieza_id: piezaId,
       pieza_nombre: texto,
       tipo: 'SALIDA',
@@ -490,7 +492,7 @@ async function crearFacturaPieza() {
       referencia: `Orden #${orden.id}`,
       fecha: ahora.toISOString().split('T')[0],
       hora: ahora.toTimeString().split(' ')[0].slice(0, 5),
-    })
+    }))
     const idx = piezasLista.value.findIndex((p: any) => p.id === piezaId)
     if (idx >= 0) piezasLista.value[idx].cantidad = nuevaCantidad
     toast.add({ severity: 'success', summary: 'Factura creada', detail: `Factura para pieza: ${texto}`, life: 3000 })
@@ -896,7 +898,7 @@ async function guardar() {
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Orden actualizada', life: 3000 })
       }
     } else {
-      const res = await window.db.insert('ordenes_taller', data)
+      const res = await window.db.insert('ordenes_taller', addAlmacenId(data))
       if (res.success) {
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Orden creada', life: 3000 })
       }

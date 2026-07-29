@@ -400,6 +400,8 @@ async function crearNotaCreditoInterna(recibido: any) {
       nota: `NOTA DE CREDITO POR EQUIPO RECIBIDO IMEI: ${recibido.nombre || ''}`,
       mes: m,
       year: String(y),
+      almacen_id: Number(almacenStore.activeId || 0),
+      almacen_uid: String(almacenStore.activeUid || ''),
     })
 
     if (res.success) {
@@ -455,6 +457,8 @@ async function guardarRecibir() {
               telefono: nd.customer_phone || '',
               cedula: nd.customer_cedula || '',
               rnc: nd.customer_cedula || '',
+              almacen_id: Number(almacenStore.activeId || 0),
+              almacen_uid: String(almacenStore.activeUid || ''),
             })
             if (resNuevo.success) clienteId = String(resNuevo.data.id)
           }
@@ -699,6 +703,8 @@ async function generarNotaCredito(recibido: any) {
       nota: `NOTA DE CREDITO POR EQUIPO RECIBIDO IMEI: ${recibido.nombre}`,
       mes: m,
       year: String(y),
+      almacen_id: Number(almacenStore.activeId || 0),
+      almacen_uid: String(almacenStore.activeUid || ''),
     })
 
     if (res.success) {
@@ -746,6 +752,8 @@ async function enviarAlTaller() {
       fecha_entrada: fechaStr,
       total: nd.credit_note_value || 0,
       metodo_pago: 'EFECTIVO',
+      almacen_id: Number(almacenStore.activeId || 0),
+      almacen_uid: String(almacenStore.activeUid || ''),
     })
 
     if (res.success) {

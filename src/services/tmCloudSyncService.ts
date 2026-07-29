@@ -313,23 +313,42 @@ export async function fetchServerSchema(): Promise<ServerTableInfo[]> {
   return fetchServerFullSchema()
 }
 
+// El esquema remoto casi nunca cambia entre un ciclo de sync y el siguiente,
+// pero antes se pedia de nuevo por completo (GET /schema) en CADA sincronizacion
+// periodica Y en CADA guardado individual que usa pushLocalRowToCloud (el cual
+// se llama despues de casi cualquier alta/edicion en la app). En una sesion
+// activa eso significaba decenas de peticiones identicas por minuto. Se cachea
+// por un rato corto para no saturar el servidor sin dejar de detectar cambios
+// reales de esquema en un tiempo razonable.
+const SCHEMA_CACHE_TTL_MS = 20000
+let schemaCache: { data: ServerTableInfo[]; fetchedAt: number } | null = null
+
+export function invalidateSchemaCache(): void {
+  schemaCache = null
+}
+
 async function fetchServerFullSchema(): Promise<ServerTableInfo[]> {
+  if (schemaCache && Date.now() - schemaCache.fetchedAt < SCHEMA_CACHE_TTL_MS) {
+    return schemaCache.data
+  }
   const api = tmc.getCloudApi()
   if (!api) return []
   try {
     const res = await fetch(`${api.url}/schema`, { headers: tmc.authHeaders(api.key) })
     if (!res.ok) {
       if (res.status === 429) await delay(2000)
-      return []
+      return schemaCache?.data || []
     }
     const json = await res.json()
     const data = json.data || {}
-    return Object.entries(data).map(([name, info]: [string, any]) => ({
+    const parsed = Object.entries(data).map(([name, info]: [string, any]) => ({
       name,
       count: info.count || 0,
       columns: info.columns || [],
     }))
-  } catch { return [] }
+    schemaCache = { data: parsed, fetchedAt: Date.now() }
+    return parsed
+  } catch { return schemaCache?.data || [] }
 }
 
 function columnsToSqlDefs(cols: ServerColumn[]): string[] {
@@ -445,8 +464,15 @@ export async function startRealtime() {
       })
     },
     () => {
-      realtimeConnected = false
-      notify({ running: false, error: 'Realtime desconectado', realtime: false })
+      // El navegador (EventSource) reintenta esta conexion indefinidamente cada
+      // pocos segundos por diseno. El endpoint /realtime aun no existe en el
+      // servidor, asi que ese reintento nunca puede tener exito: dejarlo activo
+      // solo genera trafico continuo contra el servidor sin ningun beneficio.
+      // Se corta la conexion en el primer error y se sigue solo con el polling
+      // periodico (executeSync), que ya es el mecanismo que mantiene todo
+      // sincronizado.
+      stopRealtime()
+      notify({ running: false, error: 'Realtime no disponible; usando solo sincronizacion periodica', realtime: false })
     },
   )
   realtimeConnected = true

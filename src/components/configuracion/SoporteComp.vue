@@ -726,10 +726,26 @@ async function cargarRutaDb() {
   } catch (_) {}
 }
 
+function copiarTextoFallback(texto: string): boolean {
+  const area = document.createElement('textarea')
+  area.value = texto
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  area.select()
+  const copiado = document.execCommand('copy')
+  area.remove()
+  return copiado
+}
+
 async function copiarRutaDb() {
   if (!dbPath.value) return
   try {
-    await navigator.clipboard.writeText(dbPath.value)
+    try {
+      await navigator.clipboard.writeText(dbPath.value)
+    } catch (_) {
+      if (!copiarTextoFallback(dbPath.value)) throw new Error('El portapapeles no esta disponible')
+    }
     toast.add({ severity: 'success', summary: 'Copiado', detail: 'Ruta de la base de datos copiada', life: 2000 })
   } catch (_) {
     toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo copiar la ruta', life: 3000 })

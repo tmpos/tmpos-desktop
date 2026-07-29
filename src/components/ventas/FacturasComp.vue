@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
@@ -14,17 +14,25 @@ import Select from 'primevue/select'
 import Calendar from 'primevue/calendar'
 import Fieldset from 'primevue/fieldset'
 import Menu from 'primevue/menu'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import TicketFacturaPrint from './TicketFacturaPrint.vue'
 import FacturaPdfPrint from './FacturaPdfPrint.vue'
 import { reintegrarInventarioFactura } from '@/composables/useDevoluciones'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useAuthStore } from '@/stores/auth.store'
 
 import { envioElectron } from '@/funciones/funciones.js'
 
 const toast = useToast()
 const router = useRouter()
+const auth = useAuthStore()
+const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
 const facturas = ref<any[]>([])
+const facturasRaw = ref<any[]>([])
+const verTodosAlmacenes = ref(false)
+const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('table')
 const dialogVisible = ref(false)
@@ -360,10 +368,12 @@ async function cargarFacturas() {
           }, {})
         }
       } catch (_) {}
-      facturas.value = (res.data || []).map((factura: any) => ({
+      const todas = (res.data || []).map((factura: any) => ({
         ...factura,
         _ecf: ecfPorFactura[String(factura.id)] || null,
       }))
+      facturasRaw.value = todas
+      facturas.value = verTodosAlmacenes.value ? todas : filterByAlmacen(todas)
     } else {
       toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudieron cargar las facturas', life: 3000 })
     }
@@ -373,6 +383,10 @@ async function cargarFacturas() {
     loading.value = false
   }
 }
+
+watch(verTodosAlmacenes, () => {
+  facturas.value = verTodosAlmacenes.value ? facturasRaw.value : filterByAlmacen(facturasRaw.value)
+})
 
 function abrirCrear() {
   isEditing.value = false
@@ -822,7 +836,7 @@ async function guardar() {
         return
       }
     } else {
-      const res = await window.db.insert('facturas', data)
+      const res = await window.db.insert('facturas', addAlmacenId(data))
       if (res.success) {
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Factura creada', life: 3000 })
       } else {
@@ -997,6 +1011,10 @@ onMounted(async () => {
         </div>
 
         <div class="flex items-center gap-2">
+          <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
             <button
               class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"

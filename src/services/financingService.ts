@@ -1,3 +1,5 @@
+import { useAlmacenStore } from '@/stores/almacen.store'
+
 export type FrecuenciaFinanciamiento = 'SEMANAL' | 'QUINCENAL' | 'MENSUAL'
 
 export interface FinanciamientoInput {
@@ -69,6 +71,7 @@ export function calcularPlanFinanciamiento(input: FinanciamientoInput) {
 
 export async function crearFinanciamiento(input: FinanciamientoInput) {
   const plan = calcularPlanFinanciamiento(input)
+  const almacenStore = useAlmacenStore()
   const result = await window.db.insert('financiamientos', {
     ...input,
     documentos: JSON.stringify(input.documentos || []),
@@ -76,6 +79,8 @@ export async function crearFinanciamiento(input: FinanciamientoInput) {
     capacidad_pago: plan.capacidad_pago,
     estado: 'ACTIVO',
     proximo_vencimiento: plan.cuotas[0]?.fecha_vencimiento || '',
+    almacen_id: almacenStore.activeId || 0,
+    almacen_uid: almacenStore.activeUid || '',
   })
   if (!result.success) throw new Error(result.error || 'No se pudo crear el financiamiento')
   const id = Number(result.data?.id || result.id || 0)

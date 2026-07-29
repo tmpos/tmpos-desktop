@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(curl:*)",
-      "mcp__hostinger-hosting__hosting_listWebsitesV1"
+      "PowerShell(Get-Process *)",
+      "Bash(node -e ' *)",
+      "Bash(ELECTRON_RUN_AS_NODE=1 \"./node_modules/electron/dist/electron.exe\" \".scratch-readonly-check.js\")"
     ]
   }
 }

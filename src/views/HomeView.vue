@@ -424,7 +424,19 @@ function limpiarBusquedaImeiGeneral() {
 
 async function copiarUrl() {
   try {
-    await navigator.clipboard.writeText(serverUrl.value)
+    try {
+      await navigator.clipboard.writeText(serverUrl.value)
+    } catch (_) {
+      const area = document.createElement('textarea')
+      area.value = serverUrl.value
+      area.style.position = 'fixed'
+      area.style.opacity = '0'
+      document.body.appendChild(area)
+      area.select()
+      const copiado = document.execCommand('copy')
+      area.remove()
+      if (!copiado) throw new Error('El portapapeles no esta disponible')
+    }
     toast.add({ severity: 'success', summary: 'Copiado', detail: 'URL copiada al portapapeles', life: 2000 })
   } catch {
     toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo copiar', life: 2000 })

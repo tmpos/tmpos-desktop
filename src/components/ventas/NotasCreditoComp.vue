@@ -21,9 +21,11 @@ import TicketFacturaPrint from './TicketFacturaPrint.vue'
 import FacturaPdfPrint from './FacturaPdfPrint.vue'
 
 import { envioElectron } from '@/funciones/funciones.js'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
 const router = useRouter()
+const { addAlmacenId } = useAlmacenFilter()
 const notasCredito = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('table')
@@ -319,7 +321,7 @@ async function guardar() {
 
     const res = isEditing.value
       ? await window.db.update('facturas', selectedNota.value.id, data)
-      : await window.db.insert('facturas', data)
+      : await window.db.insert('facturas', addAlmacenId(data))
 
     if (res.success) {
       toast.add({ severity: 'success', summary: 'Exito', detail: isEditing.value ? 'Nota de credito actualizada' : 'Nota de credito creada', life: 3000 })

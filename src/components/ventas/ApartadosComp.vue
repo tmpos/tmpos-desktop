@@ -22,9 +22,11 @@ import TicketApartadoPrint from './TicketApartadoPrint.vue'
 import ApartadoPdfPrint from './ApartadoPdfPrint.vue'
 
 import { envioElectron, peticionesFetch, encryptarPassword } from '@/funciones/funciones.js'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
 const route = useRoute()
+const { addAlmacenId } = useAlmacenFilter()
 const ticketApartadoRef = ref<any>(null)
 const apartadoPdfRef = ref<any>(null)
 const apartados = ref<any[]>([])
@@ -281,13 +283,13 @@ async function crearCliente() {
   }
   guardandoCliente.value = true
   try {
-    const res = await window.db.insert('clientes', {
+    const res = await window.db.insert('clientes', addAlmacenId({
       nombre: nuevoClienteForm.value.nombre.trim().toUpperCase(),
       telefono: nuevoClienteForm.value.telefono.trim(),
       email: '',
       direccion: nuevoClienteForm.value.direccion.trim().toUpperCase(),
       rnc: nuevoClienteForm.value.rnc.trim().replace(/-/g, ''),
-    })
+    }))
     if (res.success) {
       const nuevo = {
         id: res.data.id,
@@ -316,7 +318,7 @@ async function crearTelefono() {
   }
   guardandoTelefono.value = true
   try {
-    const res = await window.db.insert('telefonos', { nombre: nuevoTelefonoForm.value.nombre.trim().toUpperCase() })
+    const res = await window.db.insert('telefonos', addAlmacenId({ nombre: nuevoTelefonoForm.value.nombre.trim().toUpperCase() }))
     if (res.success) {
       const nuevo = { id: res.data.id, nombre: nuevoTelefonoForm.value.nombre.trim().toUpperCase() }
       telefonos.value.unshift(nuevo)
@@ -354,7 +356,7 @@ async function guardarNuevoApartado() {
       referencia: 'PAGO INICIAL',
     }]) : '[]'
 
-    const res = await window.db.insert('cuentas_cobrar', {
+    const res = await window.db.insert('cuentas_cobrar', addAlmacenId({
       no_factura: form.value.no_apartado,
       cod_cliente: form.value.cod_cliente,
       nombre_cliente: form.value.nombre_cliente.trim().toUpperCase(),
@@ -366,7 +368,7 @@ async function guardarNuevoApartado() {
       estado: 'APARTADO',
       notas: (form.value.nota || '').toUpperCase() + ` | IMEI: ${form.value.imei_nombre} | MODELO: ${form.value.telefono_modelo}`,
       pagos: pagosInicial,
-    })
+    }))
 
     if (res.success) {
       await window.db.update('imei', form.value.id_imei, { estado: 'APARTADO' })

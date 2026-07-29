@@ -254,7 +254,7 @@ async function crearProveedorImei() {
     telefono: nuevoProveedorForm.value.telefono.trim(),
     direccion: nuevoProveedorForm.value.direccion.trim().toUpperCase(),
   }
-  const res = await window.db.insert('proveedores', data)
+  const res = await window.db.insert('proveedores', addAlmacenId(data))
   if (res.success) {
     proveedores.value.push({ id: res.data.id, ...data })
     form.value.proveedor = data.nombre
@@ -406,7 +406,7 @@ async function guardarNuevoClienteExpress() {
     nombre: nuevoClienteExpress.value.nombre.trim().toUpperCase(), telefono: nuevoClienteExpress.value.telefono.trim(),
     direccion: nuevoClienteExpress.value.direccion.trim().toUpperCase(), rnc: nuevoClienteExpress.value.rnc.trim(), email: '',
   }
-  const res = await window.db.insert('clientes', data)
+  const res = await window.db.insert('clientes', addAlmacenId(data))
   if (!res.success) {
     toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo crear el cliente', life: 3000 })
     return
@@ -526,7 +526,7 @@ async function bajarImeis() {
           equipoId = existente.id
           equipoUid = existente.uid || ''
         } else {
-          const eqRes = await window.db.insert('telefonos', { nombre: nombreEquipo })
+          const eqRes = await window.db.insert('telefonos', addAlmacenId({ nombre: nombreEquipo }))
           if (eqRes.success) {
             equipoId = eqRes.data?.id || null
             const telefonoCreado = (await window.db.getById('telefonos', equipoId as number)).data

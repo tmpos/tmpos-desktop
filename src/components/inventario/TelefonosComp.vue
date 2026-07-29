@@ -997,7 +997,7 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" @click="guardarTelefono" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="subiendoImagen" @click="guardarTelefono" />
       </template>
     </Dialog>
 

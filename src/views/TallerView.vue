@@ -16,9 +16,11 @@ import Textarea from 'primevue/textarea'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const auth = useAuthStore()
 const toast = useToast()
+const { addAlmacenId } = useAlmacenFilter()
 const route = useRoute()
 
 const expressVisible = ref(false)
@@ -82,7 +84,7 @@ async function guardarExpress() {
       fecha_entrada: new Date().toISOString().split('T')[0],
     }
 
-    const res = await window.db.insert('ordenes_taller', data)
+    const res = await window.db.insert('ordenes_taller', addAlmacenId(data))
     if (res.success) {
       const ordenId = Number(res.data?.id || 0)
       const noOrden = ordenId ? formatearNumeroOrdenExpress(ordenId) : ''

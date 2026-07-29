@@ -676,6 +676,7 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'encargado', type: 'TEXT' },
     { name: 'cuenta_bancaria', type: 'TEXT' },
     { name: 'direccion', type: 'TEXT' },
+    { name: 'imagen', type: 'IMAGE' },
     { name: 'created_at', type: 'DATETIME' },
     { name: 'updated_at', type: 'DATETIME' },
   ],
@@ -708,12 +709,15 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'marca', type: 'INTEGER' },
     { name: 'categoria', type: 'INTEGER' },
     { name: 'proveedor_id', type: 'INTEGER' },
+    { name: 'imagen', type: 'IMAGE' },
+    { name: 'no_compra', type: 'TEXT' },
     { name: 'created_at', type: 'DATETIME' },
     { name: 'updated_at', type: 'DATETIME' },
   ],
   telefonos: [
     { name: 'uid', type: 'TEXT' },
     { name: 'nombre', type: 'TEXT' },
+    { name: 'imagen', type: 'IMAGE' },
     { name: 'created_at', type: 'DATETIME' },
     { name: 'updated_at', type: 'DATETIME' },
   ],
@@ -824,6 +828,7 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'alerta', type: 'INTEGER' },
     { name: 'proveedor', type: 'TEXT' },
     { name: 'descripcion', type: 'TEXT' },
+    { name: 'imagen', type: 'IMAGE' },
     { name: 'created_at', type: 'DATETIME' },
     { name: 'updated_at', type: 'DATETIME' },
   ],
@@ -1100,6 +1105,7 @@ async function createTables() {
     if (errores.length > 0) partes.push(`Errores: ${errores.join(', ')}`)
     if (partes.length === 0) partes.push('Sin cambios necesarios')
 
+    if (creadas > 0 || columnasAgregadas > 0) tmSync.invalidateSchemaCache()
     estado.value = { connected: true, error: partes.join('. ') }
   } catch (e: any) {
     estado.value = { connected: false, error: e.message || 'Error de red' }

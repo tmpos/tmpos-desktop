@@ -4459,9 +4459,10 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => permission === 'media')
+  const allowedPermissions = ['media', 'clipboard-read', 'clipboard-sanitized-write']
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => allowedPermissions.includes(permission))
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(permission === 'media')
+    callback(allowedPermissions.includes(permission))
   })
   initDatabase()
   setupIpcHandlers()

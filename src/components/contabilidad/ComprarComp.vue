@@ -15,9 +15,11 @@ import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import Swal from 'sweetalert2'
 import { useSystemModeStore } from '@/stores/systemMode'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
 const systemMode = useSystemModeStore()
+const { addAlmacenId } = useAlmacenFilter()
 const dialogNuevoProveedor = ref(false)
 const nuevoProveedor = ref({ nombre: '', telefono: '', email: '', direccion: '' })
 
@@ -418,7 +420,7 @@ async function completarCompra() {
   try {
     for (const item of cart.value) {
       if (item.tipo === 'imei') {
-        const res = await window.db.insert('imei', {
+        const res = await window.db.insert('imei', addAlmacenId({
           nombre: item.imei,
           id_equi: null,
           costo: item.costo,
@@ -430,11 +432,11 @@ async function completarCompra() {
           estado: 'DISPONIBLE',
           proveedor: item.proveedor,
           no_compra: item.no_compra,
-        })
+        }))
         if (res.success) ok++
         else errors.push(`IMEI ${item.imei}: ${res.error}`)
       } else if (item.tipo === 'serial') {
-        const res = await window.db.insert('serial', {
+        const res = await window.db.insert('serial', addAlmacenId({
           nombre: item.serial,
           id_equi: item.id_equi,
           equipo_uid: item.equipo_uid || '',
@@ -448,7 +450,7 @@ async function completarCompra() {
           estado: 'DISPONIBLE',
           proveedor: item.proveedor,
           no_compra: item.no_compra,
-        })
+        }))
         if (res.success) ok++
         else errors.push(`Serial ${item.serial}: ${res.error}`)
       } else if (item.tipo === 'accesorio') {
@@ -464,7 +466,7 @@ async function completarCompra() {
           else errors.push(`Stock ${item.nombre}: ${res.error}`)
         }
       } else if (item.tipo === 'accesorio_nuevo') {
-        const res = await window.db.insert('accesorios', {
+        const res = await window.db.insert('accesorios', addAlmacenId({
           nombre: item.nombre,
           costo: item.costo,
           precio_venta: item.precio_venta,
@@ -474,7 +476,7 @@ async function completarCompra() {
           categoria: item.categoria,
           no_compra: form.value.no_factura || '',
           proveedor_id: form.value.proveedor_id || 0,
-        })
+        }))
         if (res.success) ok++
         else errors.push(`Accesorio ${item.nombre}: ${res.error}`)
       }
@@ -497,7 +499,7 @@ async function guardarNuevoProveedor() {
       email: nuevoProveedor.value.email.trim().toLowerCase(),
       direccion: nuevoProveedor.value.direccion.trim().toUpperCase(),
     }
-    const res = await window.db.insert('proveedores', data)
+    const res = await window.db.insert('proveedores', addAlmacenId(data))
     if (res.success) {
       const nuevo = { id: res.data.id, ...data }
       proveedores.value.unshift(nuevo)

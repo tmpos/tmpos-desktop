@@ -15,8 +15,10 @@ import Fieldset from 'primevue/fieldset'
 import Tag from 'primevue/tag'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
+const { addAlmacenId } = useAlmacenFilter()
 const gastos = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
@@ -152,7 +154,7 @@ async function guardar() {
         return
       }
     } else {
-      const res = await window.db.insert('gastos_fijos', data)
+      const res = await window.db.insert('gastos_fijos', addAlmacenId(data))
       if (res.success) {
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Gasto fijo creado', life: 3000 })
       } else {

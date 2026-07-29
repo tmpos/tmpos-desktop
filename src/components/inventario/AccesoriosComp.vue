@@ -637,7 +637,7 @@ async function crearProveedor() {
     telefono: nuevoProveedor.value.telefono.trim(),
     direccion: nuevoProveedor.value.direccion.trim().toUpperCase(),
   }
-  const res = await window.db.insert('proveedores', data)
+  const res = await window.db.insert('proveedores', addAlmacenId(data))
   if (res.success) {
     proveedores.value.push({ id: res.data.id, ...data })
     form.value.proveedor_id = res.data.id
@@ -1040,7 +1040,7 @@ useCloudRefresh(['accesorios'], cargarAccesorios)
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="subiendoImagen" @click="guardar" />
       </template>
     </Dialog>
 

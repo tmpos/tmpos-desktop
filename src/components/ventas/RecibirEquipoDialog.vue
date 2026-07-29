@@ -9,6 +9,7 @@ import TabView from 'primevue/tabview'
 import TabPanel from 'primevue/tabpanel'
 import { useToast } from 'primevue/usetoast'
 import { encryptarPassword, peticionesFetch } from '@/funciones/funciones.js'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const props = defineProps<{
   visible: boolean
@@ -22,6 +23,7 @@ const emit = defineEmits<{
 }>()
 
 const toast = useToast()
+const { addAlmacenId } = useAlmacenFilter()
 const telefonos = ref<any[]>([])
 const clientesLista = ref<any[]>([])
 const clienteSeleccionadoBusqueda = ref<any | null>(null)
@@ -210,7 +212,7 @@ async function crearTelefono() {
   guardandoTelefono.value = true
   try {
     const nombre = nuevoTelefonoForm.value.nombre.trim().toUpperCase()
-    const res = await window.db.insert('telefonos', { nombre })
+    const res = await window.db.insert('telefonos', addAlmacenId({ nombre }))
     if (res.success) {
       const nuevo = { id: res.data.id, nombre }
       telefonos.value.unshift(nuevo)
@@ -245,7 +247,7 @@ async function crearNotaCreditoInterna(recibido: any) {
     const noCredito = `NC-${y}${m}${d}-${h}${min}${s}`
     const fechaStr = `${y}-${m}-${d}`
 
-    const res = await window.db.insert('facturas', {
+    const res = await window.db.insert('facturas', addAlmacenId({
       no_factura: noCredito,
       tipo_factura: 'NOTA_CREDITO',
       cod_cliente: codCliente,
@@ -267,7 +269,7 @@ async function crearNotaCreditoInterna(recibido: any) {
       nota: `NOTA DE CREDITO POR EQUIPO RECIBIDO IMEI: ${recibido.nombre || ''}`,
       mes: m,
       year: String(y),
-    })
+    }))
 
     if (res.success) {
       nd.credit_note_id = res.data.id
@@ -321,12 +323,12 @@ async function guardarRecibir() {
           if (existente) {
             clienteId = String(existente.id)
           } else {
-            const resNuevo = await window.db.insert('clientes', {
+            const resNuevo = await window.db.insert('clientes', addAlmacenId({
               nombre: nombreCliente,
               telefono: nd.customer_phone || '',
               cedula: nd.customer_cedula || '',
               rnc: nd.customer_cedula || '',
-            })
+            }))
             if (resNuevo.success) clienteId = String(resNuevo.data.id)
           }
         }
@@ -343,7 +345,7 @@ async function guardarRecibir() {
       nota: JSON.stringify({ ...nd, cliente_id: clienteId }),
     }
 
-    const res = await window.db.insert('imei', data)
+    const res = await window.db.insert('imei', addAlmacenId(data))
     if (res.success) {
       let nuevoRecibido = { id: res.data.id, ...data }
       toast.add({ severity: 'success', summary: 'Recibido', detail: 'Equipo recibido correctamente', life: 3000 })

@@ -20,8 +20,10 @@ import Toast from 'primevue/toast'
 import { envioElectron } from '@/funciones/funciones.js'
 import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
+const { addAlmacenId } = useAlmacenFilter()
 const ordenes = ref<any[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
@@ -274,7 +276,7 @@ async function guardar() {
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Orden actualizada', life: 3000 })
       }
     } else {
-      const res = await window.db.insert('ordenes_taller', data)
+      const res = await window.db.insert('ordenes_taller', addAlmacenId(data))
       if (res.success) {
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Orden creada', life: 3000 })
       }
@@ -625,7 +627,7 @@ onMounted(async () => {
       </TabView>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="subiendoImagen" @click="guardar" />
       </template>
     </Dialog>
 

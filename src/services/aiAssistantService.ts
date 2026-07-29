@@ -375,6 +375,7 @@ async function crearCliente(args: any) {
   )
   if (duplicado) return { creado: false, duplicado: true, cliente: { id: duplicado.id, nombre: duplicado.nombre } }
 
+  const almacen = currentWarehouse()
   const result = await window.db.insert('clientes', {
     nombre,
     telefono: String(args.telefono || '').trim(),
@@ -382,6 +383,8 @@ async function crearCliente(args: any) {
     direccion: String(args.direccion || '').trim().toUpperCase(),
     rnc: String(args.rnc || '').trim(),
     activo: 'ACTIVO',
+    almacen_id: almacen.id,
+    almacen_uid: almacen.uid,
   })
   if (!result.success) throw new Error(result.error || 'No se pudo crear el cliente')
   window.dispatchEvent(new CustomEvent('jarvis:data-change', { detail: { table: 'clientes' } }))
@@ -584,7 +587,12 @@ async function gestionarRegistro(args: any) {
   if (!confirmed) return { cancelado: true, mensaje: 'El usuario cancelo la accion.' }
 
   let result: any
-  if (action === 'crear') result = await window.db.insert(table, data)
+  if (action === 'crear') {
+    const almacen = currentWarehouse()
+    if (almacen.id) data.almacen_id = almacen.id
+    if (almacen.uid) data.almacen_uid = almacen.uid
+    result = await window.db.insert(table, data)
+  }
   else if (action === 'editar') result = await window.db.update(table, id, data)
   else result = await window.db.delete(table, id)
   if (!result?.success) throw new Error(result?.error || `No se pudo ${action} el registro`)

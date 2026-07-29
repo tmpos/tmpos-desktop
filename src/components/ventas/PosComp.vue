@@ -3137,7 +3137,7 @@ async function guardarNuevoCliente() {
       rnc: nuevoClienteForm.value.rnc.trim().replace(/-/g, ''),
       email: '',
     }
-    const res = await window.db.insert('clientes', data)
+    const res = await window.db.insert('clientes', addAlmacenIdFilter(data))
     if (res.success) {
       const nuevoCliente = { id: res.data.id, ...data }
       clientes.value.unshift(nuevoCliente)
