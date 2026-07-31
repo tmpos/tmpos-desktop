@@ -291,13 +291,18 @@ function abrirAgregarStock(accesorio: any) {
   dialogAgregarStock.value = true
 }
 
+function actualizarStockCantidad(event: { value?: number | null }) {
+  stockCantidad.value = Number(event.value || 0)
+}
+
 async function aplicarAgregarStock() {
-  if (!accesorioStock.value || stockCantidad.value <= 0) return
-  const nueva = (accesorioStock.value.cantidad || 0) + stockCantidad.value
+  const cantidadAgregar = Number(stockCantidad.value || 0)
+  if (!accesorioStock.value || cantidadAgregar <= 0) return
+  const nueva = Number(accesorioStock.value.cantidad || 0) + cantidadAgregar
   await window.db.update('accesorios', accesorioStock.value.id, { cantidad: nueva })
   accesorioStock.value.cantidad = nueva
   dialogAgregarStock.value = false
-  toast.add({ severity: 'success', summary: 'Stock agregado', detail: `+${stockCantidad.value} unidades`, life: 2000 })
+  toast.add({ severity: 'success', summary: 'Stock agregado', detail: `+${cantidadAgregar} unidades`, life: 2000 })
   await cargarAccesorios()
 }
 
@@ -1210,7 +1215,7 @@ useCloudRefresh(['accesorios'], cargarAccesorios)
             <div class="text-xs text-surface-400">Stock actual: <strong>{{ accesorioStock?.cantidad || 0 }}</strong></div>
           </div>
         </div>
-        <InputNumber v-model="stockCantidad" :min="1" placeholder="Cantidad a agregar" class="w-full text-center text-2xl font-bold" fluid />
+        <InputNumber v-model="stockCantidad" :min="1" placeholder="Cantidad a agregar" class="w-full text-center text-2xl font-bold" fluid @input="actualizarStockCantidad" />
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogAgregarStock = false" />

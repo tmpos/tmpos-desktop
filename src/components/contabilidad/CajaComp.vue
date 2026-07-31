@@ -210,87 +210,132 @@
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="showCierreModal" header="Conteo de Cierre de Caja" modal :style="{ width: '90%', maxWidth: '520px' }" :closable="!cerrandoTurno">
-      <div class="flex flex-col gap-5">
-        <div v-if="!esCierreCiego || cierreRevelado" class="rounded-xl bg-surface-50 dark:bg-surface-700/30 border border-surface-200 dark:border-surface-700 p-4">
-          <div class="flex justify-between items-end">
-            <div>
-              <span class="text-xs text-surface-500">Efectivo esperado</span>
-              <div class="text-xl font-bold">${{ formatMoney(efectivoEsperado) }}</div>
-            </div>
-            <div class="text-right">
-              <span class="text-xs text-surface-500">Total contado</span>
-              <div class="text-xl font-bold" :class="totalConteo === efectivoEsperado ? 'text-green-600' : 'text-red-600'">${{ formatMoney(totalConteo) }}</div>
-            </div>
+    <Dialog v-model:visible="showCierreModal" modal :style="{ width: 'min(54rem, 94vw)' }" :closable="!cerrandoTurno" :draggable="false">
+      <template #header>
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-primary-600 text-white shadow-sm flex items-center justify-center">
+            <i class="pi pi-calculator text-lg"></i>
           </div>
-          <div v-if="totalConteo !== efectivoEsperado" class="mt-2 pt-2 border-t border-surface-200 dark:border-surface-700 flex justify-between text-sm">
-            <span class="text-surface-500">Diferencia</span>
-            <span class="font-bold" :class="totalConteo > efectivoEsperado ? 'text-green-600' : 'text-red-600'">
-              {{ totalConteo > efectivoEsperado ? '+' : '' }}${{ formatMoney(Math.abs(totalConteo - efectivoEsperado)) }}
-            </span>
+          <div>
+            <h2 class="text-base font-bold text-surface-900 dark:text-surface-0">Cierre de caja</h2>
+            <p class="text-xs text-surface-500 mt-0.5">Registra la cantidad de piezas por denominación</p>
           </div>
         </div>
-        <div v-else class="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 p-4">
+      </template>
+
+      <div class="flex flex-col gap-4">
+        <div v-if="!esCierreCiego || cierreRevelado" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div class="rounded-xl bg-surface-50 dark:bg-surface-800/70 px-3.5 py-3 shadow-sm ring-1 ring-surface-200/60 dark:ring-surface-700">
+            <div class="flex items-center gap-2 text-xs font-medium text-surface-500 mb-1"><i class="pi pi-wallet"></i>Efectivo esperado</div>
+            <p class="text-lg font-bold text-surface-900 dark:text-surface-0 tabular-nums">{{ formatMoney(efectivoEsperado) }}</p>
+          </div>
+          <div class="rounded-xl bg-primary-50 dark:bg-primary-950/30 px-3.5 py-3 shadow-sm ring-1 ring-primary-100/80 dark:ring-primary-900/60">
+            <div class="flex items-center gap-2 text-xs font-medium text-primary-700 dark:text-primary-300 mb-1"><i class="pi pi-check-circle"></i>Total contado</div>
+            <p class="text-lg font-bold text-primary-700 dark:text-primary-300 tabular-nums">{{ formatMoney(totalConteo) }}</p>
+          </div>
+          <div class="rounded-xl px-3.5 py-3 shadow-sm ring-1" :class="totalConteo === efectivoEsperado ? 'bg-green-50 ring-green-100/80 dark:bg-green-950/30 dark:ring-green-900/60' : 'bg-amber-50 ring-amber-100/80 dark:bg-amber-950/30 dark:ring-amber-900/60'">
+            <div class="flex items-center gap-2 text-xs font-medium mb-1" :class="totalConteo === efectivoEsperado ? 'text-green-700 dark:text-green-300' : 'text-amber-700 dark:text-amber-300'">
+              <i class="pi" :class="totalConteo === efectivoEsperado ? 'pi-verified' : 'pi-exclamation-circle'"></i>Diferencia
+            </div>
+            <p class="text-lg font-bold tabular-nums" :class="totalConteo === efectivoEsperado ? 'text-green-700 dark:text-green-300' : 'text-amber-700 dark:text-amber-300'">
+              {{ totalConteo - efectivoEsperado > 0 ? '+' : totalConteo - efectivoEsperado < 0 ? '-' : '' }}{{ formatMoney(Math.abs(totalConteo - efectivoEsperado)) }}
+            </p>
+          </div>
+        </div>
+        <div v-else class="rounded-xl bg-blue-50 dark:bg-blue-950/30 p-4">
           <div class="flex gap-3">
-            <i class="pi pi-shield text-blue-600 text-xl mt-0.5"></i>
+            <div class="w-9 h-9 shrink-0 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-300 flex items-center justify-center"><i class="pi pi-shield"></i></div>
             <div>
               <p class="font-semibold text-blue-900 dark:text-blue-100">Cierre ciego activado</p>
               <p class="text-sm text-blue-700 dark:text-blue-300">Cuenta todo el efectivo y declara el resultado. El monto esperado y la diferencia se mostrarán después.</p>
-              <p class="text-xl font-bold mt-3">Declarado: {{ formatMoney(totalConteo) }}</p>
+              <p class="text-lg font-bold text-blue-900 dark:text-blue-100 mt-2">Declarado: {{ formatMoney(totalConteo) }}</p>
             </div>
           </div>
         </div>
 
-        <div>
-          <h4 class="text-xs font-semibold text-surface-500 uppercase tracking-wider mb-2">Billetes</h4>
-          <div class="grid grid-cols-3 gap-2">
-            <div v-for="d in denominaciones.filter(d => d.tipo === 'billete')" :key="d.valor" class="flex flex-col gap-1 p-2.5 rounded-lg bg-surface-0 dark:bg-surface-800 border border-surface-100 dark:border-surface-700">
-              <label class="text-xs font-semibold text-surface-600 dark:text-surface-300">{{ d.label }}</label>
-              <div class="flex items-center gap-1.5">
-                <input
-                  v-model.number="conteo[d.valor]"
-                  type="number"
-                  min="0"
-                  :disabled="cierreRevelado"
-                  placeholder="0"
-                  class="w-full h-10 px-2 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-700/50 text-sm text-center font-bold outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                />
-              </div>
-              <span class="text-xs text-right text-surface-400 tabular-nums">{{ conteo[d.valor] ? '$' + formatMoney(d.valor * (conteo[d.valor] || 0)) : '$0.00' }}</span>
+        <div class="grid grid-cols-1 lg:grid-cols-[1.2fr_0.8fr] gap-3">
+        <section class="rounded-2xl bg-surface-50/80 dark:bg-surface-900/30 p-3.5">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-primary-500"></span>
+              <h3 class="text-sm font-bold text-surface-800 dark:text-surface-100">Billetes</h3>
+              <p class="text-xs text-surface-400">Cantidad por denominación</p>
             </div>
           </div>
-        </div>
+          <div class="space-y-2">
+            <label v-for="d in denominaciones.filter(d => d.tipo === 'billete')" :key="d.valor" class="group grid grid-cols-[3.25rem_1fr_auto_4rem_auto_6rem] items-center gap-2 rounded-xl bg-surface-0 dark:bg-surface-800 px-2.5 py-2 shadow-sm ring-1 ring-surface-200/60 dark:ring-surface-700 transition-all focus-within:ring-2 focus-within:ring-primary-300 dark:focus-within:ring-primary-700">
+              <span class="relative w-[3.25rem] h-8 rounded-md overflow-hidden text-white shadow-sm flex items-center justify-center" :style="{ background: d.color }">
+                <span class="absolute -right-1 -bottom-2 w-7 h-7 rounded-full border border-white/25"></span>
+                <span class="text-[10px] font-black tracking-tight">{{ d.valor.toLocaleString() }}</span>
+              </span>
+              <span class="text-xs font-bold text-surface-700 dark:text-surface-200">{{ d.label }}</span>
+              <span class="text-xs font-semibold text-surface-300">×</span>
+              <input
+                v-model.number="conteo[d.valor]"
+                type="number"
+                inputmode="numeric"
+                min="0"
+                :disabled="esCierreCiego && cierreRevelado"
+                placeholder="0"
+                class="w-16 h-9 px-2 rounded-lg border-0 bg-surface-50 dark:bg-surface-900 text-sm text-center font-bold tabular-nums outline-none ring-1 ring-surface-200/70 dark:ring-surface-700 transition-all focus:ring-2 focus:ring-primary-400 disabled:opacity-60"
+                @focus="$event.target.select()"
+              />
+              <span class="text-xs font-semibold text-surface-300">=</span>
+              <span class="text-xs text-right font-bold text-surface-600 dark:text-surface-300 tabular-nums">{{ formatMoney(d.valor * (conteo[d.valor] || 0)) }}</span>
+            </label>
+          </div>
+        </section>
 
-        <div>
-          <h4 class="text-xs font-semibold text-surface-500 uppercase tracking-wider mb-2">Monedas</h4>
-          <div class="grid grid-cols-4 gap-2">
-            <div v-for="d in denominaciones.filter(d => d.tipo === 'moneda')" :key="d.valor" class="flex flex-col gap-1 p-2.5 rounded-lg bg-surface-0 dark:bg-surface-800 border border-surface-100 dark:border-surface-700">
-              <label class="text-xs font-semibold text-surface-600 dark:text-surface-300">{{ d.label }}</label>
-              <div class="flex items-center gap-1.5">
-                <input
-                  v-model.number="conteo[d.valor]"
-                  type="number"
-                  min="0"
-                  :disabled="cierreRevelado"
-                  placeholder="0"
-                  class="w-full h-10 px-2 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-700/50 text-sm text-center font-bold outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                />
-              </div>
-              <span class="text-xs text-right text-surface-400 tabular-nums">{{ conteo[d.valor] ? '$' + formatMoney(d.valor * (conteo[d.valor] || 0)) : '$0.00' }}</span>
+        <section class="rounded-2xl bg-surface-50/80 dark:bg-surface-900/30 p-3.5">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+              <h3 class="text-sm font-bold text-surface-800 dark:text-surface-100">Monedas</h3>
+              <p class="text-xs text-surface-400">Cantidad por denominación</p>
             </div>
           </div>
+          <div class="space-y-2">
+            <label v-for="d in denominaciones.filter(d => d.tipo === 'moneda')" :key="d.valor" class="group grid grid-cols-[2.25rem_1fr_auto_3.5rem_auto_5.25rem] items-center gap-2 rounded-xl bg-surface-0 dark:bg-surface-800 px-2.5 py-2 shadow-sm ring-1 ring-surface-200/60 dark:ring-surface-700 transition-all focus-within:ring-2 focus-within:ring-primary-300 dark:focus-within:ring-primary-700">
+              <span class="w-8 h-8 rounded-full text-white shadow-sm ring-2 ring-white/50 flex items-center justify-center" :style="{ background: d.color }">
+                <span class="text-[10px] font-black">{{ d.valor }}</span>
+              </span>
+              <span class="text-xs font-bold text-surface-700 dark:text-surface-200">{{ d.label }}</span>
+              <span class="text-xs font-semibold text-surface-300">×</span>
+              <input
+                v-model.number="conteo[d.valor]"
+                type="number"
+                inputmode="numeric"
+                min="0"
+                :disabled="esCierreCiego && cierreRevelado"
+                placeholder="0"
+                class="w-14 h-9 px-2 rounded-lg border-0 bg-surface-50 dark:bg-surface-900 text-sm text-center font-bold tabular-nums outline-none ring-1 ring-surface-200/70 dark:ring-surface-700 transition-all focus:ring-2 focus:ring-primary-400 disabled:opacity-60"
+                @focus="$event.target.select()"
+              />
+              <span class="text-xs font-semibold text-surface-300">=</span>
+              <span class="text-[11px] text-right font-bold text-surface-600 dark:text-surface-300 tabular-nums">{{ formatMoney(d.valor * (conteo[d.valor] || 0)) }}</span>
+            </label>
+            <div class="mt-3 rounded-xl bg-surface-900 dark:bg-surface-100 px-3.5 py-3 text-white dark:text-surface-900 shadow-sm">
+              <div class="flex items-center justify-between text-xs opacity-70"><span>Piezas contadas</span><strong>{{ totalPiezas }}</strong></div>
+              <div class="flex items-end justify-between mt-2"><span class="text-xs font-medium opacity-70">Total efectivo</span><strong class="text-lg tabular-nums">{{ formatMoney(totalConteo) }}</strong></div>
+            </div>
+          </div>
+        </section>
         </div>
       </div>
       <template #footer>
-        <button @click="showCierreModal = false" :disabled="cerrandoTurno" class="px-4 py-2 rounded-lg text-sm font-medium border border-surface-300 dark:border-surface-600 hover:bg-surface-100 dark:hover:bg-surface-700 disabled:opacity-50">Cancelar</button>
-        <button v-if="esCierreCiego && !cierreRevelado" @click="declararConteo" :disabled="cerrandoTurno" class="px-4 py-2 rounded-lg text-white text-sm font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
-          <i class="pi pi-lock"></i>
-          Declarar conteo
-        </button>
-        <button v-else @click="showCierreModal = false; cerrarTurno()" :disabled="cerrandoTurno" class="px-4 py-2 rounded-lg text-white text-sm font-semibold bg-red-500 hover:bg-red-600 disabled:opacity-50 flex items-center gap-2">
-          <i class="pi" :class="cerrandoTurno ? 'pi-spin pi-spinner' : 'pi-times-circle'"></i>
-          {{ cerrandoTurno ? 'Cerrando...' : 'Confirmar Cierre de Turno' }}
-        </button>
+        <div class="w-full flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
+          <p class="hidden sm:block text-xs text-surface-400"><i class="pi pi-info-circle mr-1"></i>Verifica el conteo antes de confirmar</p>
+          <div class="flex justify-end gap-2">
+            <button @click="showCierreModal = false" :disabled="cerrandoTurno" class="px-4 py-2.5 rounded-lg text-sm font-semibold text-surface-600 dark:text-surface-300 hover:bg-surface-100 dark:hover:bg-surface-800 disabled:opacity-50 transition-colors">Cancelar</button>
+            <button v-if="esCierreCiego && !cierreRevelado" @click="declararConteo" :disabled="cerrandoTurno" class="px-5 py-2.5 rounded-lg text-white text-sm font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2 shadow-sm transition-colors">
+              <i class="pi pi-lock"></i>Declarar conteo
+            </button>
+            <button v-else @click="showCierreModal = false; cerrarTurno()" :disabled="cerrandoTurno" class="px-5 py-2.5 rounded-lg text-white text-sm font-semibold bg-red-500 hover:bg-red-600 disabled:opacity-50 flex items-center gap-2 shadow-sm transition-colors">
+              <i class="pi" :class="cerrandoTurno ? 'pi-spin pi-spinner' : 'pi-check'"></i>
+              {{ cerrandoTurno ? 'Cerrando...' : 'Confirmar cierre' }}
+            </button>
+          </div>
+        </div>
       </template>
     </Dialog>
   </div>
@@ -320,16 +365,16 @@ const showCierreModal = ref(false)
 const cierreRevelado = ref(false)
 const esCierreCiego = computed(() => Boolean(auth.isCajero))
 const denominaciones = [
-  { valor: 2000, label: '$2,000', tipo: 'billete' },
-  { valor: 1000, label: '$1,000', tipo: 'billete' },
-  { valor: 500, label: '$500', tipo: 'billete' },
-  { valor: 200, label: '$200', tipo: 'billete' },
-  { valor: 100, label: '$100', tipo: 'billete' },
-  { valor: 50, label: '$50', tipo: 'billete' },
-  { valor: 25, label: '$25', tipo: 'moneda' },
-  { valor: 10, label: '$10', tipo: 'moneda' },
-  { valor: 5, label: '$5', tipo: 'moneda' },
-  { valor: 1, label: '$1', tipo: 'moneda' },
+  { valor: 2000, label: '$2,000', tipo: 'billete', color: 'linear-gradient(135deg, #7c3aed, #a78bfa)' },
+  { valor: 1000, label: '$1,000', tipo: 'billete', color: 'linear-gradient(135deg, #dc2626, #fb7185)' },
+  { valor: 500, label: '$500', tipo: 'billete', color: 'linear-gradient(135deg, #2563eb, #60a5fa)' },
+  { valor: 200, label: '$200', tipo: 'billete', color: 'linear-gradient(135deg, #d97706, #fbbf24)' },
+  { valor: 100, label: '$100', tipo: 'billete', color: 'linear-gradient(135deg, #059669, #34d399)' },
+  { valor: 50, label: '$50', tipo: 'billete', color: 'linear-gradient(135deg, #475569, #94a3b8)' },
+  { valor: 25, label: '$25', tipo: 'moneda', color: 'linear-gradient(135deg, #b7791f, #f6c453)' },
+  { valor: 10, label: '$10', tipo: 'moneda', color: 'linear-gradient(135deg, #64748b, #cbd5e1)' },
+  { valor: 5, label: '$5', tipo: 'moneda', color: 'linear-gradient(135deg, #a16207, #eab308)' },
+  { valor: 1, label: '$1', tipo: 'moneda', color: 'linear-gradient(135deg, #64748b, #94a3b8)' },
 ]
 const conteo = ref({})
 
@@ -887,6 +932,11 @@ const totalConteo = computed(() => {
   }
   return total
 })
+
+const totalPiezas = computed(() => denominaciones.reduce(
+  (total, d) => total + (Number(conteo.value[d.valor]) || 0),
+  0,
+))
 
 function abrirCierreTurno() {
   if (!turnoActual.value) return
