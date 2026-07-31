@@ -10,6 +10,7 @@ import App from './App.vue'
 
 import 'primeicons/primeicons.css'
 import './assets/main.css'
+import { initRuntimeI18n } from '@/i18n/runtimeI18n'
 
 async function initApp() {
   const isCapacitor = typeof (window as any).Capacitor !== 'undefined' && (window as any).Capacitor.isNativePlatform()
@@ -49,6 +50,7 @@ async function initApp() {
   app.directive('tooltip', Tooltip)
 
   app.mount('#app')
+  initRuntimeI18n()
 
   // Apply the legacy WebView overrides after Vue and PrimeVue have inserted
   // their styles. This also forces the ELO compositor to repaint the WebView.

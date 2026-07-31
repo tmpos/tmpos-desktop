@@ -48,7 +48,9 @@ import { useLoyalty } from '@/composables/useLoyalty'
 import { useComboProductos } from '@/composables/useComboProductos'
 import { useThemeStore } from '@/stores/theme'
 import { useSystemModeStore } from '@/stores/systemMode'
+import { useLocaleProfile } from '@/composables/useLocaleProfile'
 const { store: almacenActivoStore, filterByAlmacen, addAlmacenId: addAlmacenIdFilter } = useAlmacenFilter()
+const { taxName } = useLocaleProfile()
 
 const toast = useToast()
 const systemMode = useSystemModeStore()
@@ -287,7 +289,11 @@ async function recargarConfigVentas() {
   try {
     const res = await window.db.getAll('empresa')
     if (res.success && res.data?.length > 0) {
-      const e = res.data[0]
+      const uid = String(almacenActivoStore.activeUid || localStorage.getItem('almacen_uid') || localStorage.getItem('almacen_default_uid') || '')
+      const id = Number(almacenActivoStore.activeId || localStorage.getItem('almacen_id') || localStorage.getItem('almacen_default_id') || 0)
+      const e = (uid && res.data.find((item: any) => String(item.uid || item.almacen_uid || '') === uid))
+        || (id && res.data.find((item: any) => Number(item.almacen_id || item.id) === id))
+        || res.data[0]
       impuestoPorcentaje.value = e.impuesto == null || e.impuesto === '' ? 18 : Number(e.impuesto)
       impuestoIncluido.value = e.impuesto_incluido == null || e.impuesto_incluido === '' ? 1 : Number(e.impuesto_incluido)
       impuestoPorcentajeOriginal.value = impuestoPorcentaje.value
@@ -301,6 +307,15 @@ async function recargarConfigVentas() {
       empresaTipoDoc.value = e.tipo_documento_defecto || ''
     }
   } catch (_) {}
+}
+function aplicarConfigVentas(event: Event) {
+  const detail = (event as CustomEvent).detail || {}
+  const uid = String(almacenActivoStore.activeUid || '')
+  if (detail.empresa_uid && uid && String(detail.empresa_uid) !== uid) return
+  impuestoPorcentaje.value = Number(detail.impuesto ?? impuestoPorcentaje.value)
+  impuestoIncluido.value = Number(detail.impuesto_incluido ?? impuestoIncluido.value)
+  impuestoPorcentajeOriginal.value = impuestoPorcentaje.value
+  impuestoIncluidoOriginal.value = impuestoIncluido.value
 }
 const empresaTelefono = ref('')
 const empresaDireccion = ref('')
@@ -744,7 +759,8 @@ const total = computed(() => {
 
 const impuestoMonto = computed(() => {
   if (impuestoIncluido.value === 0) {
-    return subtotal.value * (impuestoPorcentaje.value / 100)
+    const base = Math.max(0, subtotal.value - Math.min(descuento.value, subtotal.value))
+    return base * (impuestoPorcentaje.value / 100)
   }
   return 0
 })
@@ -3455,7 +3471,7 @@ ${isTicketOptionOn(cfg.show_totals) ? `<div class="linea" style="margin-top:30px
   <table style="width:100%;border-collapse:collapse">
     <tr><td>SUBTOTAL:</td><td style="text-align:right;"><span style="font-size:1.5em !important;margin-top:5px;margin-bottom:5px;">RD$${fmt(d.subtotal)}</span></td></tr>
     ${d.descuento > 0 ? `<tr><td>DESCUENTO:</td><td style="text-align:right;"><span style="font-size:1.5em !important;margin-top:5px;margin-bottom:5px;">RD$${fmt(d.descuento)}</span></td></tr>` : ''}
-    ${d.impuesto > 0 ? `<tr><td>ITBIS:</td><td style="text-align:right;"><span style="font-size:1.5em !important;margin-top:5px;margin-bottom:5px;">RD$${fmt(d.impuesto)}</span></td></tr>` : `<tr><td style="color:#999">ITBIS:</td><td style="text-align:right;color:#999">${d.impuesto_incluido === 2 ? 'Sin impuesto' : 'Incluido'}</td></tr>`}
+    ${d.impuesto > 0 ? `<tr><td>${taxName.value}:</td><td style="text-align:right;"><span style="font-size:1.5em !important;margin-top:5px;margin-bottom:5px;">RD$${fmt(d.impuesto)}</span></td></tr>` : `<tr><td style="color:#999">${taxName.value}:</td><td style="text-align:right;color:#999">${d.impuesto_incluido === 2 ? 'Sin impuesto' : 'Incluido'}</td></tr>`}
   </table>
   <table style="width:100%;border-collapse:collapse">
     <tr><td>TOTAL:</td><td style="text-align:right;"><span style="font-size:1.5em !important;margin-top:5px;margin-bottom:5px;">RD$${fmt(d.total)}</span></td></tr>
@@ -3697,7 +3713,7 @@ async function generarPdfCotizacion(invoiceNo: string, ncf: string, compTipo: st
     <table>
       <tr><td style="border:none;text-align:right;font-size:11px"><strong>Subtotal:</strong></td><td style="border:none;text-align:right;font-size:11px;width:120px">${fmt(subtotal.value)}</td></tr>
       ${descuento.value > 0 ? `<tr><td style="border:none;text-align:right;font-size:11px"><strong>Descuento:</strong></td><td style="border:none;text-align:right;font-size:11px;color:#c00">-${fmt(descuento.value)}</td></tr>` : ''}
-      <tr><td style="border:none;text-align:right;font-size:11px"><strong>ITBIS:</strong></td><td style="border:none;text-align:right;font-size:11px">${fmt(impuestoMonto.value)}</td></tr>
+      <tr><td style="border:none;text-align:right;font-size:11px"><strong>${taxName.value}:</strong></td><td style="border:none;text-align:right;font-size:11px">${fmt(impuestoMonto.value)}</td></tr>
       <tr><td style="border-top:2px solid #333;text-align:right;font-size:14px;font-weight:bold">TOTAL</td><td style="border-top:2px solid #333;text-align:right;font-size:14px;font-weight:bold">${fmt(total.value)}</td></tr>
     </table>
   </div>
@@ -4673,6 +4689,7 @@ onMounted(async () => {
   // almacen activo; el filtro prioriza almacen_uid y conserva compatibilidad
   // con registros antiguos que solo tengan almacen_id.
   await almacenActivoStore.load()
+  window.addEventListener('ventas-config-changed', aplicarConfigVentas)
   try {
     const datosJSON = await envioElectron('datosarchivo')
     if (datosJSON) {
@@ -4760,7 +4777,8 @@ onMounted(async () => {
   try {
     const resEmp = await window.db.getAll('empresa')
     if (resEmp.success && resEmp.data?.length > 0) {
-      const e = resEmp.data[0]
+      const uid = String(almacenActivoStore.activeUid || '')
+      const e = (uid && resEmp.data.find((item: any) => String(item.uid || item.almacen_uid || '') === uid)) || resEmp.data[0]
       empresaNombre.value = e.nombre || 'MI EMPRESA'
       empresaRnc.value = e.legal || ''
       empresaTelefono.value = e.telefono || ''
@@ -4825,6 +4843,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('ventas-config-changed', aplicarConfigVentas)
   if (barcodeCleanup.value) barcodeCleanup.value()
   customerDisplay.cerrarPantallaCliente()
 })
@@ -5533,9 +5552,9 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
             <div class="hidden lg:block px-4 py-2.5 space-y-1 border-b border-surface-200/50 dark:border-surface-700/30">
               <div class="flex justify-between text-xs"><span class="text-surface-500">Subtotal</span><span class="font-medium text-surface-800 dark:text-surface-100">${{ formatCurrency(subtotal) }}</span></div>
               <div class="flex items-center justify-between gap-2"><span class="text-xs text-surface-500 flex-shrink-0">Descuento</span><Button :label="descuento > 0 ? '$' + formatCurrency(descuento) : 'Agregar'" :severity="descuento > 0 ? 'warning' : 'secondary'" text size="small" class="!text-xs" @click="abrirDialogDescuento" /></div>
-              <div v-if="impuestoIncluido === 0" class="flex justify-between text-xs"><span class="text-surface-500">ITBIS ({{ impuestoPorcentaje }}%)</span><span class="font-medium text-surface-800 dark:text-surface-100">${{ formatCurrency(impuestoMonto) }}</span></div>
-              <div v-else-if="impuestoIncluido === 1" class="flex justify-between text-xs"><span class="text-surface-400">ITBIS {{ impuestoPorcentaje }}% incl.</span><span class="text-surface-400">&mdash;</span></div>
-              <div v-else class="flex justify-between text-xs"><span class="text-surface-400">ITBIS</span><span class="text-surface-400">Sin impuesto</span></div>
+              <div v-if="impuestoIncluido === 0" class="flex justify-between text-xs"><span class="text-surface-500">{{ taxName }} ({{ impuestoPorcentaje }}%)</span><span class="font-medium text-surface-800 dark:text-surface-100">${{ formatCurrency(impuestoMonto) }}</span></div>
+              <div v-else-if="impuestoIncluido === 1" class="flex justify-between text-xs"><span class="text-surface-400">{{ taxName }} {{ impuestoPorcentaje }}% incl.</span><span class="text-surface-400">&mdash;</span></div>
+              <div v-else class="flex justify-between text-xs"><span class="text-surface-400">{{ taxName }}</span><span class="text-surface-400">Sin impuesto</span></div>
             </div>
             <div class="flex items-center justify-between px-3 py-2 lg:px-4 border-b border-surface-200/50 dark:border-surface-700/30">
               <div class="flex items-center gap-3"><span class="text-xs lg:text-sm font-bold text-surface-900 dark:text-surface-50">Total</span><span class="text-sm lg:text-base font-bold text-primary">${{ formatCurrency(total) }}</span></div>
@@ -5953,15 +5972,15 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
           <span class="text-red-500">-${{ formatCurrency(descuento) }}</span>
         </div>
         <div v-if="impuestoIncluido === 0" class="flex justify-between text-sm">
-          <span>ITBIS ({{ impuestoPorcentaje }}%)</span>
+          <span>{{ taxName }} ({{ impuestoPorcentaje }}%)</span>
           <span>${{ formatCurrency(impuestoMonto) }}</span>
         </div>
         <div v-else-if="impuestoIncluido === 1" class="flex justify-between text-xs text-surface-400">
-          <span>ITBIS {{ impuestoPorcentaje }}% incl.</span>
+          <span>{{ taxName }} {{ impuestoPorcentaje }}% incl.</span>
           <span>—</span>
         </div>
         <div v-else class="flex justify-between text-xs text-surface-400">
-          <span>ITBIS</span>
+          <span>{{ taxName }}</span>
           <span>Sin impuesto</span>
         </div>
         <div class="flex justify-between text-sm pt-1">
@@ -7273,15 +7292,15 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
             <span>${{ formatCurrency(subtotal) }}</span>
           </div>
           <div v-if="impuestoIncluido === 0" class="flex justify-between text-xs">
-            <span class="text-surface-500">ITBIS ({{ impuestoPorcentaje }}%)</span>
+            <span class="text-surface-500">{{ taxName }} ({{ impuestoPorcentaje }}%)</span>
             <span>${{ formatCurrency(impuestoMonto) }}</span>
           </div>
           <div v-else-if="impuestoIncluido === 1" class="flex justify-between text-[10px] text-surface-400">
-            <span>ITBIS {{ impuestoPorcentaje }}% incl.</span>
+            <span>{{ taxName }} {{ impuestoPorcentaje }}% incl.</span>
             <span>—</span>
           </div>
           <div v-else class="flex justify-between text-[10px] text-surface-400">
-            <span>ITBIS</span>
+            <span>{{ taxName }}</span>
             <span>Sin impuesto</span>
           </div>
           <div class="flex justify-between font-bold text-lg border-t border-surface-200/50 dark:border-surface-700/30 pt-1 mt-1">

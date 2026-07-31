@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import InputText from 'primevue/inputtext'
+import InputNumber from 'primevue/inputnumber'
 import InputSwitch from 'primevue/inputswitch'
 import Select from 'primevue/select'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { getLocaleProfile, localeProfiles } from '@/i18n/localeProfiles'
 
 const toast = useToast()
 const theme = useThemeStore()
@@ -22,11 +24,37 @@ const guardandoSeguridad = ref(false)
 
 const config = ref({
   app_nombre: 'TMPOS',
-  moneda: 'RD$',
+  pais: 'DO',
+  moneda: 'DOP',
+  simbolo_moneda: 'RD$',
   formato_fecha: 'DD/MM/YYYY',
   zona_horaria: 'America/Santo_Domingo',
-  idioma: 'es',
+  idioma: 'es-DO',
+  locale: 'es-DO',
+  impuesto_nombre: 'ITBIS',
+  impuesto_porcentaje: 18,
 })
+
+const paises = [
+  { label: '🇩🇴 República Dominicana', value: 'DO', idioma: 'es', locale: 'es-DO', moneda: 'DOP', simbolo: 'RD$', fecha: 'DD/MM/YYYY', zona: 'America/Santo_Domingo' },
+  { label: '🇺🇸 Estados Unidos', value: 'US', idioma: 'en-US', locale: 'en-US', moneda: 'USD', simbolo: '$', fecha: 'MM/DD/YYYY', zona: 'America/New_York' },
+  { label: '🇲🇽 México', value: 'MX', idioma: 'es', locale: 'es-MX', moneda: 'MXN', simbolo: '$', fecha: 'DD/MM/YYYY', zona: 'America/Mexico_City' },
+  { label: '🇨🇦 Canadá', value: 'CA', idioma: 'en-US', locale: 'en-CA', moneda: 'CAD', simbolo: 'CA$', fecha: 'YYYY-MM-DD', zona: 'America/Toronto' },
+  { label: '🇧🇷 Brasil', value: 'BR', idioma: 'pt-BR', locale: 'pt-BR', moneda: 'BRL', simbolo: 'R$', fecha: 'DD/MM/YYYY', zona: 'America/Sao_Paulo' },
+  { label: '🇦🇷 Argentina', value: 'AR', idioma: 'es', locale: 'es-AR', moneda: 'ARS', simbolo: '$', fecha: 'DD/MM/YYYY', zona: 'America/Argentina/Buenos_Aires' },
+  { label: '🇨🇴 Colombia', value: 'CO', idioma: 'es', locale: 'es-CO', moneda: 'COP', simbolo: '$', fecha: 'DD/MM/YYYY', zona: 'America/Bogota' },
+  { label: '🇨🇱 Chile', value: 'CL', idioma: 'es', locale: 'es-CL', moneda: 'CLP', simbolo: '$', fecha: 'DD/MM/YYYY', zona: 'America/Santiago' },
+  { label: '🇵🇪 Perú', value: 'PE', idioma: 'es', locale: 'es-PE', moneda: 'PEN', simbolo: 'S/', fecha: 'DD/MM/YYYY', zona: 'America/Lima' },
+  { label: '🇵🇦 Panamá', value: 'PA', idioma: 'es', locale: 'es-PA', moneda: 'PAB', simbolo: 'B/.', fecha: 'DD/MM/YYYY', zona: 'America/Panama' },
+  { label: '🇨🇷 Costa Rica', value: 'CR', idioma: 'es', locale: 'es-CR', moneda: 'CRC', simbolo: '₡', fecha: 'DD/MM/YYYY', zona: 'America/Costa_Rica' },
+  { label: '🇬🇹 Guatemala', value: 'GT', idioma: 'es', locale: 'es-GT', moneda: 'GTQ', simbolo: 'Q', fecha: 'DD/MM/YYYY', zona: 'America/Guatemala' },
+  { label: '🇵🇷 Puerto Rico', value: 'PR', idioma: 'es', locale: 'es-PR', moneda: 'USD', simbolo: '$', fecha: 'MM/DD/YYYY', zona: 'America/Puerto_Rico' },
+]
+
+const idiomas = [
+  { label: 'Español', value: 'es' },
+  { label: 'English (United States)', value: 'en-US' },
+]
 
 const coloresDisponibles = [
   { label: 'Azul', value: 'blue', color: '#3b82f6' },
@@ -41,11 +69,9 @@ const coloresDisponibles = [
 
 const variantes = ['50', '100', '200', '300', '400', '500', '600', '700', '800', '900', '950']
 
-const monedas = [
-  { label: 'RD$ (Peso Dominicano)', value: 'RD$' },
-  { label: 'US$ (Dolar)', value: 'US$' },
-  { label: 'EUR (Euro)', value: 'EUR' },
-]
+const monedas = computed(() => Array.from(new Map(paises.map(p => [p.moneda, {
+  label: `${p.moneda} (${p.simbolo})`, value: p.moneda,
+}])).values()))
 
 const formatosFecha = [
   { label: 'DD/MM/YYYY', value: 'DD/MM/YYYY' },
@@ -55,10 +81,95 @@ const formatosFecha = [
 
 const guardando = ref(false)
 
+const vistaPreviaMoneda = computed(() => {
+  try {
+    return new Intl.NumberFormat(config.value.locale, { style: 'currency', currency: config.value.moneda }).format(1234567.89)
+  } catch (_) {
+    return `${config.value.simbolo_moneda} 1,234,567.89`
+  }
+})
+
+const vistaPreviaFecha = computed(() => {
+  try {
+    return new Intl.DateTimeFormat(config.value.locale, { dateStyle: 'full' }).format(new Date(2026, 6, 31))
+  } catch (_) {
+    return '31/07/2026'
+  }
+})
+
+const perfilFiscal = computed(() => getLocaleProfile(config.value.pais).tax)
+
+function aplicarPais(codigo: string) {
+  const pais = paises.find(p => p.value === codigo)
+  if (!pais) return
+  config.value.idioma = pais.idioma
+  config.value.locale = pais.locale
+  config.value.moneda = pais.moneda
+  config.value.simbolo_moneda = pais.simbolo
+  config.value.formato_fecha = pais.fecha
+  config.value.zona_horaria = pais.zona
+  const fiscal = (localeProfiles[codigo] || localeProfiles.DO).tax
+  config.value.impuesto_nombre = fiscal.shortName
+  config.value.impuesto_porcentaje = fiscal.defaultRate
+}
+
+watch(() => config.value.pais, aplicarPais)
+
 async function guardar() {
   guardando.value = true
-  toast.add({ severity: 'success', summary: 'Guardado', detail: 'Configuracion del sistema actualizada', life: 2000 })
-  guardando.value = false
+  try {
+    const valores: Record<string, string> = {
+      app_nombre: config.value.app_nombre,
+      sistema_pais: config.value.pais,
+      sistema_idioma: config.value.idioma,
+      sistema_locale: config.value.locale,
+      sistema_moneda: config.value.moneda,
+      sistema_simbolo_moneda: config.value.simbolo_moneda,
+      sistema_formato_fecha: config.value.formato_fecha,
+      sistema_zona_horaria: config.value.zona_horaria,
+      sistema_impuesto_nombre: config.value.impuesto_nombre.trim() || perfilFiscal.value.shortName,
+      sistema_impuesto_nombre_completo: config.value.impuesto_nombre.trim() || perfilFiscal.value.fullName,
+      sistema_impuesto_porcentaje: String(config.value.impuesto_porcentaje),
+    }
+    for (const [clave, valor] of Object.entries(valores)) {
+      const res = await (window as any).config.set(clave, valor)
+      if (!res?.success) throw new Error(res?.error || `No se pudo guardar ${clave}`)
+      localStorage.setItem(clave, valor)
+    }
+    document.documentElement.lang = config.value.idioma
+    const empresas = await window.db.getAll('empresa')
+    if (empresas.success && empresas.data?.length) {
+      const almacenUid = localStorage.getItem('almacen_uid') || localStorage.getItem('almacen_default_uid') || ''
+      const empresaActiva = empresas.data.find((item: any) => almacenUid && String(item.uid || item.almacen_uid || '') === almacenUid) || empresas.data[0]
+      await window.db.update('empresa', empresaActiva.id, {
+        impuesto: Number(config.value.impuesto_porcentaje || 0),
+        moneda: config.value.simbolo_moneda,
+      })
+    }
+    window.dispatchEvent(new CustomEvent('system-locale-changed', { detail: { ...config.value } }))
+    toast.add({ severity: 'success', summary: 'Guardado', detail: 'País, idioma y formatos actualizados', life: 2500 })
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo guardar la configuración', life: 4000 })
+  } finally {
+    guardando.value = false
+  }
+}
+
+async function cargarPreferencias() {
+  const claves: Record<string, keyof typeof config.value> = {
+    app_nombre: 'app_nombre', sistema_pais: 'pais', sistema_idioma: 'idioma', sistema_locale: 'locale',
+    sistema_moneda: 'moneda', sistema_simbolo_moneda: 'simbolo_moneda', sistema_formato_fecha: 'formato_fecha',
+    sistema_zona_horaria: 'zona_horaria',
+    sistema_impuesto_nombre: 'impuesto_nombre', sistema_impuesto_porcentaje: 'impuesto_porcentaje',
+  }
+  for (const [clave, campo] of Object.entries(claves)) {
+    try {
+      const res = await (window as any).config.get(clave)
+      const valor = res?.success && res.data !== '' ? String(res.data) : localStorage.getItem(clave)
+      if (valor) (config.value as any)[campo] = valor
+    } catch (_) {}
+  }
+  config.value.impuesto_porcentaje = Number(config.value.impuesto_porcentaje || 0)
 }
 
 async function cargarServerUrl() {
@@ -148,7 +259,8 @@ async function limpiarTodosLosDatos() {
   dialogoLimpiar.value = false
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await cargarPreferencias()
   cargarServerUrl()
   cargarSeguridad()
 })
@@ -319,8 +431,8 @@ onMounted(() => {
 
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-5 space-y-4">
             <h3 class="font-semibold flex items-center gap-2 text-sm">
-              <i class="pi pi-cog text-primary"></i>
-              Preferencias del Sistema
+              <i class="pi pi-globe text-primary"></i>
+              País, Idioma y Formatos
             </h3>
 
             <div class="space-y-1.5">
@@ -329,6 +441,14 @@ onMounted(() => {
             </div>
 
             <div class="grid grid-cols-2 gap-4">
+              <div class="space-y-1.5 col-span-2 sm:col-span-1">
+                <label class="text-sm font-medium">País</label>
+                <Select v-model="config.pais" :options="paises" optionLabel="label" optionValue="value" filter fluid />
+              </div>
+              <div class="space-y-1.5 col-span-2 sm:col-span-1">
+                <label class="text-sm font-medium">Idioma</label>
+                <Select v-model="config.idioma" :options="idiomas" optionLabel="label" optionValue="value" fluid />
+              </div>
               <div class="space-y-1.5">
                 <label class="text-sm font-medium">Moneda</label>
                 <Select v-model="config.moneda" :options="monedas" optionLabel="label" optionValue="value" fluid />
@@ -337,6 +457,48 @@ onMounted(() => {
                 <label class="text-sm font-medium">Formato de Fecha</label>
                 <Select v-model="config.formato_fecha" :options="formatosFecha" optionLabel="label" optionValue="value" fluid />
               </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-lg bg-surface-50 dark:bg-surface-900/50 p-3 text-sm">
+              <div>
+                <span class="block text-xs text-surface-400">Vista previa de moneda</span>
+                <strong>{{ vistaPreviaMoneda }}</strong>
+              </div>
+              <div>
+                <span class="block text-xs text-surface-400">Vista previa de fecha</span>
+                <strong>{{ vistaPreviaFecha }}</strong>
+              </div>
+              <div>
+                <span class="block text-xs text-surface-400">Símbolo</span>
+                <strong>{{ config.simbolo_moneda }} · {{ config.moneda }}</strong>
+              </div>
+              <div>
+                <span class="block text-xs text-surface-400">Zona horaria</span>
+                <strong>{{ config.zona_horaria }}</strong>
+              </div>
+              <div class="sm:col-span-2">
+                <span class="block text-xs text-surface-400">Impuesto del país</span>
+                <strong>{{ config.impuesto_nombre }}</strong>
+                <span class="text-xs text-surface-400"> · {{ perfilFiscal.fullName }}</span>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div class="space-y-1.5">
+                <label class="text-sm font-medium">Nombre del impuesto</label>
+                <InputText v-model="config.impuesto_nombre" placeholder="Ej: ITBIS, IVA, Sales Tax" fluid />
+              </div>
+              <div class="space-y-1.5">
+                <label class="text-sm font-medium">Porcentaje del impuesto</label>
+                <InputNumber v-model="config.impuesto_porcentaje" :min="0" :max="100" :minFractionDigits="0" :maxFractionDigits="2" fluid>
+                  <template #suffix><span class="text-xs text-surface-400">%</span></template>
+                </InputNumber>
+              </div>
+            </div>
+
+            <p class="text-xs text-surface-400">El país aplica automáticamente el idioma, la moneda y los formatos recomendados. Puedes ajustarlos antes de guardar.</p>
+            <div class="flex justify-end">
+              <Button label="Guardar preferencias" icon="pi pi-save" :loading="guardando" @click="guardar" />
             </div>
           </div>
 

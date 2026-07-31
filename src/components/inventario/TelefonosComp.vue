@@ -478,9 +478,11 @@ async function guardarImei() {
   if (!selectedTelefono.value?.id) return
   if (!imeiForm.value.nombre.trim() || imeiForm.value.nombre.length !== 15) { toast.add({ severity: 'warn', summary: 'IMEI invalido', detail: '15 digitos requeridos', life: 3000 }); return }
   try {
+    if (!almacenStore.activeUid) await almacenStore.load()
+    const almacenUid = String(almacenStore.activeUid || almacenStore.activeAlmacen?.uid || '')
     const existe = await window.db.getAll('imei')
     if (existe.success && (existe.data || []).find((i: any) => i.nombre === imeiForm.value.nombre.trim())) { toast.add({ severity: 'warn', summary: 'Duplicado', detail: 'El IMEI ya existe', life: 3000 }); return }
-    await window.db.insert('imei', addAlmacenId({ nombre: imeiForm.value.nombre.trim(), id_equi: selectedTelefono.value.id, telefono_uid: selectedTelefono.value.uid || '', costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
+    await window.db.insert('imei', addAlmacenId({ nombre: imeiForm.value.nombre.trim(), id_equi: selectedTelefono.value.id, telefono_uid: selectedTelefono.value.uid || '', almacen_uid: almacenUid, costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
     toast.add({ severity: 'success', summary: 'Creado', detail: 'IMEI creado', life: 3000 })
     imeiDialogVisible.value = false
     await cargarImeisDelTelefono(selectedTelefono.value.id)
@@ -494,12 +496,14 @@ async function agregarImeiEnLote() {
   if (imeis.length === 0) { toast.add({ severity: 'warn', summary: 'Vacio', detail: 'No hay IMEIs', life: 3000 }); return }
   guardandoLote.value = true
   try {
+    if (!almacenStore.activeUid) await almacenStore.load()
+    const almacenUid = String(almacenStore.activeUid || almacenStore.activeAlmacen?.uid || '')
     const existentes = new Set(((await window.db.getAll('imei')).data || []).map((i: any) => i.nombre))
     let insertados = 0, errores = 0, duplicados = 0
     for (const imei of imeis) {
       if (existentes.has(imei)) { duplicados++; continue }
       try {
-        await window.db.insert('imei', addAlmacenId({ nombre: imei, id_equi: selectedTelefono.value.id, telefono_uid: selectedTelefono.value.uid || '', costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
+        await window.db.insert('imei', addAlmacenId({ nombre: imei, id_equi: selectedTelefono.value.id, telefono_uid: selectedTelefono.value.uid || '', almacen_uid: almacenUid, costo: imeiForm.value.costo || 0, precio_venta: imeiForm.value.precio_venta || 0, precio_min: imeiForm.value.precio_min || 0, precio_xmayor: imeiForm.value.precio_xmayor || 0, color: imeiForm.value.color.toUpperCase(), capacidad: imeiForm.value.capacidad.toUpperCase(), bateria: '', estado: 'DISPONIBLE', fecha_venta: null, comprador: '', proveedor: imeiForm.value.proveedor.toUpperCase(), no_compra: '', precio_vendido: 0, hora_venta: '', no_factura: '', nota: '' }))
         insertados++
         sincronizarImeiServidor({ nombre: imei, costo: imeiForm.value.costo, precio_venta: imeiForm.value.precio_venta, proveedor: imeiForm.value.proveedor })
       } catch { errores++ }
