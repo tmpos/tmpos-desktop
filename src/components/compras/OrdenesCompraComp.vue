@@ -27,7 +27,7 @@
           </template>
         </Column>
         <Column field="total" header="Total" sortable style="width:8rem">
-          <template #body="{ data }"><span class="font-semibold">${{ formatCurrency(data.total) }}</span></template>
+          <template #body="{ data }"><span class="font-semibold">{{ $formatMoney(data.total) }}</span></template>
         </Column>
         <Column header="Acciones" style="width:8rem">
           <template #body="{ data }">
@@ -63,7 +63,7 @@
               <InputText v-model="item.nombre" placeholder="Producto" class="flex-1" fluid />
               <InputNumber v-model="item.cantidad" :min="1" placeholder="Cant" class="w-20" fluid />
               <InputNumber v-model="item.precio" :min="0" placeholder="Precio" class="w-24" fluid :minFractionDigits="2" />
-              <span class="text-sm font-semibold w-20 text-right">${{ formatCurrency((item.cantidad || 0) * (item.precio || 0)) }}</span>
+              <span class="text-sm font-semibold w-20 text-right">{{ $formatMoney((item.cantidad || 0) * (item.precio || 0)) }}</span>
               <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click="form.productos.splice(i, 1)" />
             </div>
             <Button label="Agregar producto" icon="pi pi-plus" size="small" severity="info" text @click="form.productos.push({ nombre: '', cantidad: 1, precio: 0 })" />
@@ -109,14 +109,14 @@
           <h4 class="font-semibold text-sm mb-2">Productos</h4>
           <div v-for="(p, i) in JSON.parse(typeof ordenSeleccionada.productos === 'string' ? ordenSeleccionada.productos : '[]') || []" :key="i" class="flex items-center justify-between py-1.5 text-sm border-b border-surface-100 dark:border-surface-800 last:border-b-0">
             <span>{{ p.nombre }}</span>
-            <span class="text-surface-500">{{ p.cantidad }} x ${{ formatCurrency(p.precio || 0) }} = <strong>${{ formatCurrency((p.cantidad || 0) * (p.precio || 0)) }}</strong></span>
+            <span class="text-surface-500">{{ p.cantidad }} x {{ $formatMoney(p.precio || 0) }} = <strong>{{ $formatMoney((p.cantidad || 0) * (p.precio || 0)) }}</strong></span>
           </div>
         </div>
         <div class="border-t border-surface-200 dark:border-surface-700 pt-3 space-y-1 text-sm">
-          <div class="flex justify-between"><span class="text-surface-400">Subtotal</span><span>${{ formatCurrency(ordenSeleccionada.subtotal) }}</span></div>
-          <div v-if="ordenSeleccionada.impuesto" class="flex justify-between"><span class="text-surface-400">Impuesto</span><span>${{ formatCurrency(ordenSeleccionada.impuesto) }}</span></div>
-          <div v-if="ordenSeleccionada.descuento" class="flex justify-between"><span class="text-surface-400">Descuento</span><span class="text-red-500">-${{ formatCurrency(ordenSeleccionada.descuento) }}</span></div>
-          <div class="flex justify-between text-lg font-bold border-t border-surface-200 dark:border-surface-700 pt-2"><span>Total</span><span>${{ formatCurrency(ordenSeleccionada.total) }}</span></div>
+          <div class="flex justify-between"><span class="text-surface-400">Subtotal</span><span>{{ $formatMoney(ordenSeleccionada.subtotal) }}</span></div>
+          <div v-if="ordenSeleccionada.impuesto" class="flex justify-between"><span class="text-surface-400">Impuesto</span><span>{{ $formatMoney(ordenSeleccionada.impuesto) }}</span></div>
+          <div v-if="ordenSeleccionada.descuento" class="flex justify-between"><span class="text-surface-400">Descuento</span><span class="text-red-500">-{{ $formatMoney(ordenSeleccionada.descuento) }}</span></div>
+          <div class="flex justify-between text-lg font-bold border-t border-surface-200 dark:border-surface-700 pt-2"><span>Total</span><span>{{ $formatMoney(ordenSeleccionada.total) }}</span></div>
         </div>
         <p v-if="ordenSeleccionada.nota" class="text-xs text-surface-500 italic">{{ ordenSeleccionada.nota }}</p>
       </div>
@@ -128,6 +128,7 @@
 </template>
 
 <script setup lang="ts">
+import { getSystemLocale } from '@/i18n/localeProfiles'
 import { ref, onMounted } from 'vue'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
@@ -165,7 +166,7 @@ const form = ref({
 })
 
 function formatCurrency(n: number): string {
-  return Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 async function cargar() {
@@ -247,6 +248,7 @@ async function guardar() {
       nota: form.value.nota,
       usuario: '',
       almacen_id: almacenStore.activeId || 0,
+      almacen_uid: almacenStore.activeUid || '',
     }
     const res = await (window as any).electron.invoke('db:insert', 'ordenes_compra', data)
     if (!res.success) throw new Error(res.error)

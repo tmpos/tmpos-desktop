@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useLocaleProfile } from '@/composables/useLocaleProfile'
+
+const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
 import { ref, computed, onMounted } from 'vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
@@ -55,6 +58,8 @@ const formDefault = () => ({
   telefono: '',
   email: '',
   porcentaje: 0,
+  tipo_comision: 'PORCENTAJE_MANO_OBRA',
+  valor_comision: 0,
   estado: 'ACTIVO',
 })
 
@@ -102,6 +107,8 @@ function abrirEditar(tecnico: any) {
     telefono: tecnico.telefono || '',
     email: tecnico.email || '',
     porcentaje: tecnico.porcentaje || 0,
+    tipo_comision: tecnico.tipo_comision || 'PORCENTAJE_MANO_OBRA',
+    valor_comision: Number(tecnico.valor_comision ?? tecnico.porcentaje ?? 0),
     estado: tecnico.estado || 'ACTIVO',
   }
   dialogVisible.value = true
@@ -124,6 +131,10 @@ async function guardar() {
       telefono: form.value.telefono.trim(),
       email: form.value.email.trim().toLowerCase(),
       porcentaje: form.value.porcentaje || 0,
+      tipo_comision: form.value.tipo_comision,
+      valor_comision: form.value.tipo_comision === 'MONTO_FIJO'
+        ? Number(form.value.valor_comision || 0)
+        : Number(form.value.porcentaje || 0),
       estado: form.value.estado,
     }
 
@@ -324,8 +335,23 @@ onMounted(async () => {
           <InputText v-model="form.email" placeholder="correo@dominio.com" fluid />
         </div>
         <div class="flex flex-col gap-1">
-          <label class="font-semibold text-sm">% Comision</label>
-          <InputNumber v-model="form.porcentaje" suffix="%" :min="0" :max="100" fluid @focus="(e) => e.target.select()" />
+          <label class="font-semibold text-sm">Forma de comisión</label>
+          <Select
+            v-model="form.tipo_comision"
+            :options="[
+              { label: '% de mano de obra', value: 'PORCENTAJE_MANO_OBRA' },
+              { label: '% de piezas', value: 'PORCENTAJE_PIEZAS' },
+              { label: 'Monto fijo por reparación', value: 'MONTO_FIJO' },
+            ]"
+            optionLabel="label"
+            optionValue="value"
+            fluid
+          />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">{{ form.tipo_comision === 'MONTO_FIJO' ? 'Monto por reparación' : '% Comisión' }}</label>
+          <InputNumber v-if="form.tipo_comision === 'MONTO_FIJO'" v-model="form.valor_comision" mode="currency" :currency="systemCurrency" :locale="systemLocale" :min="0" fluid />
+          <InputNumber v-else v-model="form.porcentaje" suffix="%" :min="0" :max="100" fluid @focus="(e) => e.target.select()" />
         </div>
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Estado</label>

@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { useLocaleProfile } from '@/composables/useLocaleProfile'
+
+const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
+import { ref, computed, onMounted, watch } from 'vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -12,16 +15,24 @@ import Select from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
 import Chip from 'primevue/chip'
 import Fieldset from 'primevue/fieldset'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
 import { envioElectron } from '@/funciones/funciones.js'
 import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
+import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useAuthStore } from '@/stores/auth.store'
+import { useCloudRefresh } from '@/composables/useCloudRefresh'
 
 const toast = useToast()
-const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
+const auth = useAuthStore()
+const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
 const electrodomesticos = ref<any[]>([])
+const electrodomesticosRaw = ref<any[]>([])
+const verTodosAlmacenes = ref(false)
+const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
 const dialogVisible = ref(false)
@@ -30,12 +41,18 @@ const detalleDialogVisible = ref(false)
 const serialDialogVisible = ref(false)
 const isEditing = ref(false)
 const selectedElectrodomestico = ref<any>(null)
+const selectedElectrodomesticos = ref<any[]>([])
 const busqueda = ref('')
 const busquedaSerialElectrodomestico = ref('')
 const serialesDelElectrodomestico = ref<any[]>([])
 const proveedores = ref<any[]>([])
 const dialogNuevoProveedor = ref(false)
 const nuevoProveedorForm = ref({ nombre: '', telefono: '', direccion: '' })
+const dialogMoverAlmacen = ref(false)
+const almacenDestino = ref<any>(null)
+const almacenesDestino = ref<any[]>([])
+const moviendoAlmacen = ref(false)
+const cantidadSerialesATrasladar = ref(0)
 
 const modoSerial = ref<'individual' | 'lote'>('individual')
 const modosSerial = ref([
@@ -77,6 +94,11 @@ function removerSerialBatch(serial: string) {
   batchSeriales.value = batchSeriales.value.filter(s => s !== serial)
 }
 
+const electrodomesticosAMoverHeader = computed(() => {
+  if (selectedElectrodomesticos.value.length > 1) return `Mover ${selectedElectrodomesticos.value.length} electrodomesticos a otro Almacen`
+  return 'Mover Electrodomestico a otro Almacen'
+})
+
 const electrodomesticosFiltrados = computed(() => {
   const texto = busqueda.value.toLowerCase().trim()
   if (!texto) return electrodomesticos.value
@@ -100,6 +122,8 @@ const camposArray = ['nombre']
 const serialCamposArray = [
   'nombre',
   'id_equi',
+  'equipo_uid',
+  'equipo',
   'costo',
   'precio_venta',
   'precio_min',
@@ -165,7 +189,8 @@ async function cargarElectrodomesticos() {
   try {
     const res = await window.db.getAll('electrodomesticos')
     if (res.success) {
-      electrodomesticos.value = filterByAlmacen(res.data || [])
+      electrodomesticosRaw.value = res.data || []
+      electrodomesticos.value = verTodosAlmacenes.value ? electrodomesticosRaw.value : filterByAlmacen(res.data || [])
     }
   } catch (error) {
     console.error(error)
@@ -174,11 +199,17 @@ async function cargarElectrodomesticos() {
   }
 }
 
+watch(verTodosAlmacenes, () => {
+  electrodomesticos.value = verTodosAlmacenes.value ? electrodomesticosRaw.value : filterByAlmacen(electrodomesticosRaw.value)
+})
+
 async function cargarSerialesDelElectrodomestico(electrodomesticoId: number) {
   try {
     const res = await window.db.getAll('serial')
     if (res.success) {
-      serialesDelElectrodomestico.value = filterByAlmacen(res.data || []).filter((i: any) => i.id_equi === electrodomesticoId)
+      const equipo = electrodomesticos.value.find((item: any) => Number(item.id) === Number(electrodomesticoId))
+      serialesDelElectrodomestico.value = filterByAlmacen(res.data || []).filter((i: any) =>
+        i.equipo_uid ? String(i.equipo_uid) === String(equipo?.uid || '') : Number(i.id_equi) === Number(electrodomesticoId))
     }
   } catch (error) {
     console.error(error)
@@ -198,19 +229,24 @@ function abrirCrear() {
   dialogVisible.value = true
 }
 
-function abrirEditar(electrodomestico = selectedElectrodomestico.value) {
-  selectedElectrodomestico.value = electrodomestico
+function abrirEditar(electrodomestico: any) {
   isEditing.value = true
+  selectedElectrodomestico.value = electrodomestico
   form.value = {
-    nombre: electrodomestico?.nombre || '',
-    imagen: electrodomestico?.imagen || '',
+    nombre: electrodomestico.nombre,
+    imagen: electrodomestico.imagen || '',
   }
-  detalleDialogVisible.value = false
   dialogVisible.value = true
 }
 
 function confirmarBorrar(electrodomestico = selectedElectrodomestico.value) {
   selectedElectrodomestico.value = electrodomestico
+  selectedElectrodomesticos.value = []
+  deleteDialogVisible.value = true
+}
+
+function confirmarBorrarMultiple() {
+  if (selectedElectrodomesticos.value.length === 0) return
   deleteDialogVisible.value = true
 }
 
@@ -285,6 +321,8 @@ async function guardarSerial() {
     const data = {
       nombre: serialForm.value.nombre.trim().toUpperCase(),
       id_equi: selectedElectrodomestico.value.id,
+      equipo_uid: selectedElectrodomestico.value.uid || '',
+      equipo: selectedElectrodomestico.value.nombre || '',
       costo: serialForm.value.costo || 0,
       precio_venta: serialForm.value.precio_venta || 0,
       precio_min: serialForm.value.precio_min || 0,
@@ -345,6 +383,8 @@ async function agregarSerialEnLote() {
       const data = {
         nombre,
         id_equi: selectedElectrodomestico.value.id,
+        equipo_uid: selectedElectrodomestico.value.uid || '',
+        equipo: selectedElectrodomestico.value.nombre || '',
         costo: serialForm.value.costo || 0,
         precio_venta: serialForm.value.precio_venta || 0,
         precio_min: serialForm.value.precio_min || 0,
@@ -393,6 +433,109 @@ async function agregarSerialEnLote() {
   }
 }
 
+function serialPerteneceElectrodomestico(serial: any, electrodomestico: any): boolean {
+  if (!serial || !electrodomestico) return false
+  return serial.equipo_uid
+    ? String(serial.equipo_uid) === String(electrodomestico.uid || '')
+    : Number(serial.id_equi) === Number(electrodomestico.id)
+}
+
+async function abrirMoverAlmacen(electrodomestico?: any) {
+  const seleccionado = electrodomestico || selectedElectrodomestico.value
+  if (!seleccionado) return
+  selectedElectrodomestico.value = seleccionado
+  almacenDestino.value = null
+  cantidadSerialesATrasladar.value = 0
+
+  try {
+    const [, serialRes] = await Promise.all([
+      almacenStore.load(),
+      window.db.getAll('serial'),
+    ])
+    const almacenOrigenUid = String(seleccionado.almacen_uid || almacenStore.activeUid || '')
+    almacenesDestino.value = almacenStore.almacenes.filter((almacen: any) => String(almacen.uid || '') !== almacenOrigenUid)
+    if (serialRes.success) {
+      cantidadSerialesATrasladar.value = (serialRes.data || []).filter((serial: any) =>
+        serialPerteneceElectrodomestico(serial, seleccionado) && String(serial.estado || '').toUpperCase() === 'DISPONIBLE').length
+    }
+    dialogMoverAlmacen.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron cargar los almacenes', life: 4000 })
+  }
+}
+
+async function abrirMoverSeleccionados() {
+  const seleccionados = selectedElectrodomesticos.value
+  if (!seleccionados.length) return
+  selectedElectrodomestico.value = seleccionados[0]
+  almacenDestino.value = null
+  cantidadSerialesATrasladar.value = 0
+  try {
+    await almacenStore.load()
+    const almacenOrigenUid = String(seleccionados[0].almacen_uid || almacenStore.activeUid || '')
+    almacenesDestino.value = almacenStore.almacenes.filter((a: any) => String(a.uid || '') !== almacenOrigenUid)
+    dialogMoverAlmacen.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron cargar los almacenes', life: 4000 })
+  }
+}
+
+async function moverElectrodomesticoAlmacen() {
+  if (!selectedElectrodomestico.value || !almacenDestino.value || moviendoAlmacen.value) return
+  const electrodomesticosAMover = selectedElectrodomesticos.value.length ? selectedElectrodomesticos.value : [selectedElectrodomestico.value]
+  const destinoId = Number(almacenDestino.value.id || almacenDestino.value)
+  const destinoUid = String(almacenDestino.value.uid || '')
+  moviendoAlmacen.value = true
+  let movidos = 0
+  let serialesMovidos = 0
+
+  try {
+    const serialRes = await window.db.getAll('serial')
+    if (!serialRes.success) throw new Error(serialRes.error || 'No se pudieron consultar los seriales asociados')
+
+    for (const electrodomestico of electrodomesticosAMover) {
+      const serialesDisponibles = (serialRes.data || []).filter((serial: any) =>
+        serialPerteneceElectrodomestico(serial, electrodomestico) && String(serial.estado || '').toUpperCase() === 'DISPONIBLE')
+
+      const equipoRes = await window.db.update('electrodomesticos', electrodomestico.id, {
+        almacen_id: destinoId,
+        almacen_uid: destinoUid,
+      })
+      if (!equipoRes.success) throw new Error(equipoRes.error || `No se pudo mover ${electrodomestico.nombre}`)
+
+      for (const serial of serialesDisponibles) {
+        const res = await window.db.update('serial', serial.id, {
+          almacen_id: destinoId,
+          almacen_uid: destinoUid,
+          id_equi: electrodomestico.id,
+          equipo_uid: electrodomestico.uid || serial.equipo_uid || '',
+          equipo: electrodomestico.nombre || serial.equipo || '',
+        })
+        if (!res.success) throw new Error(res.error || `No se pudo mover el serial ${serial.nombre || serial.id}`)
+      }
+      movidos++
+      serialesMovidos += serialesDisponibles.length
+    }
+
+    dialogMoverAlmacen.value = false
+    detalleDialogVisible.value = false
+    selectedElectrodomesticos.value = []
+    toast.add({
+      severity: 'success',
+      summary: 'Electrodomestico trasladado',
+      detail: movidos > 1
+        ? `${movidos} electrodomesticos y ${serialesMovidos} serial(es) disponibles fueron movidos a ${almacenDestino.value.nombre}`
+        : `${electrodomesticosAMover[0].nombre} y ${serialesMovidos} serial(es) disponibles fueron movidos a ${almacenDestino.value.nombre}`,
+      life: 4000,
+    })
+    await cargarElectrodomesticos()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo trasladar el electrodomestico', life: 4000 })
+  } finally {
+    moviendoAlmacen.value = false
+  }
+}
+
 async function borrar() {
   try {
     const res = await window.db.delete('electrodomesticos', selectedElectrodomestico.value.id)
@@ -405,6 +548,18 @@ async function borrar() {
   } catch (error) {
     toast.add({ severity: 'error', summary: 'Error', detail: 'Error al eliminar', life: 3000 })
   }
+}
+
+async function borrarMultiple() {
+  const seleccionados = selectedElectrodomesticos.value
+  const cantidad = seleccionados.length
+  for (const elec of seleccionados) {
+    await window.db.delete('electrodomesticos', elec.id)
+  }
+  selectedElectrodomesticos.value = []
+  deleteDialogVisible.value = false
+  toast.add({ severity: 'success', summary: 'Eliminados', detail: `${cantidad} electrodomestico(s) eliminados`, life: 3000 })
+  await cargarElectrodomesticos()
 }
 
 async function subirImagen() {
@@ -421,8 +576,16 @@ async function subirImagen() {
   }
   subiendoImagen.value = true
   try {
-    const uid = await uploadImage(file, 'electrodomesticos')
+    const uid = await uploadImage(file, 'accesorios')
     form.value.imagen = uid
+    if (isEditing.value && selectedElectrodomestico.value?.id) {
+      const actualizado = await window.db.update('electrodomesticos', selectedElectrodomestico.value.id, { imagen: uid })
+      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
+      selectedElectrodomestico.value.imagen = uid
+      const local = electrodomesticos.value.find((item: any) => item.id === selectedElectrodomestico.value.id)
+      if (local) local.imagen = uid
+      if (isOnline()) await pushLocalRowToCloud('electrodomesticos', selectedElectrodomestico.value.id)
+    }
     toast.add({ severity: 'success', summary: 'Imagen subida', life: 2000 })
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo subir la imagen', life: 4000 })
@@ -438,11 +601,16 @@ async function eliminarImagen() {
     await deleteImage(form.value.imagen)
   } catch {}
   form.value.imagen = ''
+  if (isEditing.value && selectedElectrodomestico.value?.id) {
+    await window.db.update('electrodomesticos', selectedElectrodomestico.value.id, { imagen: '' })
+    if (isOnline()) await pushLocalRowToCloud('electrodomesticos', selectedElectrodomestico.value.id)
+  }
 }
 
 function imagenUrl(uid: string | null | undefined): string | null {
   return uid ? getImageUrl(uid) : null
 }
+
 
 onMounted(async () => {
   try {
@@ -464,6 +632,8 @@ onMounted(async () => {
   const resProv = await window.db.getAll('proveedores')
   if (resProv.success) proveedores.value = resProv.data || []
 })
+
+useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
 </script>
 
 <template>
@@ -477,6 +647,10 @@ onMounted(async () => {
           <InputText v-model="busqueda" placeholder="Buscar electrodomestico..." />
         </IconField>
         <div class="flex items-center gap-2">
+          <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
             <button
               class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"
@@ -501,9 +675,17 @@ onMounted(async () => {
         </div>
       </div>
 
+      <div v-if="selectedElectrodomesticos.length > 0" class="flex items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
+        <span class="text-sm font-medium text-primary-700 dark:text-primary-300">{{ selectedElectrodomesticos.length }} seleccionado(s)</span>
+        <Button label="Mover de almacen" icon="pi pi-warehouse" severity="success" size="small" @click="abrirMoverSeleccionados" />
+        <Button label="Eliminar" icon="pi pi-trash" severity="danger" size="small" @click="confirmarBorrarMultiple" />
+        <Button label="Deseleccionar" icon="pi pi-times" severity="secondary" text size="small" @click="selectedElectrodomesticos = []" />
+      </div>
+
       <DataTable
         v-if="viewMode === 'table'"
         :value="electrodomesticosFiltrados"
+        v-model:selection="selectedElectrodomesticos"
         :loading="loading"
         stripedRows
         paginator
@@ -511,8 +693,14 @@ onMounted(async () => {
         :rowsPerPageOptions="[10, 25, 50]"
         dataKey="id"
         responsiveLayout="scroll"
-        @row-click="(e) => abrirDetalle(e.data)"
+        @row-click="(e) => {
+          const idx = selectedElectrodomesticos.findIndex((s: any) => s.id === e.data.id)
+          if (idx >= 0) selectedElectrodomesticos.splice(idx, 1)
+          else selectedElectrodomesticos.push(e.data)
+        }"
+        @row-dblclick="(e) => abrirDetalle(e.data)"
       >
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column field="id" header="ID" style="width: 5rem" />
         <Column field="nombre" header="Nombre" sortable />
         <Column header="Acciones" style="width: 10rem">
@@ -525,6 +713,14 @@ onMounted(async () => {
                 rounded
                 @click.stop="abrirEditar(data)"
                 v-tooltip="'Editar'"
+              />
+              <Button
+                icon="pi pi-warehouse"
+                severity="success"
+                text
+                rounded
+                @click.stop="abrirMoverAlmacen(data)"
+                v-tooltip="'Mover a otro almacen'"
               />
               <Button
                 icon="pi pi-trash"
@@ -579,25 +775,22 @@ onMounted(async () => {
       v-model:visible="detalleDialogVisible"
       :header="selectedElectrodomestico?.nombre"
       modal
-      :style="{ width: '28rem' }"
+      :style="{ width: 'min(46rem, 95vw)' }"
     >
       <div class="flex flex-col gap-3">
-        <Button
-          label="Editar"
-          icon="pi pi-pencil"
-          severity="info"
-          outlined
-          class="w-full justify-start"
-          @click="abrirEditar()"
-        />
-        <Button
-          label="Agregar Serial"
-          icon="pi pi-plus"
-          severity="success"
-          outlined
-          class="w-full justify-start"
-          @click="abrirAgregarSerial"
-        />
+        <div class="flex items-center gap-3 rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3">
+          <div v-if="imagenUrl(selectedElectrodomestico?.imagen)" class="w-16 h-16 rounded-lg overflow-hidden shrink-0 border border-surface-200 dark:border-surface-700">
+            <img :src="imagenUrl(selectedElectrodomestico?.imagen)" class="w-full h-full object-cover" :alt="`Imagen de ${selectedElectrodomestico?.nombre || 'electrodomestico'}`" />
+          </div>
+          <div v-else class="w-16 h-16 rounded-lg bg-primary-100 dark:bg-primary-900 flex items-center justify-center shrink-0"><i class="pi pi-desktop text-primary-600 dark:text-primary-300 text-2xl"></i></div>
+          <div class="min-w-0"><p class="font-semibold truncate">{{ selectedElectrodomestico?.nombre }}</p><p class="text-xs text-surface-500">{{ serialesDelElectrodomesticoFiltrados.length }} serial(es) disponibles</p></div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <Button label="Editar" icon="pi pi-pencil" severity="info" outlined @click="abrirEditar(selectedElectrodomestico)" />
+          <Button label="Agregar Serial" icon="pi pi-plus" severity="success" outlined @click="abrirAgregarSerial" />
+          <Button label="Mover" icon="pi pi-warehouse" severity="success" outlined @click="abrirMoverAlmacen()" />
+          <Button label="Eliminar" icon="pi pi-trash" severity="danger" outlined @click="confirmarBorrar()" />
+        </div>
         <div class="flex flex-col gap-2">
           <div class="flex items-center justify-between gap-2">
             <span class="font-semibold text-sm">Lista de Seriales</span>
@@ -627,6 +820,12 @@ onMounted(async () => {
             </Column>
             <Column field="capacidad" header="Cap." style="min-width: 5rem" />
             <Column field="color" header="Color" style="min-width: 6rem" />
+            <Column header="Costo" style="min-width: 6.5rem">
+              <template #body="{ data }"><span class="font-medium">{{ $formatMoney(data.costo) }}</span></template>
+            </Column>
+            <Column header="Precio Venta" style="min-width: 7.5rem">
+              <template #body="{ data }"><span class="font-semibold text-primary">{{ $formatMoney(data.precio_venta) }}</span></template>
+            </Column>
             <Column field="estado" header="Estado" style="min-width: 7rem">
               <template #body="{ data }">
                 <span
@@ -643,15 +842,32 @@ onMounted(async () => {
             </template>
           </DataTable>
         </div>
-        <Button
-          label="Eliminar Electrodomestico"
-          icon="pi pi-trash"
-          severity="danger"
-          outlined
-          class="w-full justify-start mt-2"
-          @click="confirmarBorrar()"
-        />
       </div>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogMoverAlmacen" :header="electrodomesticosAMoverHeader" modal :style="{ width: 'min(30rem, 95vw)' }">
+      <div class="space-y-4 pt-2">
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 p-3">
+          <p class="font-semibold">{{ selectedElectrodomestico?.nombre }}{{ selectedElectrodomesticos.length > 1 ? ` y ${selectedElectrodomesticos.length - 1} mas` : '' }}</p>
+          <p class="text-xs text-surface-500 mt-1">
+            {{
+              selectedElectrodomesticos.length > 1
+                ? `Se moveran los ${selectedElectrodomesticos.length} electrodomesticos seleccionados al almacen de destino.`
+                : `Tambien se moveran ${cantidadSerialesATrasladar} serial(es) disponibles asociados a este electrodomestico.`
+            }}
+          </p>
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-sm font-semibold">Almacen destino</label>
+          <Select v-model="almacenDestino" :options="almacenesDestino" optionLabel="nombre" placeholder="Seleccionar otro almacen" fluid />
+          <p v-if="almacenesDestino.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacen disponible para realizar el traslado.</p>
+        </div>
+        <p class="text-xs text-surface-500">Los seriales vendidos conservaran su almacen historico.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacen" @click="dialogMoverAlmacen = false" />
+        <Button :label="selectedElectrodomesticos.length > 1 ? `Mover ${selectedElectrodomesticos.length} electrodomesticos` : 'Mover Electrodomestico'" icon="pi pi-warehouse" severity="success" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="moverElectrodomesticoAlmacen" />
+      </template>
     </Dialog>
 
     <!-- Dialog Crear/Editar -->
@@ -681,7 +897,7 @@ onMounted(async () => {
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="subiendoImagen" @click="guardar" />
       </template>
     </Dialog>
 
@@ -692,6 +908,13 @@ onMounted(async () => {
       modal
       :style="{ width: '34rem' }"
     >
+      <div class="flex items-center gap-3 mb-3 rounded-lg bg-surface-50 dark:bg-surface-700/30 p-3">
+        <div v-if="imagenUrl(selectedElectrodomestico?.imagen)" class="w-12 h-12 rounded-lg overflow-hidden shrink-0 border border-surface-200 dark:border-surface-700">
+          <img :src="imagenUrl(selectedElectrodomestico?.imagen)" class="w-full h-full object-cover" :alt="`Imagen de ${selectedElectrodomestico?.nombre || 'electrodomestico'}`" />
+        </div>
+        <div v-else class="w-12 h-12 rounded-lg bg-primary-100 dark:bg-primary-900 flex items-center justify-center shrink-0"><i class="pi pi-desktop text-primary-600 dark:text-primary-300 text-lg"></i></div>
+        <div><p class="font-semibold text-sm">{{ selectedElectrodomestico?.nombre }}</p><p class="text-xs text-surface-500">Equipo para el nuevo serial</p></div>
+      </div>
       <SelectButton v-model="modoSerial" :options="modosSerial" optionLabel="label" optionValue="value" :allowEmpty="false" fluid class="w-full mb-3" />
 
       <div v-if="modoSerial === 'individual'" class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
@@ -708,22 +931,22 @@ onMounted(async () => {
 
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Costo</label>
-          <InputNumber v-model="serialForm.costo" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+          <InputNumber v-model="serialForm.costo" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
         </div>
 
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Precio Venta</label>
-          <InputNumber v-model="serialForm.precio_venta" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+          <InputNumber v-model="serialForm.precio_venta" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
         </div>
 
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Precio Min</label>
-          <InputNumber v-model="serialForm.precio_min" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+          <InputNumber v-model="serialForm.precio_min" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
         </div>
 
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Precio Mayor</label>
-          <InputNumber v-model="serialForm.precio_xmayor" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+          <InputNumber v-model="serialForm.precio_xmayor" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
         </div>
 
         <div class="flex flex-col gap-1">
@@ -773,19 +996,19 @@ onMounted(async () => {
         <div class="grid grid-cols-2 gap-3">
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Costo</label>
-            <InputNumber v-model="serialForm.costo" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+            <InputNumber v-model="serialForm.costo" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Precio Venta</label>
-            <InputNumber v-model="serialForm.precio_venta" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+            <InputNumber v-model="serialForm.precio_venta" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Precio Min</label>
-            <InputNumber v-model="serialForm.precio_min" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+            <InputNumber v-model="serialForm.precio_min" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Precio Mayor</label>
-            <InputNumber v-model="serialForm.precio_xmayor" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+            <InputNumber v-model="serialForm.precio_xmayor" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Capacidad</label>
@@ -822,11 +1045,12 @@ onMounted(async () => {
     >
       <div class="flex items-center gap-3">
         <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span>Seguro que deseas eliminar <strong>{{ selectedElectrodomestico?.nombre }}</strong>?</span>
+        <span v-if="selectedElectrodomesticos.length > 1">Seguro que deseas eliminar los <strong>{{ selectedElectrodomesticos.length }}</strong> electrodomesticos seleccionados?</span>
+        <span v-else>Seguro que deseas eliminar <strong>{{ selectedElectrodomestico?.nombre }}</strong>?</span>
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
-        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="borrar" />
+        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="selectedElectrodomesticos.length > 1 ? borrarMultiple() : borrar()" />
       </template>
     </Dialog>
 

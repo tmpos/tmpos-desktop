@@ -175,13 +175,21 @@ export function verificaAutentificado(router = useRouter()){
             router.push('/login');
         }
     }else{
+        const uc = localStorage.getItem('update_autoCheck')
+        const ui = localStorage.getItem('update_autoInstall')
         localStorage.clear();
+        if (uc !== null) localStorage.setItem('update_autoCheck', uc)
+        if (ui !== null) localStorage.setItem('update_autoInstall', ui)
         router.push('/login');
     }
 }
 /******************************************************/
 export async function cerrarSession(){
+        const updateAutoCheck = localStorage.getItem('update_autoCheck')
+        const updateAutoInstall = localStorage.getItem('update_autoInstall')
         localStorage.clear();
+        if (updateAutoCheck !== null) localStorage.setItem('update_autoCheck', updateAutoCheck)
+        if (updateAutoInstall !== null) localStorage.setItem('update_autoInstall', updateAutoInstall)
     }
 /******************************************************/
 export async function enviarDatosPorPost(url, data, token = null) {
@@ -470,7 +478,7 @@ url = `${linkServidorLocal}/pos`;
     if (window.electron) {
       try {
         console.log('🔷 [FUNCIONES.JS datosServidorLocal] Llamando IPC con peticion:', peticion);
-        console.log('🔷 [FUNCIONES.JS datosServidorLocal] data:', data);
+        console.log('🔷 [FUNCIONES.JS datosServidorLocal] datos recibidos:', { campos: data && typeof data === 'object' ? Object.keys(data) : [] });
 
         const datosRetorno = await window.electron.ipcRenderer.invoke(
           'consultaservidor',
@@ -478,7 +486,7 @@ url = `${linkServidorLocal}/pos`;
           data
         );
 
-        console.log('🔷 [FUNCIONES.JS datosServidorLocal] datosRetorno:', datosRetorno);
+        console.log('🔷 [FUNCIONES.JS datosServidorLocal] respuesta recibida:', { tipo: typeof datosRetorno });
         console.log('🔷 [FUNCIONES.JS datosServidorLocal] Tipo de datosRetorno:', typeof datosRetorno);
         return datosRetorno;
       } catch (error) {
@@ -2592,7 +2600,8 @@ export function formatearFechaLarga(fecha) {
     hour12: true
   };
 
-  return new Intl.DateTimeFormat('es-DO', opciones).format(date);
+  const locale = localStorage.getItem('sistema_locale') || navigator.language;
+  return new Intl.DateTimeFormat(locale, opciones).format(date);
 }
 /***************************************************************/
 export function generarCodigoUnico4Digitos() {
@@ -3139,7 +3148,11 @@ export async function logout(link,api,tokenCifrado,toast){
 const verifica = window.localStorage.getItem('usuarioLocal')
 if (!verifica) {
     const router = useRouter();
+    const uc = localStorage.getItem('update_autoCheck')
+    const ui = localStorage.getItem('update_autoInstall')
     localStorage.clear();
+    if (uc !== null) localStorage.setItem('update_autoCheck', uc)
+    if (ui !== null) localStorage.setItem('update_autoInstall', ui)
     //router.push('/login');
 }
 
@@ -3151,7 +3164,11 @@ const datosCaja = await peticiones(`${link}${api}/datoscampo/registrocaja/turno/
 const url = link+api+"/actualizarcampos/registrocaja";
 
    if (!datosCaja) {
+      const uc = localStorage.getItem('update_autoCheck')
+      const ui = localStorage.getItem('update_autoInstall')
       localStorage.clear();
+      if (uc !== null) localStorage.setItem('update_autoCheck', uc)
+      if (ui !== null) localStorage.setItem('update_autoInstall', ui)
       return
    }
 
@@ -3163,7 +3180,11 @@ const url = link+api+"/actualizarcampos/registrocaja";
 
    if (envio[0] == 'ok') {
      mensajetoast(toast, 'Ok', 'Salio de la aplicación', 'success')
+      const uc = localStorage.getItem('update_autoCheck')
+      const ui = localStorage.getItem('update_autoInstall')
       localStorage.clear();
+      if (uc !== null) localStorage.setItem('update_autoCheck', uc)
+      if (ui !== null) localStorage.setItem('update_autoInstall', ui)
       //window.location.href = '/login'
 
    }else{

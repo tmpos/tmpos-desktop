@@ -6,16 +6,34 @@ import Button from 'primevue/button'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
 import { envioElectron } from '@/funciones/funciones.js'
+import { ensureConfigLoaded, getConfig, getImageUrl } from '@/services/tmCloudClient'
+import { formatSystemCurrency, getFiscalLabels } from '@/i18n/localeProfiles'
+import { getPhoneImeiDetails, getSalesDocumentLabels, prepareDocumentData, translateDocumentCustomerName, translateDocumentPaymentMethod } from '@/services/documentDataService'
 
 function formatearMetodoPago(factura: any): string {
-  if (String(factura.metodo_pago || '').toLowerCase() !== 'mixto') return factura.metodo_pago || ''
+  const labels = getSalesDocumentLabels()
+  const metodo = String(factura.metodo_pago || '').toUpperCase()
+  const otro = parseJson(factura?.otro, {})
+  const bancoNombre = factura.banco_nombre || otro?.banco_nombre || ''
+  if (metodo !== 'MIXTO') {
+    const metodoTraducido = translateDocumentPaymentMethod(factura.metodo_pago)
+    return bancoNombre ? `${metodoTraducido} - ${bancoNombre}` : metodoTraducido
+  }
   const partes: string[] = []
-  const fmt = (n: any) => Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })
-  if (Number(factura.efectivo) > 0) partes.push(`Efectivo: $${fmt(factura.efectivo)}`)
-  if (Number(factura.tarjeta) > 0) partes.push(`Tarjeta: $${fmt(factura.tarjeta)}`)
-  if (Number(factura.transferencia) > 0) partes.push(`Transferencia: $${fmt(factura.transferencia)}`)
-  if (Number(factura.cheque) > 0) partes.push(`Cheque: $${fmt(factura.cheque)}`)
-  return `MIXTO (${partes.join(', ')})`
+  const fmt = (n: any) => formatSystemCurrency(n)
+  if (Number(factura.efectivo) > 0) partes.push(`${labels.cash}: ${fmt(factura.efectivo)}`)
+  if (Number(factura.tarjeta) > 0) partes.push(`${labels.card}: ${fmt(factura.tarjeta)}`)
+  const transferencias = factura.transferencias_mixtas
+    ? (Array.isArray(factura.transferencias_mixtas) ? factura.transferencias_mixtas : [])
+    : otro?.transferencias_mixtas
+      ? (Array.isArray(otro.transferencias_mixtas) ? otro.transferencias_mixtas : [])
+      : (Number(factura.transferencia) > 0 ? [{ monto: factura.transferencia, banco_nombre: bancoNombre }] : [])
+  for (const t of transferencias) {
+    const banco = t.banco_nombre ? ` (${t.banco_nombre})` : ''
+    partes.push(`${labels.transfer}${banco}: ${fmt(t.monto)}`)
+  }
+  if (Number(factura.cheque) > 0) partes.push(`${labels.check}: ${fmt(factura.cheque)}`)
+  return `${labels.mixed} (${partes.join(', ')})`
 }
 
 function esCotizacion(factura: any): boolean {
@@ -23,6 +41,7 @@ function esCotizacion(factura: any): boolean {
 }
 
 const toast = useToast()
+const fiscal = getFiscalLabels()
 
 const dialogPdf = ref(false)
 const generandoPdf = ref(false)
@@ -46,15 +65,52 @@ function toNumber(value: any, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+function normalizarAlanubeData(factura: any, ecf: any = {}) {
+  const otro = parseJson(factura?.otro, {})
+  const response = otro?.alanube_response || factura?.alanube_response || {}
+  return {
+    documentStampUrl: ecf?.document_stamp_url || factura?.document_stamp_url || factura?.documentStampUrl || otro?.documentStampUrl || otro?.document_stamp_url || response?.documentStampUrl || response?.document_stamp_url || '',
+    securityCode: ecf?.security_code || factura?.codigo_seguridad || factura?.securityCode || otro?.securityCode || otro?.security_code || response?.securityCode || response?.security_code || '',
+    legalStatus: ecf?.legal_status || factura?.alanube_legal_status || response?.legalStatus || otro?.legalStatus || '',
+    status: ecf?.status || factura?.alanube_status || response?.status || otro?.status || '',
+  }
+}
+
+async function obtenerAlanubeData(factura: any) {
+  if (factura?.id) {
+    try {
+      const res = await window.db.getWhere('facturas_ecf', 'factura_id = ?', [factura.id])
+      const ecf = res?.success && Array.isArray(res.data) ? res.data[0] : null
+      if (ecf) return normalizarAlanubeData(factura, ecf)
+    } catch (_) {}
+  }
+  return normalizarAlanubeData(factura)
+}
+
 function formatoMoneda(value: any): string {
-  return `RD$ ${toNumber(value).toLocaleString('es-DO', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`
+  return formatSystemCurrency(value)
+}
+
+function formatoFechaFactura(value: any, hora = ''): string {
+  const horaTexto = String(hora || '').trim().match(/^(\d{1,2}:\d{2})/)
+  const fechaTexto = String(value || '').trim()
+  const horaEnFecha = fechaTexto.match(/(?:T|\s)(\d{1,2}:\d{2})/)
+  const horaFormateada = horaTexto ? horaTexto[1].padStart(5, '0') : (horaEnFecha ? horaEnFecha[1].padStart(5, '0') : '')
+  const fechaSql = fechaTexto.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  const fechaLatina = fechaTexto.match(/^(\d{2})\/(\d{2})\/(\d{4})/)
+
+  if (fechaSql) return `${fechaSql[3]}/${fechaSql[2]}/${fechaSql[1]}${horaFormateada ? ` ${horaFormateada}` : ''}`
+  if (fechaLatina) return `${fechaLatina[1]}/${fechaLatina[2]}/${fechaLatina[3]}${horaFormateada ? ` ${horaFormateada}` : ''}`
+
+  const fecha = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(fecha.getTime())) return horaFormateada
+  const fechaFormateada = `${String(fecha.getDate()).padStart(2, '0')}/${String(fecha.getMonth() + 1).padStart(2, '0')}/${fecha.getFullYear()}`
+  const horaDesdeFecha = `${String(fecha.getHours()).padStart(2, '0')}:${String(fecha.getMinutes()).padStart(2, '0')}`
+  return `${fechaFormateada} ${horaFormateada || horaDesdeFecha}`
 }
 
 function obtenerImeisProducto(producto: any): string[] {
-  const valores = [producto?.imei, producto?.lista_imei, producto?.imeis, producto?.serial]
+  const valores = [producto?.imei, producto?.lista_imei, producto?.imeis, producto?.serial, producto?.seriales]
   return valores
     .flatMap((valor) => {
       if (Array.isArray(valor)) return valor
@@ -67,6 +123,24 @@ function obtenerImeisProducto(producto: any): string[] {
     })
     .filter(Boolean)
     .filter((valor, index, lista) => lista.indexOf(valor) === index)
+}
+
+function obtenerCodigoProducto(producto: any): string {
+  return String(
+    producto?.codigo ||
+    producto?.codigo_barra ||
+    producto?.cod_producto ||
+    producto?.sku ||
+    producto?.referencia ||
+    producto?.barcode ||
+    producto?.imei ||
+    producto?.serial ||
+    producto?.accesorio_id ||
+    producto?.telefono_id ||
+    producto?.imei_id ||
+    producto?.serial_id ||
+    ''
+  ).trim()
 }
 
 function normalizarRutaImagen(ruta: any, baseUrl = ''): string {
@@ -87,6 +161,38 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary)
 }
 
+// El visor con el que se imprime el PDF no siempre conserva la autenticacion de
+// TM Cloud. Por eso el logo se convierte a data URL antes de construir el HTML.
+async function resolverLogoEmpresa(ruta: any, baseUrl = ''): Promise<string> {
+  const valor = String(ruta ?? '').trim()
+  if (!valor) return ''
+
+  const rutaDirecta = normalizarRutaImagen(valor, baseUrl)
+  if (/^data:/i.test(rutaDirecta)) return rutaDirecta
+
+  // Los logos nuevos se guardan como uid de Storage (fil_xxx), no como URL.
+  if (!/^(https?:\/\/|file:|blob:|\/)/i.test(valor)) {
+    try {
+      await ensureConfigLoaded()
+      const url = getImageUrl(valor)
+      const key = getConfig()?.key || ''
+      if (url) {
+        const response = await fetch(url, {
+          headers: key ? { Authorization: `Bearer ${key}` } : {},
+        })
+        if (response.ok) {
+          const type = response.headers.get('content-type') || 'image/png'
+          return `data:${type};base64,${arrayBufferToBase64(await response.arrayBuffer())}`
+        }
+      }
+    } catch (_) {
+      // Si TM Cloud no esta disponible, se intenta la ruta existente.
+    }
+  }
+
+  return rutaDirecta
+}
+
 async function cargarEmpresa() {
   try {
     const res = await window.db.getAll('empresa')
@@ -99,14 +205,42 @@ async function cargarCliente(factura: any) {
   try {
     const res = await window.db.getAll('clientes')
     if (!res.success || !Array.isArray(res.data)) return {}
+    const codCliente = String(factura.cod_cliente || factura.cliente_id || '').trim()
+    const nombreCliente = String(factura.nombre_cliente || factura.cliente || factura.comprador || '').trim().toUpperCase()
+    const telefonoCliente = String(factura.telefono_cliente || factura.telefono || factura.whatsapp || '').trim()
+    const documentoCliente = String(factura.rnc_cliente || factura.cedula_cliente || factura.rnc || factura.cedula || '').trim()
     return res.data.find((cliente: any) =>
-      cliente.codigo === factura.cod_cliente ||
-      cliente.nombre === factura.nombre_cliente ||
-      cliente.telefono === factura.telefono_cliente
+      String(cliente.id || '') === codCliente ||
+      String(cliente.codigo || '') === codCliente ||
+      String(cliente.nombre || '').trim().toUpperCase() === nombreCliente ||
+      String(cliente.telefono || '').trim() === telefonoCliente ||
+      String(cliente.whatsapp || '').trim() === telefonoCliente ||
+      String(cliente.rnc || '').trim() === documentoCliente ||
+      String(cliente.cedula || '').trim() === documentoCliente
     ) || {}
   } catch (_) {
     return {}
   }
+}
+
+function normalizarClienteFactura(factura: any, clienteData: any = {}) {
+  return {
+    nombre: factura.nombre_cliente || factura.cliente || factura.comprador || clienteData?.nombre || 'CONSUMIDOR FINAL',
+    telefono: factura.telefono_cliente || factura.telefono || factura.whatsapp || clienteData?.telefono || clienteData?.whatsapp || '',
+    documento: factura.rnc_cliente || factura.cedula_cliente || factura.rnc || factura.cedula || clienteData?.rnc || clienteData?.cedula || '',
+    direccion: factura.direccion_cliente || factura.direccion || clienteData?.direccion || '',
+  }
+}
+
+function obtenerNotaFactura(factura: any): string {
+  return String(
+    factura.nota ||
+    factura.observacion ||
+    factura.observaciones ||
+    factura.nota_factura ||
+    factura.comentario ||
+    ''
+  ).trim()
 }
 
 async function cargarConfig() {
@@ -117,37 +251,68 @@ async function cargarConfig() {
   }
 }
 
+async function cargarConfiguracionImpresora() {
+  try {
+    const res = await window.db.getAll('impresoras_config')
+    return res?.success && Array.isArray(res.data) ? res.data[0] || {} : {}
+  } catch (_) {
+    return {}
+  }
+}
+
+function limitarMedidaLogo(valor: any, predeterminado: number, minimo: number, maximo: number): number {
+  const medida = Number(valor)
+  return Number.isFinite(medida) ? Math.min(maximo, Math.max(minimo, medida)) : predeterminado
+}
+
 async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = null }: {
   factura: any
   cliente?: any
   datosEmpresa?: any
 }) {
+  const labels = getSalesDocumentLabels()
   const datosJSON = await cargarConfig()
   const link = datosJSON?.VITE_LINKURL || ''
-  const empresa = datosEmpresa?.empresa || datosEmpresa?.datosEmpresa?.empresa || await cargarEmpresa()
+  const empresa = datosEmpresa?.empresa || datosEmpresa?.datosEmpresa?.empresa || factura.empresa || await cargarEmpresa()
   const clienteData = cliente || await cargarCliente(factura)
-  const productos = parseJson(factura.productos, [])
-  const logoEmpresa = normalizarRutaImagen(empresa?.logoprinter || empresa?.logo, link)
+  const documentData = prepareDocumentData({ factura, empresa, cliente: clienteData })
+  const clienteFactura = { ...normalizarClienteFactura(factura, clienteData), ...documentData.customer }
+  clienteFactura.nombre = translateDocumentCustomerName(clienteFactura.nombre)
+  const notaFactura = obtenerNotaFactura(factura) || labels.thanks
+  const notaFacturaHtml = notaFactura.replace(/\n/g, '<br>')
+  const productos = documentData.items
+  const logoEmpresa = await resolverLogoEmpresa(empresa?.logoprinter || empresa?.logo, link)
+  const configImpresora = await cargarConfiguracionImpresora()
+  const logoAncho = limitarMedidaLogo(configImpresora.factura_logo_ancho, 150, 30, 400)
+  const logoAlto = limitarMedidaLogo(configImpresora.factura_logo_alto, 90, 20, 250)
 
-  let qrCodeData = ''
+  const alanubeData = await obtenerAlanubeData(factura)
+  const qrValue = alanubeData.documentStampUrl || `${link || 'https://tmposrd.com'}/receipt/factura?factura=${factura.no_factura || ''}`
+  let qrCodeData = factura.qr || ''
   try {
-    qrCodeData = await QRCode.toDataURL(`${link || 'https://tmposrd.com'}/receipt/factura?factura=${factura.no_factura || ''}`)
+    if (!qrCodeData) qrCodeData = await QRCode.toDataURL(qrValue)
   } catch (_) {}
 
   const productosProcesados = Array.isArray(productos) ? productos.map((producto: any) => {
     const cantidad = toNumber(producto.cantidad ?? producto.quantity, 0)
     const precioUnidad = toNumber(producto.precio_final ?? producto.precio_venta ?? producto.precio_unitario ?? producto.precio, 0)
+    const precioNormal = toNumber(producto.precio_normal ?? producto.precio_lista ?? producto.precio_venta_normal, precioUnidad)
     const descuento = toNumber(producto.descuento, 0)
     const impuesto = toNumber(producto.impuesto_venta ?? producto.impuesto, 0)
     const totalProducto = toNumber(producto.total, (precioUnidad * cantidad) - descuento)
+    const tieneDescuentoProducto = precioNormal > 0 && precioUnidad >= 0 && precioUnidad < precioNormal
     return {
       ...producto,
+      codigoProducto: obtenerCodigoProducto(producto),
       cantidad,
       precioUnidad,
+      precioNormal,
       descuento,
+      tieneDescuentoProducto,
       impuestoTotal: impuesto * cantidad,
       totalProducto,
       imeis: obtenerImeisProducto(producto),
+      detallesImei: getPhoneImeiDetails(producto),
     }
   }) : []
 
@@ -157,14 +322,21 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
   const totalFactura = toNumber(factura.total)
   const subtotal = toNumber(factura.subtotal, totalFactura + toNumber(factura.descuento) - totalImpuesto)
   const colCount = 5 + (mostrarImpuesto ? 1 : 0) + (mostrarDescuento ? 1 : 0)
+  const fechaFactura = formatoFechaFactura(factura.fecha_emision || factura.fecha || '', factura.hora || '')
 
   const productosHTML = productosProcesados.map((producto: any) => {
-    const imeiHTML = producto.imeis.length ? `<div class="imei-line">IMEI: ${producto.imeis.join(', ')}</div>` : ''
+    const imeiHTML = producto.detallesImei.length
+      ? producto.detallesImei.map((detalle: string) => `<div class="imei-line">IMEI: ${detalle}</div>`).join('')
+      : (producto.imeis.length ? `<div class="imei-line">IMEI: ${producto.imeis.join(', ')}</div>` : '')
+    const ofertaHTML = producto.tieneDescuentoProducto
+      ? `<div class="discount-line">Normal: <span class="line-through">${formatoMoneda(producto.precioNormal)}</span> &nbsp; Con descuento: <strong>${formatoMoneda(producto.precioUnidad)}</strong></div>`
+      : ''
     return `
       <tr class="invoice-line">
-        <td>${producto.codigo || ''}</td>
+        <td>${producto.codigoProducto || ''}</td>
         <td>
           <div>${producto.nombre || producto.descripcion || ''}</div>
+          ${ofertaHTML}
           ${imeiHTML}
         </td>
         <td class="text-center">${producto.cantidad}</td>
@@ -181,10 +353,10 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
   ).join('')
 
   return `<!DOCTYPE html>
-<html lang="es">
+<html lang="${labels.language}">
 <head>
   <meta charset="UTF-8">
-  <title>Factura ${factura.no_factura || ''}</title>
+  <title>${labels.invoice} ${factura.no_factura || ''}</title>
   <style>
     * { box-sizing: border-box; }
     @page { size: letter; margin: 10mm; }
@@ -192,7 +364,7 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
     .page { width: 100%; max-width: 760px; margin: 0 auto; padding: 16px; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
     .company { flex: 1; line-height: 1.35; }
-    .company img { max-width: 150px; max-height: 90px; object-fit: contain; margin-bottom: 8px; }
+    .company img { max-width: ${logoAncho}px; max-height: ${logoAlto}px; object-fit: contain; margin-bottom: 8px; }
     .company-name { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
     .invoice-box { width: 280px; border: 1px solid #111827; border-radius: 8px; overflow: hidden; }
     .invoice-box table { width: 100%; border-collapse: collapse; }
@@ -207,6 +379,8 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
     .invoice-line { min-height: 24px; }
     .empty-row td { height: 24px; }
     .imei-line { margin-top: 3px; font-size: 9px; font-weight: 700; color: #374151; }
+    .discount-line { margin-top: 3px; font-size: 9px; color: #374151; }
+    .line-through { text-decoration: line-through; color: #6b7280; }
     .text-center { text-align: center; }
     .text-right { text-align: right; }
     .bottom { display: flex; justify-content: space-between; gap: 32px; margin-top: 14px; }
@@ -215,7 +389,7 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
     .totals table { width: 100%; border-collapse: collapse; }
     .totals td { padding: 6px 8px; border-bottom: 1px solid #e5e7eb; }
     .totals tr:last-child td { border-bottom: none; background: #f3f4f6; font-size: 14px; font-weight: 700; }
-    .note { margin-top: 16px; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; }
+    .note { margin-top: 10px; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 11px; line-height: 1.35; background: #f9fafb; }
     @media print {
       * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
       .page { padding: 0; }
@@ -226,9 +400,9 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
   <div class="page">
     <div class="header">
       <div class="company">
-        ${logoEmpresa ? `<img src="${logoEmpresa}" alt="Logo">` : `<div class="company-name">${empresa.nombre || 'MI EMPRESA'}</div>`}
+        ${logoEmpresa ? `<img src="${logoEmpresa}" alt="Logo">` : `<div class="company-name">${empresa.nombre || labels.company}</div>`}
         <div>
-          ${empresa.legal || empresa.rnc ? `${empresa.legal || empresa.rnc}<br>` : ''}
+          ${empresa.legal || empresa.rnc ? `${fiscal.businessIdLabel}: ${empresa.legal || empresa.rnc}<br>` : ''}
           ${empresa.telefono ? `Tel: ${empresa.telefono}<br>` : ''}
           ${empresa.email ? `Email: ${empresa.email}<br>` : ''}
           ${empresa.direccion || ''}
@@ -237,41 +411,44 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
 
       <div class="invoice-box">
         <table>
-          <tr><td><strong>Fecha</strong></td><td class="text-right">${factura.fecha_emision || ''}</td></tr>
-          <tr><td><strong>${esCotizacion(factura) ? 'Cotizacion #' : 'Factura #'}</strong></td><td class="text-right">${factura.no_factura || ''}</td></tr>
-          ${esCotizacion(factura) ? '' : `<tr><td><strong>NCF</strong></td><td class="text-right">${factura.comprobante || factura.ncf || ''}</td></tr>`}
+          <tr><td><strong>${labels.date}</strong></td><td class="text-right">${fechaFactura}</td></tr>
+          <tr><td><strong>${esCotizacion(factura) ? labels.quote : labels.invoice} #</strong></td><td class="text-right">${factura.no_factura || ''}</td></tr>
+          ${esCotizacion(factura) || !(factura.ncf || factura.comprobante) ? '' : `<tr><td><strong>${fiscal.fiscalDocumentLabel}</strong></td><td class="text-right">${factura.ncf || factura.comprobante || ''}</td></tr>`}
         </table>
         <div class="invoice-title">${(() => {
-          if (esCotizacion(factura)) return `COTIZACION #${factura.no_factura || ''}`
+          if (esCotizacion(factura)) return `${labels.quote.toUpperCase()} #${factura.no_factura || ''}`
           if (String(factura.metodo_pago || '').toLowerCase() === 'mixto') return formatearMetodoPago(factura)
-          if (factura.metodo_pago === 'CREDITO') return 'FACTURA A CREDITO'
-          return 'FACTURA'
+          if (factura.metodo_pago === 'CREDITO') return labels.creditInvoice
+          return labels.invoice.toUpperCase()
         })()}</div>
-        ${esCotizacion(factura) ? '<div style="text-align:center;margin-top:8px;font-size:10px;color:#666;font-style:italic">Esta cotizacion tiene una validez de 30 dias</div>' : ''}
+        ${esCotizacion(factura) ? `<div style="text-align:center;margin-top:8px;font-size:10px;color:#666;font-style:italic">${labels.quoteValidity}</div>` : ''}
       </div>
     </div>
 
     <div class="client-box">
       <div>
-        <p><strong>CLIENTE:</strong> ${factura.nombre_cliente || 'SIN REGISTRO'}</p>
-        <p><strong>TELEFONO:</strong> ${clienteData?.telefono || factura.telefono_cliente || 'N/A'}</p>
-        <p><strong>RNC/CEDULA:</strong> ${clienteData?.rnc || clienteData?.cedula || factura.rnc_cliente || 'N/A'}</p>
-        <p><strong>DIRECCION:</strong> ${clienteData?.direccion || factura.direccion_cliente || 'N/A'}</p>
-        <p><strong>METODO DE PAGO:</strong> ${formatearMetodoPago(factura)}</p>
+        <p><strong>${labels.customer}:</strong> ${clienteFactura.nombre || labels.unregistered}</p>
+        <p><strong>${labels.phone}:</strong> ${clienteFactura.telefono || labels.notApplicable}</p>
+        <p><strong>${fiscal.customerIdLabel.toUpperCase()}:</strong> ${clienteFactura.documento || labels.notApplicable}</p>
+        <p><strong>${labels.address}:</strong> ${clienteFactura.direccion || labels.notApplicable}</p>
+        <p><strong>${labels.paymentMethod}:</strong> ${formatearMetodoPago(factura)}</p>
       </div>
-      <div class="qr">${qrCodeData ? `<img src="${qrCodeData}" alt="QR">` : ''}</div>
+      <div class="qr">
+        ${qrCodeData ? `<img src="${qrCodeData}" alt="QR">` : ''}
+        ${alanubeData.securityCode ? `<div style="font-size:9px;font-weight:700;text-align:center;margin-top:4px">${labels.securityCode}: ${alanubeData.securityCode}</div>` : ''}
+      </div>
     </div>
 
     <table class="products">
       <thead>
         <tr>
-          <th>COD</th>
-          <th>DESCRIPCION</th>
-          <th>CANT.</th>
-          <th>P.U</th>
-          ${mostrarImpuesto ? '<th>ITBIS</th>' : ''}
-          ${mostrarDescuento ? '<th>DESC</th>' : ''}
-          <th>SUBTOTAL</th>
+          <th>${labels.code}</th>
+          <th>${labels.description}</th>
+          <th>${labels.quantity}</th>
+          <th>${labels.unitPrice}</th>
+          ${mostrarImpuesto ? `<th>${fiscal.shortName}</th>` : ''}
+          ${mostrarDescuento ? `<th>${labels.discount}</th>` : ''}
+          <th>${labels.subtotal}</th>
         </tr>
       </thead>
       <tbody>
@@ -280,25 +457,26 @@ async function generateFacturaHtml({ factura, cliente = null, datosEmpresa = nul
       </tbody>
     </table>
 
+    <div class="note"><strong>${labels.observation}:</strong><br>${notaFacturaHtml}</div>
+
     <div class="bottom">
       <div class="signatures">
         ___________________________________________<br>
-        <strong>ENTREGADO POR:</strong> ${factura.usuario || factura.cajero || 'Usuario'}<br><br>
+        <strong>${labels.deliveredBy}:</strong> ${factura.usuario || factura.cajero || labels.user}<br><br>
         ___________________________________________<br>
-        <strong>RECIBIDO POR:</strong> ${factura.nombre_cliente || 'SIN REGISTRO'}
+        <strong>${labels.receivedBy}:</strong> ${clienteFactura.nombre || labels.unregistered}
       </div>
 
       <div class="totals">
         <table>
-          <tr><td>SUBTOTAL</td><td class="text-right">${formatoMoneda(subtotal)}</td></tr>
-          ${mostrarImpuesto ? `<tr><td>ITBIS</td><td class="text-right">${formatoMoneda(totalImpuesto)}</td></tr>` : ''}
-          ${mostrarDescuento ? `<tr><td>DESC.</td><td class="text-right">${formatoMoneda(factura.descuento)}</td></tr>` : ''}
-          <tr><td>TOTAL</td><td class="text-right">${formatoMoneda(factura.total)}</td></tr>
+          <tr><td>${labels.subtotal}</td><td class="text-right">${formatoMoneda(subtotal)}</td></tr>
+          ${mostrarImpuesto ? `<tr><td>${fiscal.shortName}</td><td class="text-right">${formatoMoneda(totalImpuesto)}</td></tr>` : ''}
+          ${mostrarDescuento ? `<tr><td>${labels.discount}</td><td class="text-right">${formatoMoneda(factura.descuento)}</td></tr>` : ''}
+          <tr><td>${labels.total}</td><td class="text-right">${formatoMoneda(factura.total)}</td></tr>
         </table>
       </div>
     </div>
 
-    ${factura.nota ? `<div class="note"><strong>OBSERVACION:</strong><br>${String(factura.nota).replace(/\n/g, '<br>')}</div>` : ''}
   </div>
 </body>
 </html>`

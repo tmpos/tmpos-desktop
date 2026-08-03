@@ -3,8 +3,12 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth.store'
+import { useSystemModeStore } from '@/stores/systemMode'
 import { useAlmacenStore } from '@/stores/almacen.store'
 import { useAlertas } from '@/composables/useAlertas'
+import { ensureConfigLoaded, getImageUrl } from '@/services/tmCloudClient'
+import { useToast } from 'primevue/usetoast'
+import Toast from 'primevue/toast'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 
@@ -12,24 +16,69 @@ const router = useRouter()
 const route = useRoute()
 const themeStore = useThemeStore()
 const auth = useAuthStore()
+const systemMode = useSystemModeStore()
 const almacenStore = useAlmacenStore()
 
-const cambiandoAlmacen = ref(false)
-
-const { alertas, verificarAlertas } = useAlertas()
+const { alertas, verificarAlertas, descartarAlerta, descartarTodas } = useAlertas()
+const toast = useToast()
 const alertasPanelVisible = ref(false)
+const userMenuVisible = ref(false)
+const userMenuRef = ref<HTMLElement | null>(null)
 
-function cambiarAlmacen() {
-  localStorage.setItem('almacen_id', String(almacenStore.activeId))
-  cambiandoAlmacen.value = true
-  setTimeout(() => window.location.reload(), 300)
+const usuarioNombre = computed(() => (auth.user as any)?.nombre || (auth.user as any)?.usuario || 'USUARIO')
+const usuarioCuenta = computed(() => (auth.user as any)?.usuario || (auth.user as any)?.email || '')
+const usuarioRol = computed(() => (auth.user as any)?.nivel_seguridad || (auth.user as any)?.rol || 'Usuario')
+const usuarioImagen = computed(() => getImageUrl((auth.user as any)?.imagen || '') || (auth.user as any)?.imagen || '')
+const usuarioIniciales = computed(() => usuarioNombre.value
+  .split(/\s+/)
+  .filter(Boolean)
+  .slice(0, 2)
+  .map((parte: string) => parte.charAt(0))
+  .join('')
+  .toUpperCase())
+
+function toggleUserMenu() {
+  userMenuVisible.value = !userMenuVisible.value
+  alertasPanelVisible.value = false
 }
+
+function cerrarMenusAlHacerClickFuera(event: MouseEvent) {
+  if (userMenuRef.value && !userMenuRef.value.contains(event.target as Node)) userMenuVisible.value = false
+}
+
 const empresaNombre = ref('')
 const empresaLogo = ref('')
 
+async function cargarEmpresa() {
+  try {
+    await ensureConfigLoaded()
+    const res = await window.db.getAll('empresa')
+    if (res.success && res.data?.length > 0) {
+      // La identidad visible corresponde a la empresa/tienda activa.
+      await almacenStore.load()
+      const e = res.data.find((item: any) => String(item.uid || item.almacen_uid || '') === String(almacenStore.activeUid || '')) || res.data.find((item: any) => Number(item.almacen_id || item.id) === Number(almacenStore.activeId)) || res.data[0]
+      empresaNombre.value = e.nombre || ''
+      empresaLogo.value = getImageUrl(e.logo || '') || e.logo || ''
+      ;(window as any).__empresaNombre = e.nombre || 'MI EMPRESA'
+      ;(window as any).__empresaDireccion = e.direccion || ''
+      ;(window as any).__empresaTelefono = e.telefono || ''
+    }
+  } catch (_) {}
+}
+
+function ocultarLogo() {
+  empresaLogo.value = ''
+}
+
+function refrescarEmpresa() {
+  cargarEmpresa()
+}
 let licenciaInterval: ReturnType<typeof setInterval> | null = null
 let updateInterval: ReturnType<typeof setInterval> | null = null
+let alertasInterval: ReturnType<typeof setInterval> | null = null
 let licenciaVerificando = false
+const licenciaEstado = ref<'activa' | 'pendiente' | 'vencida' | 'bloqueada' | 'error' | ''>('')
+const licenciaDias = ref<number | null>(null)
 const updateDescargando = ref(false)
 const updateEstado = ref('')
 const updateVersionInfo = ref<any>(null)
@@ -52,17 +101,30 @@ async function verificarLicenciaPeriodicamente() {
   licenciaVerificando = true
   try {
     console.log('[AppTopbar] Verificando licencia...')
-    const offlineOnly = navigator.onLine === false
-    const res = await (window as any).electron.invoke('licencia:verificar', { offlineOnly })
-    console.log('[AppTopbar] Resultado licencia:', JSON.stringify(res))
-    if (licenciaAceptada(res)) return
-    if (licenciaDebeCerrarSesion(res)) {
-      console.log('[AppTopbar] Licencia no valida confirmada, cerrando sesion...')
-      auth.logout()
-      router.push('/login')
+    const res = await (window as any).electron.invoke('licencia:verificar')
+    console.log('[AppTopbar] Resultado licencia:', { success: Boolean(res?.success), estado: res?.estado || res?.data?.estado || '' })
+    if (licenciaAceptada(res)) {
+      const estado = String(res?.data?.estado || res?.estado || '').toLowerCase()
+      licenciaEstado.value = estado as any
+      licenciaDias.value = res?.data?.diasRestantes ?? null
       return
     }
-    console.log('[AppTopbar] No se cerro sesion por resultado no concluyente:', res?.error || res?.data?.mensaje || res?.estado)
+    if (!res || !licenciaAceptada(res)) {
+      const rutaActual = router.currentRoute.value.name
+      if (rutaActual === 'license') return
+      console.log('[AppTopbar] Licencia no valida, redirigiendo a /license...')
+      if (!res) {
+        toast.add({ severity: 'warn', summary: 'Licencia no encontrada', detail: 'Este equipo no cuenta con una licencia activa.', life: 5000 })
+      } else if (licenciaDebeCerrarSesion(res)) {
+        const estado = String(res?.data?.estado || res?.estado || '').toLowerCase()
+        licenciaEstado.value = estado as any
+        toast.add({ severity: 'error', summary: 'Licencia ' + estado, detail: res?.data?.mensaje || res?.error || 'La licencia ha ' + estado, life: 6000 })
+      }
+      router.push('/license')
+      return
+    }
+    licenciaEstado.value = res?.data?.estado || res?.estado || 'activo'
+    licenciaDias.value = res?.data?.diasRestantes ?? null
   } catch (e) {
     console.log('[AppTopbar] Error verificando licencia:', e)
   } finally {
@@ -72,7 +134,11 @@ async function verificarLicenciaPeriodicamente() {
 
 async function revisarActualizacion() {
   if (!(window as any).electron?.invoke) return
-  const autoCheck = localStorage.getItem('update_autoCheck') !== 'false'
+  let autoCheck = true
+  try {
+    const res = await (window as any).config.get('update_autoCheck')
+    if (res.success) autoCheck = res.data !== 'false'
+  } catch {}
   if (!autoCheck) return
   try {
     const res = await (window as any).electron.invoke('update:check')
@@ -82,7 +148,11 @@ async function revisarActualizacion() {
     if (res.data?.version && res.data.version !== versionActual) {
       updateVersionInfo.value = res.data
       updateUrl.value = res.data.url || ''
-      const autoInstall = localStorage.getItem('update_autoInstall') === 'true'
+      let autoInstall = false
+      try {
+        const ri = await (window as any).config.get('update_autoInstall')
+        if (ri.success) autoInstall = ri.data === 'true'
+      } catch {}
       if (autoInstall && updateUrl.value) {
         updateDescargando.value = true
         updateEstado.value = 'Nueva version detectada. Descargando...'
@@ -117,26 +187,16 @@ async function descargarAhora() {
   }
 }
 
-async function cargarEmpresa() {
-  try {
-    const res = await window.db.getAll('empresa')
-    if (res.success && res.data?.length > 0) {
-      const e = res.data[0]
-      empresaNombre.value = e.nombre || ''
-      empresaLogo.value = e.logo || ''
-    }
-  } catch (_) {}
-}
-
 onMounted(() => {
   cargarEmpresa()
-  almacenStore.load()
+  window.addEventListener('empresa:actualizada', refrescarEmpresa)
   verificarAlertas()
-  setInterval(verificarAlertas, 600000)
+  alertasInterval = setInterval(verificarAlertas, 600000)
   verificarLicenciaPeriodicamente()
   licenciaInterval = setInterval(verificarLicenciaPeriodicamente, 300000)
   revisarActualizacion()
   updateInterval = setInterval(revisarActualizacion, 1800000)
+  document.addEventListener('mousedown', cerrarMenusAlHacerClickFuera)
 })
 
 function applyTopbarBg(color: string) {
@@ -169,6 +229,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('empresa:actualizada', refrescarEmpresa)
   window.removeEventListener('keydown', handleKeyDown)
 })
 
@@ -191,15 +252,19 @@ const navItems: { label: string; icon: string; to: string; permiso: string }[] =
   { label: 'Reportes', icon: 'pi pi-chart-bar', to: '/reportes', permiso: 'reportes' },
   { label: 'Configuracion', icon: 'pi pi-cog', to: '/configuracion', permiso: 'configuracion' },
   { label: 'Vender', icon: 'pi pi-shopping-cart', to: '/vender', permiso: 'vender' },
-  { label: 'Compras', icon: 'pi pi-truck', to: '/compras', permiso: 'compras' },
-  { label: 'Transferencias', icon: 'pi pi-arrow-right-arrow-left', to: '/transferencias', permiso: 'transferencias' },
   { label: 'Soporte', icon: 'pi pi-headset', to: '/soporte', permiso: 'soporte' },
 ]
 
-const navItemsFiltrados = computed(() => navItems.filter(item => auth.tienePermiso(item.permiso)))
+const navItemsFiltrados = computed(() => navItems
+  .filter(item => !systemMode.isGeneralStore || item.to !== '/taller')
+  .filter(item => auth.tienePermiso(item.permiso)))
 
 function navigate(path: string) {
   router.push(path)
+}
+
+function irACaja() {
+  router.push({ path: '/contabilidad', query: { tab: 'caja' } })
 }
 
 async function cerrarSesion() {
@@ -246,16 +311,19 @@ onUnmounted(() => {
   window.removeEventListener('resize', checkWidth)
   if (licenciaInterval) { clearInterval(licenciaInterval); licenciaInterval = null }
   if (updateInterval) { clearInterval(updateInterval); updateInterval = null }
+  if (alertasInterval) { clearInterval(alertasInterval); alertasInterval = null }
+  document.removeEventListener('mousedown', cerrarMenusAlHacerClickFuera)
 })
 </script>
 
 <template>
   <header class="app-topbar">
+    <Toast />
     <div class="app-topbar-inner">
       <div class="topbar-row topbar-brand-row">
         <div class="branding">
           <div class="logo cursor-pointer" @click="router.push('/')">
-            <img v-if="empresaLogo" :src="empresaLogo" class="w-full h-full object-contain p-1" />
+            <img v-if="empresaLogo" :src="empresaLogo" class="w-full h-full object-contain p-1" alt="Logo de empresa" @error="ocultarLogo" />
             <span v-else-if="empresaNombre" class="text-lg font-bold" style="color:var(--p-primary-500)">{{ empresaNombre.charAt(0) }}</span>
             <svg v-else width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -265,6 +333,10 @@ onUnmounted(() => {
           </div>
           <div class="brand-text cursor-pointer" v-if="empresaNombre" @click="router.push('/')">
             <span class="brand-name">{{ empresaNombre }}</span>
+            <span v-if="licenciaEstado && licenciaEstado !== 'activa'" class="ml-2 inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-medium cursor-pointer" :class="licenciaEstado === 'vencida' || licenciaEstado === 'bloqueada' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'" v-tooltip="'Licencia: ' + licenciaEstado + (licenciaDias !== null ? ' (' + licenciaDias + ' dias)' : '')" @click="router.push('/license')">
+              <i class="pi pi-exclamation-triangle text-[10px]"></i>
+              <span class="hidden sm:inline">{{ licenciaEstado }}</span>
+            </span>
           </div>
         </div>
 
@@ -275,6 +347,7 @@ onUnmounted(() => {
               :key="item.to"
               class="nav-item"
               :class="{ 'nav-item-active': isActive(item.to) }"
+              v-tooltip="item.label"
               @click="navigate(item.to)"
             >
               <i :class="item.icon" class="nav-icon"></i>
@@ -284,24 +357,39 @@ onUnmounted(() => {
         </div>
 
         <div class="topbar-end">
+          <button
+            v-if="auth.isCajero"
+            type="button"
+            class="cashier-caja-btn"
+            :class="{ 'cashier-caja-btn-active': route.path === '/contabilidad' && route.query.tab === 'caja' }"
+            title="Ir a Caja"
+            @click="irACaja"
+          >
+            <i class="pi pi-calculator"></i>
+            <span>Caja</span>
+          </button>
           <div class="relative">
             <button class="action-btn" @click="alertasPanelVisible = !alertasPanelVisible" title="Alertas">
               <i class="pi pi-bell action-icon" :class="alertas.length > 0 ? 'text-amber-400' : ''"></i>
               <span v-if="alertas.length > 0" class="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] flex items-center justify-center font-bold">{{ alertas.length > 9 ? '9+' : alertas.length }}</span>
             </button>
-            <div v-if="alertasPanelVisible" class="absolute right-0 top-full mt-1 w-72 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 shadow-xl z-50 overflow-hidden" @click.stop>
-              <div class="px-3 py-2 border-b border-surface-100 dark:border-surface-700 text-xs font-semibold text-surface-500 flex items-center justify-between">
+            <div v-if="alertasPanelVisible" class="alertas-panel absolute right-0 top-full mt-1 w-72 rounded-xl border border-surface-200 dark:border-surface-700 shadow-xl z-50 overflow-hidden" :style="{ backgroundColor: themeStore.isDark ? '#0f172a' : '#ffffff', color: themeStore.isDark ? '#f8fafc' : '#1e293b' }" @click.stop>
+              <div class="alertas-panel-header px-3 py-2 border-b border-surface-100 dark:border-surface-700 text-xs font-semibold flex items-center justify-between">
                 <span>Alertas ({{ alertas.length }})</span>
-                <button @click="alertasPanelVisible = false" class="text-surface-400 hover:text-surface-600"><i class="pi pi-times text-xs"></i></button>
+                <div class="flex items-center gap-2">
+                  <button v-if="alertas.length" @click="descartarTodas" class="text-primary hover:underline">Limpiar</button>
+                  <button @click="alertasPanelVisible = false" class="text-surface-400 hover:text-surface-600"><i class="pi pi-times text-xs"></i></button>
+                </div>
               </div>
-              <div v-if="alertas.length === 0" class="px-3 py-6 text-center text-surface-400 text-xs">Sin alertas</div>
+              <div v-if="alertas.length === 0" class="alertas-panel-empty px-3 py-6 text-center text-xs">Sin alertas</div>
               <div v-else class="max-h-64 overflow-y-auto divide-y divide-surface-100 dark:divide-surface-700">
                 <div v-for="(a, i) in alertas" :key="i" class="px-3 py-2.5 flex items-start gap-2.5 text-sm hover:bg-surface-50 dark:hover:bg-surface-800/50 cursor-pointer" @click="alertasPanelVisible = false; a.ruta ? router.push(a.ruta) : null">
                   <i class="pi mt-0.5 text-xs" :class="a.severidad === 'danger' ? 'pi-exclamation-circle text-red-500' : a.severidad === 'warning' ? 'pi-exclamation-triangle text-amber-500' : 'pi-info-circle text-blue-500'"></i>
-                  <div>
+                  <div class="min-w-0 flex-1">
                     <div class="font-medium text-xs">{{ a.tipo === 'stock' ? 'Stock Bajo' : a.tipo === 'turno' ? 'Turno' : 'Alerta' }}</div>
-                    <div class="text-xs text-surface-500">{{ a.mensaje }}</div>
+                    <div class="alertas-panel-message text-xs">{{ a.mensaje }}</div>
                   </div>
+                  <button class="text-surface-400 hover:text-surface-700 dark:hover:text-surface-200" @click.stop="descartarAlerta(a)" v-tooltip="'Descartar alerta'"><i class="pi pi-times text-xs"></i></button>
                 </div>
               </div>
             </div>
@@ -309,26 +397,42 @@ onUnmounted(() => {
           <button class="action-btn" @click="themeStore.toggleTheme()" :title="themeStore.isDark ? 'Modo claro' : 'Modo oscuro'">
             <i :class="themeStore.isDark ? 'pi pi-sun' : 'pi pi-moon'" class="action-icon"></i>
           </button>
-          <div v-if="almacenStore.hasMultiple && (auth.isAdmin || auth.isSoporte)" class="relative flex items-center">
-            <select v-model="almacenStore.activeId" @change="cambiarAlmacen" class="appearance-none bg-transparent text-xs font-medium text-surface-600 dark:text-surface-300 border border-surface-200 dark:border-surface-600 rounded-lg px-2 py-1.5 pr-6 cursor-pointer hover:border-surface-400 focus:outline-none focus:ring-2 focus:ring-primary-500">
-              <option v-for="a in almacenStore.almacenes" :key="a.id" :value="a.id">{{ a.nombre }}</option>
-            </select>
-            <i class="pi pi-chevron-down absolute right-2 pointer-events-none text-xs text-surface-400"></i>
+          <div ref="userMenuRef" class="relative">
+            <button class="user-menu-trigger" type="button" :aria-expanded="userMenuVisible" aria-haspopup="menu" @click="toggleUserMenu">
+              <span class="user-avatar">
+                <img v-if="usuarioImagen" :src="usuarioImagen" :alt="usuarioNombre" />
+                <span v-else>{{ usuarioIniciales || 'U' }}</span>
+              </span>
+              <span class="user-trigger-info hidden sm:flex">
+                <strong>{{ usuarioNombre }}</strong>
+                <small>{{ usuarioRol }}</small>
+              </span>
+              <i class="pi pi-chevron-down user-trigger-chevron" :class="{ 'rotate-180': userMenuVisible }"></i>
+            </button>
+
+            <div v-if="userMenuVisible" class="user-dropdown" role="menu" @click.stop>
+              <div class="user-card">
+                <span class="user-card-avatar">
+                  <img v-if="usuarioImagen" :src="usuarioImagen" :alt="usuarioNombre" />
+                  <span v-else>{{ usuarioIniciales || 'U' }}</span>
+                </span>
+                <div class="min-w-0">
+                  <p class="user-card-name">{{ usuarioNombre }}</p>
+                  <p v-if="usuarioCuenta" class="user-card-account">@{{ usuarioCuenta }}</p>
+                  <span class="user-card-role">{{ usuarioRol }}</span>
+                </div>
+              </div>
+              <div class="user-dropdown-divider"></div>
+              <button class="user-logout-btn" type="button" role="menuitem" @click="userMenuVisible = false; cerrarSesion()">
+                <i class="pi pi-sign-out"></i>
+                <span>Cerrar sesión</span>
+              </button>
+            </div>
           </div>
-          <button class="action-btn action-btn-exit" @click="cerrarSesion" title="Cerrar sesion">
-            <i class="pi pi-sign-out action-icon"></i>
-            <span class="action-label">Salir</span>
-          </button>
         </div>
       </div>
     </div>
   </header>
-
-  <!-- Overlay de cambio de almacen -->
-  <div v-if="cambiandoAlmacen" class="fixed inset-0 z-[9999] flex flex-col items-center justify-center gap-4" style="background:rgba(0,0,0,0.7);backdrop-filter:blur(4px)">
-    <i class="pi pi-spin pi-spinner text-4xl text-white"></i>
-    <p class="text-white text-sm font-medium">Cambiando de almacen...</p>
-  </div>
 
   <!-- Modal de actualizacion disponible -->
   <Dialog v-model:visible="updateDialogVisible" header="Actualizacion disponible" modal :style="{ width: 'min(24rem, 90vw)' }" :closable="true">
@@ -361,18 +465,21 @@ onUnmounted(() => {
   background: var(--topbar-bg, rgba(255, 255, 255, 0.85));
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  border-bottom: 1px solid rgba(203, 213, 225, 0.9);
+  box-shadow:
+    0 14px 34px -28px rgba(15, 23, 42, 0.58),
+    0 3px 12px -9px rgba(15, 23, 42, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
   position: relative;
   z-index: 100;
-  transition: background 0.3s ease;
+  transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .app-topbar-inner {
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 0.5rem 1rem;
+  padding: 0.55rem 1rem;
   max-width: 100%;
   margin: 0 auto;
 }
@@ -397,7 +504,7 @@ onUnmounted(() => {
     flex-direction: row;
     align-items: center;
     gap: 0;
-    padding: 0.75rem 1rem;
+    padding: 0.65rem 1.25rem;
   }
 
   .topbar-row {
@@ -458,13 +565,14 @@ onUnmounted(() => {
 .logo {
   width: 2.5rem;
   height: 2.5rem;
-  border-radius: 0.75rem;
-  background: #ffffff;
+  border-radius: 0.65rem;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  background: rgba(255, 255, 255, 0.94);
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--p-primary-500);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 8px 18px -14px rgba(15, 23, 42, 0.65);
 }
 
 .brand-text {
@@ -477,7 +585,7 @@ onUnmounted(() => {
   font-size: 1.125rem;
   font-weight: 700;
   color: var(--p-slate-800);
-  letter-spacing: -0.025em;
+  letter-spacing: 0;
 }
 
 .brand-divider {
@@ -489,7 +597,7 @@ onUnmounted(() => {
 .nav-menu {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.25rem;
   flex: 1;
   justify-content: center;
   flex-wrap: nowrap;
@@ -504,32 +612,36 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  border-radius: 9999px;
-  border: 2px solid transparent;
-  transition: all 0.2s ease-out;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.8rem;
+  border-radius: 0.6rem;
+  border: 1px solid transparent;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
   color: var(--p-slate-600);
   background: transparent;
 }
 
 .nav-item:hover {
-  background: var(--p-slate-100);
-  border-color: var(--p-slate-200);
+  background: rgba(248, 250, 252, 0.84);
+  border-color: rgba(203, 213, 225, 0.88);
   color: var(--p-slate-700);
+  box-shadow: 0 8px 18px -18px rgba(15, 23, 42, 0.5);
 }
 
 
 
 .nav-item-active {
-  background: var(--p-blue-50);
-  border-color: var(--p-blue-200);
-  color: var(--p-blue-600);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  background: rgba(239, 246, 255, 0.95);
+  border-color: rgba(147, 197, 253, 0.75);
+  color: var(--p-blue-700);
+  box-shadow:
+    0 10px 22px -18px rgba(37, 99, 235, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
 }
 
 .nav-item-active:hover {
-  background: var(--p-blue-100);
-  border-color: var(--p-blue-300);
+  background: rgba(219, 234, 254, 0.95);
+  border-color: rgba(96, 165, 250, 0.8);
 }
 
 .nav-icon {
@@ -558,26 +670,52 @@ onUnmounted(() => {
 .topbar-end {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.35rem;
   flex-shrink: 0;
+}
+
+.cashier-caja-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.35rem;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid rgba(16, 185, 129, 0.55);
+  border-radius: 0.65rem;
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.cashier-caja-btn:hover,
+.cashier-caja-btn-active {
+  background: #059669;
+  border-color: #059669;
+  color: #fff;
+  transform: translateY(-1px);
 }
 
 .action-btn {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 9999px;
-  border: 2px solid transparent;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.6rem;
+  border: 1px solid transparent;
   color: var(--p-slate-500);
   background: transparent;
-  transition: all 0.2s;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .action-btn:hover {
-  background: var(--p-slate-100);
-  border-color: var(--p-slate-200);
+  background: rgba(248, 250, 252, 0.84);
+  border-color: rgba(203, 213, 225, 0.88);
   color: var(--p-slate-700);
+  box-shadow: 0 8px 18px -18px rgba(15, 23, 42, 0.5);
 }
 
 
@@ -587,8 +725,8 @@ onUnmounted(() => {
 }
 
 .action-btn-exit:hover {
-  background: var(--p-red-50);
-  border-color: var(--p-red-200);
+  background: rgba(254, 242, 242, 0.92);
+  border-color: rgba(252, 165, 165, 0.8);
   color: var(--p-red-600);
 }
 
@@ -601,21 +739,230 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
+.user-menu-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2.5rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid rgba(203, 213, 225, 0.88);
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--p-slate-700);
+  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.user-menu-trigger:hover {
+  background: rgba(248, 250, 252, 0.96);
+  border-color: rgba(148, 163, 184, 0.9);
+  box-shadow: 0 10px 22px -18px rgba(15, 23, 42, 0.6);
+}
+
+.user-avatar,
+.user-card-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, var(--p-primary-500), var(--p-primary-700));
+  color: white;
+  font-weight: 700;
+}
+
+.user-avatar {
+  width: 2rem;
+  height: 2rem;
+  font-size: 0.7rem;
+}
+
+.user-card-avatar {
+  width: 3rem;
+  height: 3rem;
+  font-size: 0.9rem;
+}
+
+.user-avatar img,
+.user-card-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-trigger-info {
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  max-width: 8.5rem;
+  line-height: 1.15;
+}
+
+.user-trigger-info strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
+.user-trigger-info small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--p-slate-500);
+  font-size: 0.625rem;
+}
+
+.user-trigger-chevron {
+  color: var(--p-slate-400);
+  font-size: 0.65rem;
+  transition: transform 0.18s ease;
+}
+
+.user-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  z-index: 60;
+  width: 17rem;
+  overflow: hidden;
+  border: 1px solid rgba(203, 213, 225, 0.92);
+  border-radius: 0.9rem;
+  background: #ffffff;
+  color: #1e293b;
+  box-shadow: 0 22px 50px -24px rgba(15, 23, 42, 0.55);
+}
+
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 1rem;
+}
+
+.user-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.user-card-account {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #64748b;
+  font-size: 0.7rem;
+}
+
+.user-card-role {
+  display: inline-flex;
+  margin-top: 0.35rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 9999px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.user-dropdown-divider {
+  height: 1px;
+  background: #e2e8f0;
+}
+
+.user-logout-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.8rem 1rem;
+  color: #dc2626;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.user-logout-btn:hover {
+  background: #fef2f2;
+}
+
+:global(.dark) .user-menu-trigger {
+  border-color: rgba(71, 85, 105, 0.9);
+  background: rgba(30, 41, 59, 0.72);
+  color: #f8fafc;
+}
+
+:global(.dark) .user-menu-trigger:hover {
+  background: rgba(51, 65, 85, 0.86);
+  border-color: rgba(100, 116, 139, 0.95);
+}
+
+:global(.dark) .user-dropdown {
+  border-color: #334155;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+:global(.dark) .user-card-account,
+:global(.dark) .user-trigger-info small {
+  color: #94a3b8;
+}
+
+:global(.dark) .user-dropdown-divider {
+  background: #334155;
+}
+
+:global(.dark) .user-logout-btn:hover {
+  background: rgba(127, 29, 29, 0.3);
+}
+
+.alertas-panel {
+  background: #ffffff;
+  color: #1e293b;
+}
+
+.alertas-panel-header,
+.alertas-panel-message,
+.alertas-panel-empty {
+  color: #64748b;
+}
+
+:global(.dark) .alertas-panel {
+  background: #0f172a !important;
+  border-color: #334155 !important;
+  color: #f8fafc;
+}
+
+:global(.dark) .alertas-panel-header,
+:global(.dark) .alertas-panel-message,
+:global(.dark) .alertas-panel-empty {
+  color: #cbd5e1 !important;
+}
+
 </style>
 
 <style>
 .dark .app-topbar {
-  background: rgba(30, 41, 59, 0.95) !important;
-  border-bottom-color: rgba(51, 65, 85, 0.8) !important;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2) !important;
+  background: rgba(15, 23, 42, 0.94) !important;
+  border-bottom-color: rgba(51, 65, 85, 0.95) !important;
+  box-shadow:
+    0 16px 38px -26px rgba(0, 0, 0, 0.82),
+    0 4px 14px -10px rgba(0, 0, 0, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
 }
 .dark .app-topbar .brand-name { color: #ffffff !important; }
+.dark .app-topbar .logo { background: rgba(15, 23, 42, 0.72) !important; border-color: rgba(71, 85, 105, 0.85) !important; box-shadow: 0 10px 22px -16px rgba(0, 0, 0, 0.85) !important; }
 .dark .app-topbar .nav-item { color: rgba(255, 255, 255, 0.65) !important; }
-.dark .app-topbar .nav-item:hover { color: #ffffff !important; background: rgba(255, 255, 255, 0.08) !important; border-color: rgba(255, 255, 255, 0.15) !important; }
-.dark .app-topbar .nav-item-active { color: #ffffff !important; background: rgba(59, 130, 246, 0.25) !important; border-color: rgba(59, 130, 246, 0.5) !important; }
+.dark .app-topbar .nav-item:hover { color: #ffffff !important; background: rgba(255, 255, 255, 0.07) !important; border-color: rgba(148, 163, 184, 0.2) !important; box-shadow: 0 10px 22px -18px rgba(0, 0, 0, 0.85) !important; }
+.dark .app-topbar .nav-item-active { color: #ffffff !important; background: rgba(37, 99, 235, 0.34) !important; border-color: rgba(96, 165, 250, 0.52) !important; box-shadow: 0 10px 22px -18px rgba(37, 99, 235, 0.78) !important; }
 .dark .app-topbar .nav-item-active:hover { background: rgba(59, 130, 246, 0.35) !important; }
 .dark .app-topbar .action-btn { color: rgba(255, 255, 255, 0.6) !important; }
-.dark .app-topbar .action-btn:hover { color: #ffffff !important; background: rgba(255, 255, 255, 0.08) !important; border-color: rgba(255, 255, 255, 0.15) !important; }
+.dark .app-topbar .action-btn:hover { color: #ffffff !important; background: rgba(255, 255, 255, 0.07) !important; border-color: rgba(148, 163, 184, 0.2) !important; box-shadow: 0 10px 22px -18px rgba(0, 0, 0, 0.85) !important; }
 .dark .app-topbar .action-btn-exit { color: rgba(248, 113, 113, 0.7) !important; }
 .dark .app-topbar .action-btn-exit:hover { color: #fca5a5 !important; background: rgba(127, 29, 29, 0.3) !important; border-color: rgba(239, 68, 68, 0.5) !important; }
 </style>

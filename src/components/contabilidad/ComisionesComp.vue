@@ -17,15 +17,15 @@
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div class="rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 p-4 text-white shadow">
           <p class="text-blue-100 text-xs font-semibold">Total Comisiones</p>
-          <p class="text-xl font-bold">${{ formatCurrency(resumen.total) }}</p>
+          <p class="text-xl font-bold">{{ $formatMoney(resumen.total) }}</p>
         </div>
         <div class="rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 p-4 text-white shadow">
           <p class="text-amber-100 text-xs font-semibold">Pendientes</p>
-          <p class="text-xl font-bold">${{ formatCurrency(resumen.pendiente) }}</p>
+          <p class="text-xl font-bold">{{ $formatMoney(resumen.pendiente) }}</p>
         </div>
         <div class="rounded-xl bg-gradient-to-br from-green-500 to-green-700 p-4 text-white shadow">
           <p class="text-green-100 text-xs font-semibold">Pagadas</p>
-          <p class="text-xl font-bold">${{ formatCurrency(resumen.pagada) }}</p>
+          <p class="text-xl font-bold">{{ $formatMoney(resumen.pagada) }}</p>
         </div>
       </div>
 
@@ -33,13 +33,13 @@
         <Column field="no_factura" header="Factura" sortable style="width:7rem" />
         <Column field="vendedor" header="Vendedor" sortable />
         <Column field="total_venta" header="Venta" sortable style="width:7rem">
-          <template #body="{ data }">${{ formatCurrency(data.total_venta) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.total_venta) }}</template>
         </Column>
         <Column field="porcentaje" header="%" sortable style="width:4rem">
           <template #body="{ data }">{{ data.porcentaje }}%</template>
         </Column>
         <Column field="monto" header="Comision" sortable style="width:7rem">
-          <template #body="{ data }"><span class="font-semibold text-green-600">${{ formatCurrency(data.monto) }}</span></template>
+          <template #body="{ data }"><span class="font-semibold text-green-600">{{ $formatMoney(data.monto) }}</span></template>
         </Column>
         <Column field="estado" header="Estado" sortable style="width:7rem">
           <template #body="{ data }">
@@ -62,14 +62,17 @@
 </template>
 
 <script setup lang="ts">
+import { getSystemLocale } from '@/i18n/localeProfiles'
 import { ref, computed, onMounted } from 'vue'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 import { useToast } from 'primevue/usetoast'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
+const { filterByAlmacen } = useAlmacenFilter()
 
 const loading = ref(true)
 const comisiones = ref<any[]>([])
@@ -91,14 +94,14 @@ const resumen = computed(() => {
 })
 
 function formatCurrency(n: number): string {
-  return Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 async function cargar() {
   loading.value = true
   try {
     const res = await (window as any).electron.invoke('db:getAll', 'comisiones')
-    if (res.success) comisiones.value = res.data || []
+    if (res.success) comisiones.value = filterByAlmacen(res.data || [])
   } catch {} finally { loading.value = false }
 }
 

@@ -2,12 +2,13 @@
 import { ref } from 'vue'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
+import { formatSystemCurrency } from '@/i18n/localeProfiles'
 
 const toast = useToast()
 const printerName = ref('')
 
 function money(value: any): string {
-  return Number(value || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatSystemCurrency(value)
 }
 
 function formatFecha(fecha: string): string {
@@ -35,13 +36,16 @@ function getSaldo(apartado: any): number {
 function buildTicketHtml(apartado: any, tipo: 'apartado' | 'pago' = 'apartado', pago?: any): string {
   const pagos = getPagos(apartado)
   const titulo = tipo === 'pago' ? (getSaldo(apartado) <= 0 ? 'APARTADO COMPLETADO' : 'PAGO DE APARTADO') : 'RECIBO DE APARTADO'
+  const empresaNombre = (window as any).__empresaNombre || 'MI EMPRESA'
+  const empresaDireccion = (window as any).__empresaDireccion || ''
+  const empresaTelefono = (window as any).__empresaTelefono || ''
   const notas = String(apartado?.notas || '')
   const imei = notas.match(/IMEI:\s*([^|]+)/i)?.[1]?.trim() || ''
   const modelo = notas.match(/MODELO:\s*([^|]+)/i)?.[1]?.trim() || ''
 
   const pagoActual = pago
     ? `
-      <div class="row strong"><span>Monto pagado</span><b>RD$ ${money(pago.monto)}</b></div>
+      <div class="row strong"><span>Monto pagado</span><b>${money(pago.monto)}</b></div>
       <div class="row"><span>Metodo</span><b>${pago.metodo_pago || 'N/A'}</b></div>
       ${pago.referencia ? `<div class="row"><span>Referencia</span><b>${pago.referencia}</b></div>` : ''}
       <div class="sep"></div>
@@ -54,7 +58,7 @@ function buildTicketHtml(apartado: any, tipo: 'apartado' | 'pago' = 'apartado', 
       ${pagos.map((p: any) => `
         <div class="payment">
           <span>${formatFecha(p.fecha)} ${p.metodo_pago || ''}</span>
-          <b>RD$ ${money(p.monto)}</b>
+          <b>${money(p.monto)}</b>
         </div>
       `).join('')}
       <div class="sep"></div>
@@ -89,8 +93,10 @@ function buildTicketHtml(apartado: any, tipo: 'apartado' | 'pago' = 'apartado', 
   <body>
     <div class="ticket">
       <div class="center">
-        <div class="brand">MRCUTTI TECHNOLOGY</div>
-        <div class="muted">Recibo generado por el sistema</div>
+        <div class="brand">${empresaNombre}</div>
+        ${empresaDireccion ? `<div class="muted">${empresaDireccion}</div>` : ''}
+        ${empresaTelefono ? `<div class="muted">Tel: ${empresaTelefono}</div>` : ''}
+        <div class="sep"></div>
         <div class="title">${titulo}</div>
       </div>
       <div class="sep"></div>
@@ -103,9 +109,9 @@ function buildTicketHtml(apartado: any, tipo: 'apartado' | 'pago' = 'apartado', 
       ${imei ? `<div class="row"><span>IMEI</span><b>${imei}</b></div>` : ''}
       ${pagoActual}
       <div class="total-box">
-        <div class="row strong"><span>Total</span><b>RD$ ${money(apartado?.total)}</b></div>
-        <div class="row"><span>Abonado</span><b>RD$ ${money(getTotalAbonado(apartado))}</b></div>
-        <div class="row strong"><span>Saldo</span><b>RD$ ${money(getSaldo(apartado))}</b></div>
+        <div class="row strong"><span>Total</span><b>${money(apartado?.total)}</b></div>
+        <div class="row"><span>Abonado</span><b>${money(getTotalAbonado(apartado))}</b></div>
+        <div class="row strong"><span>Saldo</span><b>${money(getSaldo(apartado))}</b></div>
       </div>
       ${pagosHtml}
       <div class="center footer">

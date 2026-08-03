@@ -386,7 +386,7 @@ function detenerScanner() {
 const tablasEsperadas = [
   'usuarios', 'empresa', 'clientes', 'proveedores', 'categorias', 'marcas',
   'accesorios', 'telefonos', 'imei', 'electrodomesticos', 'serial',
-  'facturas', 'piezas', 'tecnicos', 'ordenes_taller', 'correo',
+  'facturas', 'piezas', 'tecnicos', 'ordenes_taller', 'correo', 'bancos',
   'gastos', 'gastos_fijos', 'impresoras_config', 'cuentas_cobrar',
   'cuentas_pagar', 'comprobantes_fiscales', 'bitacora', 'notas',
   'licencia', 'plantillas_etiquetas', 'configuracion',
@@ -737,9 +737,26 @@ async function generarSQLDatos() {
   }
 }
 
+async function copiarAlPortapapeles(texto: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(texto)
+    return
+  } catch (_) {
+    const area = document.createElement('textarea')
+    area.value = texto
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.select()
+    const copiado = document.execCommand('copy')
+    area.remove()
+    if (!copiado) throw new Error('El portapapeles no esta disponible')
+  }
+}
+
 async function copiarSQL() {
   try {
-    await navigator.clipboard.writeText(sqlMigracion.value)
+    await copiarAlPortapapeles(sqlMigracion.value)
     msg.value = 'SQL copiado al portapapeles'
     msgError.value = false
   } catch {
@@ -750,7 +767,7 @@ async function copiarSQL() {
 
 async function copiarDropSQL() {
   try {
-    await navigator.clipboard.writeText(sqlDrop.value)
+    await copiarAlPortapapeles(sqlDrop.value)
     msg.value = 'SQL de eliminacion copiado'
     msgError.value = false
   } catch {
@@ -761,7 +778,7 @@ async function copiarDropSQL() {
 
 async function copiarDatosSQL() {
   try {
-    await navigator.clipboard.writeText(datosSQL.value)
+    await copiarAlPortapapeles(datosSQL.value)
     msg.value = 'SQL de datos copiado al portapapeles'
     msgError.value = false
   } catch {

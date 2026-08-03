@@ -8,8 +8,10 @@ import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
 import { envioElectron } from '@/funciones/funciones.js'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
+const { addAlmacenId } = useAlmacenFilter()
 const dialogVisible = ref(false)
 
 const camposArray = [
@@ -47,7 +49,7 @@ async function guardar() {
       fecha_entrada: new Date().toISOString().split('T')[0],
     }
 
-    const res = await window.db.insert('ordenes_taller', data)
+    const res = await window.db.insert('ordenes_taller', addAlmacenId(data))
     if (res.success) {
       toast.add({ severity: 'success', summary: 'Exito', detail: 'Orden creada correctamente', life: 3000 })
       dialogVisible.value = false

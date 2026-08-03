@@ -70,11 +70,13 @@ export async function initDatabase(): Promise<void> {
     db = new SQL.Database(existingData)
     createTables()
     migrateTables()
+    auditSchema()
     await saveDb()
   } else {
     db = new SQL.Database()
     createTables()
     migrateTables()
+    auditSchema()
     insertDefaultData()
     await saveDb()
   }
@@ -147,6 +149,7 @@ function createTables() {
     rnc TEXT DEFAULT '',
     activo TEXT DEFAULT 'ACTIVO',
     nota TEXT DEFAULT '',
+    imagen TEXT DEFAULT '',
     uid TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -204,6 +207,41 @@ function createTables() {
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`)
 
+  db.run(`CREATE TABLE IF NOT EXISTS catalogo_cuentas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    codigo TEXT NOT NULL UNIQUE,
+    nombre TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    subtipo TEXT DEFAULT '',
+    naturaleza TEXT DEFAULT 'DEUDORA',
+    saldo_inicial REAL DEFAULT 0,
+    estado TEXT DEFAULT 'ACTIVA',
+    descripcion TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+  db.run(`INSERT OR IGNORE INTO catalogo_cuentas (codigo,nombre,tipo,subtipo,naturaleza) VALUES
+    ('1101','Caja General','ACTIVO','CORRIENTE','DEUDORA'),('1102','Bancos','ACTIVO','CORRIENTE','DEUDORA'),('1103','Cuentas por Cobrar','ACTIVO','CORRIENTE','DEUDORA'),('1201','Inventario','ACTIVO','CORRIENTE','DEUDORA'),
+    ('2101','Cuentas por Pagar','PASIVO','CORRIENTE','ACREEDORA'),('3101','Capital','PATRIMONIO','CAPITAL','ACREEDORA'),
+    ('4101','Ventas','INGRESOS','OPERACIONALES','ACREEDORA'),('5101','Costo de Ventas','GASTOS','OPERACIONALES','DEUDORA'),('5201','Gastos Operativos','GASTOS','OPERACIONALES','DEUDORA')`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS perdidas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipo TEXT NOT NULL,
+    referencia_id INTEGER NOT NULL,
+    nombre TEXT DEFAULT '',
+    codigo TEXT DEFAULT '',
+    cantidad INTEGER DEFAULT 1,
+    costo REAL DEFAULT 0,
+    motivo TEXT DEFAULT '',
+    fecha TEXT DEFAULT '',
+    almacen_id INTEGER DEFAULT 0,
+    estado TEXT DEFAULT 'ACTIVA',
+    detalle TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+
   db.run(`CREATE TABLE IF NOT EXISTS telefonos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL,
@@ -216,6 +254,8 @@ function createTables() {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL,
     id_equi INTEGER,
+    telefono_uid TEXT DEFAULT '',
+    equipo TEXT DEFAULT '',
     costo REAL DEFAULT 0,
     precio_venta REAL DEFAULT 0,
     precio_min REAL DEFAULT 0,
@@ -249,6 +289,8 @@ function createTables() {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL,
     id_equi INTEGER,
+    equipo_uid TEXT DEFAULT '',
+    equipo TEXT DEFAULT '',
     costo REAL DEFAULT 0,
     precio_venta REAL DEFAULT 0,
     precio_min REAL DEFAULT 0,
@@ -285,6 +327,8 @@ function createTables() {
     vendedor TEXT DEFAULT '',
     metodo_pago TEXT DEFAULT 'EFECTIVO',
     tarjeta REAL DEFAULT 0,
+    porcentaje_tarjeta REAL DEFAULT 0,
+    monto_porcentaje_tarjeta REAL DEFAULT 0,
     transferencia REAL DEFAULT 0,
     efectivo REAL DEFAULT 0,
     canal_venta TEXT DEFAULT '',
@@ -292,6 +336,7 @@ function createTables() {
     impuesto REAL DEFAULT 0,
     descuento REAL DEFAULT 0,
     subtotal REAL DEFAULT 0,
+    costo REAL DEFAULT 0,
     total REAL DEFAULT 0,
     ganancia REAL DEFAULT 0,
     financiera TEXT DEFAULT '',
@@ -395,10 +440,28 @@ function createTables() {
     fecha TEXT DEFAULT '',
     hora TEXT DEFAULT '',
     comentario TEXT DEFAULT '',
+    metodo_pago TEXT DEFAULT 'EFECTIVO',
+    banco_id INTEGER DEFAULT 0,
+    banco_uid TEXT DEFAULT '',
+    banco_nombre TEXT DEFAULT '',
     turno_id INTEGER DEFAULT 0,
     uid TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS bancos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL,
+    numero_cuenta TEXT DEFAULT '',
+    moneda TEXT DEFAULT 'PESOS',
+    saldo REAL DEFAULT 0,
+    fecha_transaccion TEXT DEFAULT '',
+    uid TEXT DEFAULT '',
+    almacen_id INTEGER DEFAULT 0,
+    almacen_uid TEXT DEFAULT '',
+    created_at TEXT DEFAULT '',
+    updated_at TEXT DEFAULT ''
   )`)
 
   db.run(`CREATE TABLE IF NOT EXISTS gastos_fijos (
@@ -557,6 +620,48 @@ function createTables() {
     uid TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS reservas_piezas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, orden_id INTEGER NOT NULL, pieza_id INTEGER NOT NULL,
+    pieza_nombre TEXT DEFAULT '', cantidad REAL DEFAULT 1, estado TEXT DEFAULT 'RESERVADA',
+    usuario TEXT DEFAULT '', liberada_at TEXT DEFAULT '', consumida_at TEXT DEFAULT '',
+    uid TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS comisiones_tecnicos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, orden_id INTEGER NOT NULL, tecnico_id INTEGER DEFAULT 0,
+    tecnico_nombre TEXT DEFAULT '', tipo TEXT DEFAULT 'PORCENTAJE_MANO_OBRA',
+    base REAL DEFAULT 0, valor REAL DEFAULT 0, monto REAL DEFAULT 0,
+    estado TEXT DEFAULT 'PENDIENTE', fecha_pago TEXT DEFAULT '', uid TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS financiamientos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, cliente_id INTEGER DEFAULT 0, cliente_nombre TEXT DEFAULT '',
+    cliente_telefono TEXT DEFAULT '', factura_id INTEGER DEFAULT 0, no_factura TEXT DEFAULT '',
+    frecuencia TEXT DEFAULT 'MENSUAL', cantidad_cuotas INTEGER DEFAULT 1, monto_original REAL DEFAULT 0,
+    inicial REAL DEFAULT 0, tasa_interes REAL DEFAULT 0, total_financiado REAL DEFAULT 0,
+    mora_porcentaje REAL DEFAULT 0, ingreso_mensual REAL DEFAULT 0, gastos_mensuales REAL DEFAULT 0,
+    capacidad_pago REAL DEFAULT 0, garante_nombre TEXT DEFAULT '', garante_cedula TEXT DEFAULT '',
+    garante_telefono TEXT DEFAULT '', documentos TEXT DEFAULT '[]', estado TEXT DEFAULT 'ACTIVO',
+    proximo_vencimiento TEXT DEFAULT '', uid TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+  db.run(`CREATE TABLE IF NOT EXISTS cuotas_financiamiento (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, financiamiento_id INTEGER NOT NULL, numero INTEGER NOT NULL,
+    fecha_vencimiento TEXT DEFAULT '', capital REAL DEFAULT 0, interes REAL DEFAULT 0, mora REAL DEFAULT 0,
+    total REAL DEFAULT 0, pagado REAL DEFAULT 0, saldo REAL DEFAULT 0, estado TEXT DEFAULT 'PENDIENTE',
+    pagos TEXT DEFAULT '[]', uid TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`)
+  db.run(`CREATE TABLE IF NOT EXISTS promociones (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,tipo TEXT DEFAULT 'DESCUENTO',valor REAL DEFAULT 0,cantidad_compra INTEGER DEFAULT 1,cantidad_gratis INTEGER DEFAULT 0,cantidad_minima REAL DEFAULT 1,productos TEXT DEFAULT '[]',fecha_inicio TEXT DEFAULT '',fecha_fin TEXT DEFAULT '',lista_precio TEXT DEFAULT '',prioridad INTEGER DEFAULT 0,combinable INTEGER DEFAULT 0,estado TEXT DEFAULT 'ACTIVA',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS listas_precios (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,tipo TEXT DEFAULT 'MINORISTA',descuento_porcentaje REAL DEFAULT 0,cantidad_minima REAL DEFAULT 1,estado TEXT DEFAULT 'ACTIVA',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS variantes_productos (id INTEGER PRIMARY KEY AUTOINCREMENT,producto_id INTEGER NOT NULL,sku TEXT DEFAULT '',codigo_barra TEXT DEFAULT '',talla TEXT DEFAULT '',color TEXT DEFAULT '',capacidad TEXT DEFAULT '',sabor TEXT DEFAULT '',presentacion TEXT DEFAULT '',costo REAL DEFAULT 0,precio REAL DEFAULT 0,precio_mayor REAL DEFAULT 0,cantidad REAL DEFAULT 0,alerta REAL DEFAULT 0,estado TEXT DEFAULT 'ACTIVA',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS niveles_fidelidad (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,puntos_desde REAL DEFAULT 0,multiplicador REAL DEFAULT 1,descuento REAL DEFAULT 0,estado TEXT DEFAULT 'ACTIVO',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS movimientos_puntos (id INTEGER PRIMARY KEY AUTOINCREMENT,cliente_id INTEGER NOT NULL,tipo TEXT DEFAULT 'GANADO',puntos REAL DEFAULT 0,saldo_anterior REAL DEFAULT 0,saldo_nuevo REAL DEFAULT 0,referencia TEXT DEFAULT '',vence_at TEXT DEFAULT '',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS tarjetas_regalo (id INTEGER PRIMARY KEY AUTOINCREMENT,codigo TEXT NOT NULL UNIQUE,pin TEXT DEFAULT '',saldo_inicial REAL DEFAULT 0,saldo REAL DEFAULT 0,cliente_id INTEGER DEFAULT 0,fecha_vencimiento TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVA',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS portal_clientes (id INTEGER PRIMARY KEY AUTOINCREMENT,cliente_id INTEGER DEFAULT 0,token TEXT NOT NULL UNIQUE,email TEXT DEFAULT '',telefono TEXT DEFAULT '',permisos TEXT DEFAULT '[]',vence_at TEXT DEFAULT '',ultimo_acceso TEXT DEFAULT '',estado TEXT DEFAULT 'ACTIVO',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+  db.run(`CREATE TABLE IF NOT EXISTS pedidos_online (id INTEGER PRIMARY KEY AUTOINCREMENT,codigo TEXT DEFAULT '',cliente_id INTEGER DEFAULT 0,cliente_nombre TEXT DEFAULT '',cliente_telefono TEXT DEFAULT '',productos TEXT DEFAULT '[]',subtotal REAL DEFAULT 0,descuento REAL DEFAULT 0,envio REAL DEFAULT 0,total REAL DEFAULT 0,tipo_entrega TEXT DEFAULT 'RECOGIDA',direccion TEXT DEFAULT '',estado TEXT DEFAULT 'NUEVO',pago_estado TEXT DEFAULT 'PENDIENTE',uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
 }
 
 function migrateTables() {
@@ -575,6 +680,99 @@ function migrateTables() {
   if (!empresaColumns.has('encargado')) {
     db.run(`ALTER TABLE empresa ADD COLUMN encargado TEXT DEFAULT ''`)
   }
+  const facturasInfo = db.exec('PRAGMA table_info("facturas")')
+  const facturasColumns = new Set(
+    (facturasInfo[0]?.values || []).map((row: any[]) => String(row[1]))
+  )
+  if (!facturasColumns.has('costo')) {
+    db.run('ALTER TABLE facturas ADD COLUMN costo REAL DEFAULT 0')
+  }
+  if (!facturasColumns.has('ganancia')) {
+    db.run('ALTER TABLE facturas ADD COLUMN ganancia REAL DEFAULT 0')
+  }
+  if (!facturasColumns.has('porcentaje_tarjeta')) {
+    db.run('ALTER TABLE facturas ADD COLUMN porcentaje_tarjeta REAL DEFAULT 0')
+  }
+  if (!facturasColumns.has('monto_porcentaje_tarjeta')) {
+    db.run('ALTER TABLE facturas ADD COLUMN monto_porcentaje_tarjeta REAL DEFAULT 0')
+  }
+  const imeiInfo = db.exec('PRAGMA table_info("imei")')
+  const imeiColumns = new Set(
+    (imeiInfo[0]?.values || []).map((row: any[]) => String(row[1]))
+  )
+  if (!imeiColumns.has('telefono_uid')) {
+    db.run("ALTER TABLE imei ADD COLUMN telefono_uid TEXT DEFAULT ''")
+    db.run(`UPDATE imei SET telefono_uid = (SELECT uid FROM telefonos WHERE telefonos.id = imei.id_equi) WHERE id_equi IS NOT NULL`)
+  }
+  if (!imeiColumns.has('equipo')) {
+    db.run("ALTER TABLE imei ADD COLUMN equipo TEXT DEFAULT ''")
+    db.run(`UPDATE imei SET equipo = (SELECT nombre FROM telefonos WHERE telefonos.id = imei.id_equi) WHERE id_equi IS NOT NULL`)
+  }
+}
+
+// Misma auditoria de esquema para instalaciones moviles/Capacitor.
+function auditSchema() {
+  if (!db) return
+  const expected: Record<string, Record<string, string>> = {
+    empresa: { encargado: "TEXT DEFAULT ''", logo: "TEXT DEFAULT ''", impuesto: 'REAL DEFAULT 18', impuesto_incluido: 'INTEGER DEFAULT 0', moneda: "TEXT DEFAULT 'RD$'", almacen_id: 'INTEGER DEFAULT 0' },
+    telefonos: { imagen: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    imei: { telefono_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', estado: "TEXT DEFAULT 'DISPONIBLE'", almacen_id: 'INTEGER DEFAULT 0' },
+    accesorios: { imagen: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", proveedor_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
+    facturas: { costo: 'REAL DEFAULT 0', ganancia: 'REAL DEFAULT 0', financiera: "TEXT DEFAULT ''", turno_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
+    clientes: { imagen: "TEXT DEFAULT ''", rnc: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", tipo_comision_tecnico: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision_tecnico: 'REAL DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
+    piezas: { reservada: 'INTEGER DEFAULT 0' },
+    tecnicos: { tipo_comision: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision: 'REAL DEFAULT 0' },
+    gastos: { metodo_pago: "TEXT DEFAULT 'EFECTIVO'", banco_id: 'INTEGER DEFAULT 0', banco_uid: "TEXT DEFAULT ''", banco_nombre: "TEXT DEFAULT ''" },
+    caja_turnos: { monto_final: 'REAL DEFAULT 0', efectivo_esperado: 'REAL DEFAULT 0', diferencia: 'REAL DEFAULT 0', cierre_ciego: 'INTEGER DEFAULT 0' },
+    cuadres: { efectivo_esperado: 'REAL DEFAULT 0', efectivo_contado: 'REAL DEFAULT 0', diferencia: 'REAL DEFAULT 0', cierre_ciego: 'INTEGER DEFAULT 0', abonos_cxc: 'REAL DEFAULT 0', cantidad_abonos_cxc: 'INTEGER DEFAULT 0' },
+    serial: { equipo_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''" },
+    transferencias: { origen_uid: "TEXT DEFAULT ''", destino_uid: "TEXT DEFAULT ''", almacen_uid: "TEXT DEFAULT ''" },
+  }
+  db.run(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, aplicado_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, detalle TEXT DEFAULT '')`)
+  for (const [table, columns] of Object.entries(expected)) {
+    const info = db.exec(`PRAGMA table_info(${escapeId(table)})`)
+    if (!info.length) continue
+    const existing = new Set((info[0]?.values || []).map((row: any[]) => String(row[1])))
+    for (const [column, definition] of Object.entries(columns)) {
+      if (!existing.has(column)) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN ${escapeId(column)} ${definition}`)
+    }
+  }
+  const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+  for (const row of tables[0]?.values || []) {
+    const table = String(row[0])
+    if (table === 'schema_migrations') continue
+    const info = db.exec(`PRAGMA table_info(${escapeId(table)})`)
+    const existing = new Set((info[0]?.values || []).map((column: any[]) => String(column[1])))
+    if (!existing.has('almacen_id')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN almacen_id INTEGER DEFAULT 0`)
+    if (!existing.has('almacen_uid')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN almacen_uid TEXT DEFAULT ''`)
+    if (!existing.has('uid')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN uid TEXT DEFAULT ''`)
+    if (!existing.has('created_at')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN created_at TEXT DEFAULT ''`)
+    if (!existing.has('updated_at')) db.run(`ALTER TABLE ${escapeId(table)} ADD COLUMN updated_at TEXT DEFAULT ''`)
+    const missingUids = db.exec(`SELECT id FROM ${escapeId(table)} WHERE uid IS NULL OR uid = ''`)
+    for (const missingRow of missingUids[0]?.values || []) {
+      db.run(`UPDATE ${escapeId(table)} SET uid = ? WHERE id = ?`, [generarUid(), missingRow[0]])
+    }
+  }
+  const empresasResult = db.exec(`SELECT id, almacen_id, uid FROM empresa WHERE uid IS NOT NULL AND uid <> '' ORDER BY id`)
+  const empresas = (empresasResult[0]?.values || []).map((row: any[]) => ({ id: Number(row[0]), almacen_id: Number(row[1]), uid: String(row[2]) }))
+  const uidPrincipal = empresas[0]?.uid || ''
+  for (const row of tables[0]?.values || []) {
+    const table = String(row[0])
+    if (table === 'schema_migrations') continue
+    if (table === 'empresa') {
+      db.run(`UPDATE empresa SET almacen_uid = uid WHERE almacen_uid IS NULL OR almacen_uid = ''`)
+      continue
+    }
+    for (const empresa of empresas) {
+      db.run(`UPDATE ${escapeId(table)} SET almacen_uid = ? WHERE (almacen_uid IS NULL OR almacen_uid = '') AND almacen_id = ?`, [empresa.uid, empresa.almacen_id || empresa.id])
+    }
+    if (uidPrincipal) db.run(`UPDATE ${escapeId(table)} SET almacen_uid = ? WHERE (almacen_uid IS NULL OR almacen_uid = '') AND (almacen_id IS NULL OR almacen_id = 0)`, [uidPrincipal])
+  }
+  db.run(`UPDATE serial SET equipo_uid = (SELECT uid FROM electrodomesticos WHERE electrodomesticos.id = serial.id_equi) WHERE (equipo_uid IS NULL OR equipo_uid = '') AND id_equi IS NOT NULL`)
+  db.run(`UPDATE serial SET equipo = (SELECT nombre FROM electrodomesticos WHERE electrodomesticos.id = serial.id_equi) WHERE (equipo IS NULL OR equipo = '') AND id_equi IS NOT NULL`)
+  db.run(`UPDATE serial SET id_equi = (SELECT id FROM electrodomesticos WHERE electrodomesticos.uid = serial.equipo_uid) WHERE equipo_uid IS NOT NULL AND equipo_uid <> '' AND EXISTS (SELECT 1 FROM electrodomesticos WHERE electrodomesticos.uid = serial.equipo_uid)`)
+  db.run(`INSERT OR REPLACE INTO schema_migrations (version, detalle) VALUES (20260721, 'Relacion estable de almacenes mediante almacen_uid')`)
 }
 
 function insertDefaultData() {
@@ -686,6 +884,29 @@ export function dbGetAll(tabla: string): { success: boolean; data?: any[]; error
       rows.push(stmt.getAsObject())
     }
     stmt.free()
+    if (tabla === 'empresa' && rows.length > 1) {
+      const activeUid = localStorage.getItem('almacen_default_uid') || localStorage.getItem('almacen_uid') || ''
+      const activeId = Number(localStorage.getItem('almacen_default_id') || localStorage.getItem('almacen_id'))
+      if (activeUid || activeId) {
+        rows.sort((a: any, b: any) =>
+          Number(activeUid ? String(b.uid || b.almacen_uid || '') === activeUid : Number(b.almacen_id || b.id) === activeId) -
+          Number(activeUid ? String(a.uid || a.almacen_uid || '') === activeUid : Number(a.almacen_id || a.id) === activeId)
+        )
+      }
+    }
+    return { success: true, data: rows }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+}
+
+export function dbGetWhere(tabla: string, where: string, params: any[] = []): { success: boolean; data?: any[]; error?: string } {
+  try {
+    const stmt = getDb().prepare(`SELECT * FROM ${escapeId(tabla)}${where ? ` WHERE ${where}` : ''} ORDER BY id DESC`)
+    if (params.length) stmt.bind(params)
+    const rows: any[] = []
+    while (stmt.step()) rows.push(stmt.getAsObject())
+    stmt.free()
     return { success: true, data: rows }
   } catch (e: any) {
     return { success: false, error: e.message }
@@ -733,7 +954,23 @@ export function dbGetById(tabla: string, id: number): { success: boolean; data?:
 export function dbInsert(tabla: string, data: Record<string, any>): { success: boolean; data?: { id: number }; error?: string } {
   try {
     const d = getDb()
+    if (data.almacen_id === undefined) data.almacen_id = Number(localStorage.getItem('almacen_id') || localStorage.getItem('almacen_default_id') || 0)
+    if (!data.almacen_uid) data.almacen_uid = localStorage.getItem('almacen_uid') || localStorage.getItem('almacen_default_uid') || ''
     if (!data.uid) data.uid = generarUid()
+    if (tabla === 'empresa') data.almacen_uid = data.uid
+    if (tabla === 'serial') {
+      const equipoStmt = d.prepare(data.equipo_uid
+        ? `SELECT id, uid, nombre FROM electrodomesticos WHERE uid = ? LIMIT 1`
+        : `SELECT id, uid, nombre FROM electrodomesticos WHERE id = ? LIMIT 1`)
+      equipoStmt.bind([data.equipo_uid || data.id_equi || 0])
+      if (equipoStmt.step()) {
+        const equipo: any = equipoStmt.getAsObject()
+        data.id_equi = equipo.id
+        data.equipo_uid = equipo.uid || ''
+        data.equipo = equipo.nombre || data.equipo || ''
+      }
+      equipoStmt.free()
+    }
     data.created_at = data.created_at || nowISO()
     data.updated_at = nowISO()
 
@@ -772,6 +1009,20 @@ export function dbUpdate(tabla: string, id: number, data: Record<string, any>): 
     const oldData = oldStmt.step() ? oldStmt.getAsObject() : {}
     oldStmt.free()
 
+    if (tabla === 'empresa') data.almacen_uid = data.uid || (oldData as any).uid || (oldData as any).almacen_uid || ''
+    if (tabla === 'serial' && (data.equipo_uid !== undefined || data.id_equi !== undefined)) {
+      const equipoStmt = d.prepare(data.equipo_uid
+        ? `SELECT id, uid, nombre FROM electrodomesticos WHERE uid = ? LIMIT 1`
+        : `SELECT id, uid, nombre FROM electrodomesticos WHERE id = ? LIMIT 1`)
+      equipoStmt.bind([data.equipo_uid || data.id_equi || 0])
+      if (equipoStmt.step()) {
+        const equipo: any = equipoStmt.getAsObject()
+        data.id_equi = equipo.id
+        data.equipo_uid = equipo.uid || ''
+        data.equipo = equipo.nombre || data.equipo || ''
+      }
+      equipoStmt.free()
+    }
     data.updated_at = nowISO()
     const keys = Object.keys(data)
     const sets = keys.map(k => `${escapeId(k)} = ?`).join(', ')

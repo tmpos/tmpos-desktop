@@ -10,10 +10,13 @@ import VentasView from '@/views/VentasView.vue'
 import ReportesView from '@/views/ReportesView.vue'
 import ContactosView from '@/views/ContactosView.vue'
 import ConfiguracionView from '@/views/ConfiguracionView.vue'
+import LicenseView from '@/views/LicenseView.vue'
 import ComprasView from '@/views/ComprasView.vue'
 import TransferenciasView from '@/views/TransferenciasView.vue'
 import SoporteView from '@/views/SoporteView.vue'
+import ReclamacionesView from '@/views/ReclamacionesView.vue'
 import EditarFacturaComp from '@/components/ventas/EditarFacturaComp.vue'
+import EditarCuentaCobrarComp from '@/components/contabilidad/EditarCuentaCobrarComp.vue'
 
 const permisoPorRuta: Record<string, string> = {
   '/': 'home',
@@ -28,6 +31,7 @@ const permisoPorRuta: Record<string, string> = {
   '/compras': 'compras',
   '/transferencias': 'transferencias',
   '/soporte': 'soporte',
+  '/reclamaciones': 'reclamaciones',
 }
 
 const router = createRouter({
@@ -38,6 +42,12 @@ const router = createRouter({
       name: 'login',
       component: LoginView,
       meta: { requiresAuth: false },
+    },
+    {
+      path: '/license',
+      name: 'license',
+      component: LicenseView,
+      meta: { requiresAuth: true },
     },
     {
       path: '/',
@@ -82,6 +92,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/reclamaciones',
+      name: 'reclamaciones',
+      component: ReclamacionesView,
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/soporte',
       name: 'soporte',
       component: SoporteView,
@@ -103,6 +119,12 @@ const router = createRouter({
       path: '/ventas/editar/:id',
       name: 'editar-factura',
       component: EditarFacturaComp,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/ventas/cuenta-cobrar/:facturaId',
+      name: 'editar-cuenta-cobrar',
+      component: EditarCuentaCobrarComp,
       meta: { requiresAuth: true },
     },
     {
@@ -134,6 +156,9 @@ router.beforeEach(async (to, _from) => {
     const key = permisoPorRuta[to.path]
     if (key && !auth.tienePermiso(key)) {
       console.log('[Router] Sin permiso para:', to.path)
+      // Nunca redirigir '/' hacia si misma: eso dispara el error de redireccion
+      // infinita. Home funciona como destino seguro para usuarios autenticados.
+      if (to.path === '/') return true
       return { name: 'home' }
     }
   }

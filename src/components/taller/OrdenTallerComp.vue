@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useLocaleProfile } from '@/composables/useLocaleProfile'
+
+const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
 import { ref, computed, onMounted } from 'vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
@@ -19,8 +22,11 @@ import Toast from 'primevue/toast'
 
 import { envioElectron } from '@/funciones/funciones.js'
 import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
+import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
+const { addAlmacenId } = useAlmacenFilter()
 const ordenes = ref<any[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
@@ -34,7 +40,6 @@ const metodosPago = [
   { label: 'Tarjeta', value: 'TARJETA' },
   { label: 'Transferencia', value: 'TRANSFERENCIA' },
   { label: 'Pago Movil', value: 'PAGO_MOVIL' },
-  { label: '美元 (USD)', value: 'USD' },
 ]
 
 const estadosOrden = [
@@ -273,7 +278,7 @@ async function guardar() {
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Orden actualizada', life: 3000 })
       }
     } else {
-      const res = await window.db.insert('ordenes_taller', data)
+      const res = await window.db.insert('ordenes_taller', addAlmacenId(data))
       if (res.success) {
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Orden creada', life: 3000 })
       }
@@ -325,6 +330,14 @@ async function subirImagen() {
   try {
     const uid = await uploadImage(file, 'ordenes_taller')
     form.value.imagen = uid
+    if (isEditing.value && selectedOrden.value?.id) {
+      const actualizado = await window.db.update('ordenes_taller', selectedOrden.value.id, { imagen: uid })
+      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
+      selectedOrden.value.imagen = uid
+      const local = ordenes.value.find((orden: any) => orden.id === selectedOrden.value.id)
+      if (local) local.imagen = uid
+      if (isOnline()) await pushLocalRowToCloud('ordenes_taller', selectedOrden.value.id)
+    }
     toast.add({ severity: 'success', summary: 'Imagen subida', life: 2000 })
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo subir la imagen', life: 4000 })
@@ -340,6 +353,10 @@ async function eliminarImagen() {
     await deleteImage(form.value.imagen)
   } catch {}
   form.value.imagen = ''
+  if (isEditing.value && selectedOrden.value?.id) {
+    await window.db.update('ordenes_taller', selectedOrden.value.id, { imagen: '' })
+    if (isOnline()) await pushLocalRowToCloud('ordenes_taller', selectedOrden.value.id)
+  }
 }
 
 function imagenUrl(uid: string | null | undefined): string | null {
@@ -558,25 +575,25 @@ onMounted(async () => {
             <div class="grid grid-cols-2 gap-3">
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Precio Pieza</label>
-                <InputNumber v-model="form.precio_pieza" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+                <InputNumber v-model="form.precio_pieza" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Mano de Obra</label>
-                <InputNumber v-model="form.mano_obra" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+                <InputNumber v-model="form.mano_obra" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
               </div>
             </div>
             <div class="grid grid-cols-3 gap-3">
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Total</label>
-                <InputNumber :modelValue="totalCalculado" mode="currency" currency="USD" locale="en-US" disabled fluid />
+                <InputNumber :modelValue="totalCalculado" mode="currency" :currency="systemCurrency" :locale="systemLocale" disabled fluid />
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Abono</label>
-                <InputNumber v-model="form.abono" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+                <InputNumber v-model="form.abono" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Pendiente</label>
-                <InputNumber :modelValue="pendienteCalculado" mode="currency" currency="USD" locale="en-US" disabled fluid />
+                <InputNumber :modelValue="pendienteCalculado" mode="currency" :currency="systemCurrency" :locale="systemLocale" disabled fluid />
               </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
@@ -596,11 +613,11 @@ onMounted(async () => {
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Beneficio Tecnico</label>
-                <InputNumber v-model="form.beneficio_tecnico" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+                <InputNumber v-model="form.beneficio_tecnico" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
               </div>
               <div class="flex flex-col gap-1">
                 <label class="font-semibold text-sm">Beneficio Empresa</label>
-                <InputNumber v-model="form.beneficio_empresa" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+                <InputNumber v-model="form.beneficio_empresa" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
               </div>
             </div>
             <div class="flex flex-col gap-1">
@@ -612,7 +629,7 @@ onMounted(async () => {
       </TabView>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="subiendoImagen" @click="guardar" />
       </template>
     </Dialog>
 

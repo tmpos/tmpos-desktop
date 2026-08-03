@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { getSystemLocale } from '@/i18n/localeProfiles'
+import { ref, computed, onMounted, watch } from 'vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -12,18 +13,30 @@ import InputOtp from 'primevue/inputotp'
 import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import Fieldset from 'primevue/fieldset'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import FacturaPdfPrint from './FacturaPdfPrint.vue'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useAuthStore } from '@/stores/auth.store'
 
 const toast = useToast()
+const auth = useAuthStore()
+const { store: almacenStore, filterByAlmacen } = useAlmacenFilter()
 const cotizaciones = ref<any[]>([])
+const cotizacionesRaw = ref<any[]>([])
+const verTodosAlmacenes = ref(false)
+const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const loading = ref(false)
 const busqueda = ref('')
 const filtroEstado = ref('')
 const dialogDetalle = ref(false)
 const selectedCot = ref<any>(null)
 const selectedCotizaciones = ref<any[]>([])
+const dialogMoverAlmacen = ref(false)
+const almacenDestino = ref<any>(null)
+const almacenesDestino = ref<any[]>([])
+const moviendoAlmacen = ref(false)
 const facturaPdfRef = ref<any>(null)
 const deleteDialogVisible = ref(false)
 const deleteOtpEnviado = ref(false)
@@ -81,7 +94,7 @@ const totalSeleccionadoEliminar = computed(() =>
 )
 
 function formatCurrency(n: number): string {
-  return Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 function formatFecha(fechaStr: string): string {
@@ -107,13 +120,22 @@ async function cargarCotizaciones() {
   try {
     const res = await window.db.getAll('facturas')
     if (res.success) {
-      cotizaciones.value = (res.data || []).filter((f: any) =>
+      const todas = (res.data || []).filter((f: any) =>
         f.tipo_factura === 'COTIZACION' || f.estado_factura === 'COTIZACION'
       )
+      cotizacionesRaw.value = todas
+      cotizaciones.value = verTodosAlmacenes.value ? todas : filterByAlmacen(todas)
     }
   } catch (_) {}
   loading.value = false
 }
+
+watch(verTodosAlmacenes, () => {
+  cotizaciones.value = verTodosAlmacenes.value
+    ? cotizacionesRaw.value
+    : filterByAlmacen(cotizacionesRaw.value)
+  selectedCotizaciones.value = []
+})
 
 function abrirDetalle(cot: any) {
   selectedCot.value = cot
@@ -143,6 +165,58 @@ function confirmarBorrarSeleccionadas() {
   deleteDialogVisible.value = true
 }
 
+async function abrirMoverAlmacenSeleccionadas() {
+  if (!selectedCotizaciones.value.length) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona al menos una cotizacion', life: 2500 })
+    return
+  }
+  almacenDestino.value = null
+  try {
+    await almacenStore.load()
+    const origenes = new Set(selectedCotizaciones.value.map((cot: any) => String(cot.almacen_uid || '')).filter(Boolean))
+    almacenesDestino.value = almacenStore.almacenes.filter((almacen: any) =>
+      origenes.size !== 1 || !origenes.has(String(almacen.uid || ''))
+    )
+    dialogMoverAlmacen.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron cargar los almacenes', life: 4000 })
+  }
+}
+
+async function aplicarMoverAlmacenSeleccionadas() {
+  if (!almacenDestino.value || moviendoAlmacen.value || !selectedCotizaciones.value.length) return
+  const destinoId = Number(almacenDestino.value.id || 0)
+  const destinoUid = String(almacenDestino.value.uid || '')
+  const destinoNombre = String(almacenDestino.value.nombre || 'almacen destino')
+  const seleccion = [...selectedCotizaciones.value]
+  moviendoAlmacen.value = true
+  try {
+    for (const cotizacion of seleccion) {
+      const res = await window.db.update('facturas', cotizacion.id, {
+        almacen_id: destinoId,
+        almacen_uid: destinoUid,
+      })
+      if (!res.success) throw new Error(res.error || `No se pudo mover la cotizacion ${cotizacion.no_factura || cotizacion.id}`)
+      try {
+        await window.electron.invoke('auditoria:registrar', {
+          modulo: 'ventas', accion: 'mover_almacen', entidad: 'facturas', entidad_id: Number(cotizacion.id || 0),
+          referencia: cotizacion.no_factura || '', usuario: localStorage.getItem('mr_user_usuario') || 'POS',
+          detalle: { tipo: 'cotizacion', almacen_origen_id: cotizacion.almacen_id || 0, almacen_origen_uid: cotizacion.almacen_uid || '', almacen_destino_id: destinoId, almacen_destino_uid: destinoUid, almacen_destino_nombre: destinoNombre },
+          resultado: 'OK',
+        })
+      } catch (_) {}
+    }
+    dialogMoverAlmacen.value = false
+    selectedCotizaciones.value = []
+    toast.add({ severity: 'success', summary: 'Almacen actualizado', detail: `${seleccion.length} cotizacion(es) movida(s) a ${destinoNombre}`, life: 3000 })
+    await cargarCotizaciones()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron mover las cotizaciones', life: 4500 })
+  } finally {
+    moviendoAlmacen.value = false
+  }
+}
+
 async function solicitarOtpEliminarCotizacion() {
   const cotizaciones = cotizacionesParaEliminar.value
   if (!cotizaciones.length) return
@@ -161,7 +235,7 @@ async function solicitarOtpEliminarCotizacion() {
       entidadPlural: 'cotizaciones',
     }) as any
     if (res.success) {
-      deleteOtpEmail.value = res.data?.email || ''
+    deleteOtpEmail.value = res.data?.networkUrl || ''
       deleteOtpEnviado.value = true
       toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
     } else {
@@ -274,6 +348,8 @@ async function confirmarConvertir() {
         saldo: selectedCot.value.total,
         fecha_venta: fechaStr,
         estado: 'ACTIVA',
+        almacen_id: selectedCot.value.almacen_id || 0,
+        almacen_uid: selectedCot.value.almacen_uid || '',
       })
     }
     toast.add({ severity: 'success', summary: 'Convertida', detail: 'Cotizacion convertida a factura', life: 3000 })
@@ -315,6 +391,17 @@ onMounted(cargarCotizaciones)
           <Select v-model="filtroEstado" :options="estados" optionLabel="label" optionValue="value" placeholder="Estado" class="w-36" fluid />
         </div>
         <div class="flex items-center gap-2">
+          <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
+          <Button
+            v-if="selectedCotizaciones.length"
+            :label="`Cambiar almacen (${selectedCotizaciones.length})`"
+            icon="pi pi-warehouse"
+            severity="success"
+            @click="abrirMoverAlmacenSeleccionadas"
+          />
           <Button
             v-if="selectedCotizaciones.length"
             :label="`Eliminar (${selectedCotizaciones.length})`"
@@ -347,7 +434,7 @@ onMounted(cargarCotizaciones)
         <Column field="no_factura" header="No." sortable style="width: 8rem" />
         <Column field="nombre_cliente" header="Cliente" sortable />
         <Column field="total" header="Total" sortable style="width: 8rem">
-          <template #body="{ data }">${{ formatCurrency(data.total) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.total) }}</template>
         </Column>
         <Column field="fecha_emision" header="Fecha" sortable style="width: 7rem">
           <template #body="{ data }">{{ formatFecha(data.fecha_emision) }}</template>
@@ -363,6 +450,18 @@ onMounted(cargarCotizaciones)
         </template>
       </DataTable>
     </Fieldset>
+
+    <Dialog v-model:visible="dialogMoverAlmacen" header="Cambiar almacen" modal :style="{ width: '28rem' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm">Mover <strong>{{ selectedCotizaciones.length }}</strong> cotizacion(es) seleccionada(s) a otro almacen:</p>
+        <Select v-model="almacenDestino" :options="almacenesDestino" optionLabel="nombre" placeholder="Seleccionar almacen destino..." fluid />
+        <p v-if="almacenesDestino.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacen disponible para el traslado.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacen" @click="dialogMoverAlmacen = false" />
+        <Button label="Mover cotizaciones" icon="pi pi-warehouse" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="aplicarMoverAlmacenSeleccionadas" />
+      </template>
+    </Dialog>
 
     <Dialog v-model:visible="dialogDetalle" :header="`Cotizacion: ${selectedCot?.no_factura || ''}`" modal :style="{ width: '90%', maxWidth: '700px' }">
       <div v-if="selectedCot" class="space-y-4 pt-2">
@@ -381,7 +480,7 @@ onMounted(cargarCotizaciones)
           </div>
           <div>
             <span class="text-surface-400 text-xs">Total</span>
-            <p class="font-bold text-primary">${{ formatCurrency(selectedCot.total) }}</p>
+            <p class="font-bold text-primary">{{ $formatMoney(selectedCot.total) }}</p>
           </div>
           <div>
             <span class="text-surface-400 text-xs">Metodo Pago</span>
@@ -399,10 +498,10 @@ onMounted(cargarCotizaciones)
               <template #body="{ data }">{{ data.nombre || data.descripcion || data.producto || '—' }}</template>
             </Column>
             <Column field="precio" header="Precio" style="width: 7rem">
-              <template #body="{ data }">${{ formatCurrency(data.precio || data.precio_venta || 0) }}</template>
+              <template #body="{ data }">{{ $formatMoney(data.precio || data.precio_venta || 0) }}</template>
             </Column>
             <Column header="Total" style="width: 7rem">
-              <template #body="{ data }">${{ formatCurrency((data.precio || data.precio_venta || 0) * (data.cantidad || data.quantity || 1)) }}</template>
+              <template #body="{ data }">{{ $formatMoney((data.precio || data.precio_venta || 0) * (data.cantidad || data.quantity || 1)) }}</template>
             </Column>
           </DataTable>
         </div>
@@ -431,7 +530,7 @@ onMounted(cargarCotizaciones)
         <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-3 space-y-1 text-sm">
           <div class="flex justify-between">
             <span class="text-surface-500">Total</span>
-            <span class="font-bold">${{ formatCurrency(selectedCot?.total || 0) }}</span>
+            <span class="font-bold">{{ $formatMoney(selectedCot?.total || 0) }}</span>
           </div>
           <div class="flex justify-between">
             <span class="text-surface-500">Cliente</span>
@@ -458,11 +557,11 @@ onMounted(cargarCotizaciones)
           <span v-else>Seguro que deseas eliminar <strong>{{ cotizacionesParaEliminar.length }}</strong> cotizaciones seleccionadas?</span>
         </div>
         <div v-if="cotizacionesParaEliminar.length > 1" class="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-xs text-red-700 dark:text-red-300">
-          Total combinado: <strong>RD$ {{ formatCurrency(totalSeleccionadoEliminar) }}</strong>
+          Total combinado: <strong>{{ $formatMoney(totalSeleccionadoEliminar) }}</strong>
         </div>
         <div v-if="deleteOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
           <p class="text-xs text-surface-500 text-center">
-            Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la licencia' }}.
+            Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.
           </p>
           <InputOtp v-model="deleteOtp" :length="4" integerOnly />
         </div>

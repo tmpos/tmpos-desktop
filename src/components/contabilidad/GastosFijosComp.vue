@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getSystemLocale } from '@/i18n/localeProfiles'
 import { ref, computed, onMounted } from 'vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
@@ -15,8 +16,10 @@ import Fieldset from 'primevue/fieldset'
 import Tag from 'primevue/tag'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
+const { addAlmacenId, filterByAlmacen } = useAlmacenFilter()
 const gastos = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
@@ -72,7 +75,7 @@ const gastosFiltrados = computed(() => {
 })
 
 function formatCurrency(n: number): string {
-  return Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 function getEstadoSeverity(estado: string): 'success' | 'danger' | 'warn' | 'info' | undefined {
@@ -84,7 +87,7 @@ async function cargarGastos() {
   try {
     const res = await window.db.getAll('gastos_fijos')
     if (res.success) {
-      gastos.value = res.data || []
+      gastos.value = filterByAlmacen(res.data || [])
     } else {
       toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudieron cargar los gastos fijos', life: 3000 })
     }
@@ -152,7 +155,7 @@ async function guardar() {
         return
       }
     } else {
-      const res = await window.db.insert('gastos_fijos', data)
+      const res = await window.db.insert('gastos_fijos', addAlmacenId(data))
       if (res.success) {
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Gasto fijo creado', life: 3000 })
       } else {
@@ -250,7 +253,7 @@ onMounted(cargarGastos)
         <Column field="id" header="ID" style="width: 5rem" />
         <Column field="nombre" header="Nombre" sortable />
         <Column field="monto" header="Monto" sortable style="width: 9rem">
-          <template #body="{ data }">RD$ {{ formatCurrency(data.monto) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.monto) }}</template>
         </Column>
         <Column field="dia_pago" header="Dia Pago" sortable style="width: 7rem" />
         <Column field="categoria" header="Categoria" sortable style="width: 8rem" />
@@ -289,7 +292,7 @@ onMounted(cargarGastos)
             <div class="grid grid-cols-2 gap-2 text-sm">
               <div>
                 <span class="text-xs text-surface-400">Monto</span>
-                <p class="font-bold text-primary">RD$ {{ formatCurrency(gasto.monto) }}</p>
+                <p class="font-bold text-primary">{{ $formatMoney(gasto.monto) }}</p>
               </div>
               <div>
                 <span class="text-xs text-surface-400">Dia Pago</span>

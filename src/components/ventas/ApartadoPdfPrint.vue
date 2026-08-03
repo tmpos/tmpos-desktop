@@ -4,6 +4,7 @@ import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
+import { formatSystemCurrency, formatSystemDateTime } from '@/i18n/localeProfiles'
 
 const toast = useToast()
 const dialogPdf = ref(false)
@@ -12,7 +13,7 @@ const pdfNombre = ref('')
 const generandoPdf = ref(false)
 
 function money(value: any): string {
-  return Number(value || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatSystemCurrency(value)
 }
 
 function formatFecha(fecha: string): string {
@@ -48,6 +49,7 @@ function buildApartadoPdfHtml(apartado: any): string {
   const pagos = getPagos(apartado)
   const abonado = getTotalAbonado(apartado)
   const saldo = getSaldo(apartado)
+  const empresaNombre = (window as any).__empresaNombre || 'MI EMPRESA'
   const notas = String(apartado?.notas || '')
   const imei = notas.match(/IMEI:\s*([^|]+)/i)?.[1]?.trim() || ''
   const modelo = notas.match(/MODELO:\s*([^|]+)/i)?.[1]?.trim() || ''
@@ -61,7 +63,7 @@ function buildApartadoPdfHtml(apartado: any): string {
         <td>${formatFecha(p.fecha)}</td>
         <td>${p.metodo_pago || 'N/A'}</td>
         <td>${p.referencia || '-'}</td>
-        <td class="right">RD$ ${money(p.monto)}</td>
+        <td class="right">${money(p.monto)}</td>
       </tr>
     `).join('')
     : '<tr><td colspan="5" class="empty">No hay pagos registrados.</td></tr>'
@@ -113,7 +115,7 @@ function buildApartadoPdfHtml(apartado: any): string {
     <main class="page">
       <section class="header">
         <div>
-          <div class="brand">MRCUTTI TECHNOLOGY</div>
+          <div class="brand">${empresaNombre}</div>
           <div class="subtitle">Documento profesional de control de apartado</div>
         </div>
         <div class="doc-title">
@@ -138,9 +140,9 @@ function buildApartadoPdfHtml(apartado: any): string {
       </section>
 
       <section class="summary">
-        <div class="metric"><span>Total</span><b>RD$ ${money(apartado?.total)}</b></div>
-        <div class="metric paid"><span>Abonado</span><b>RD$ ${money(abonado)}</b></div>
-        <div class="metric balance"><span>Saldo</span><b>RD$ ${money(saldo)}</b></div>
+        <div class="metric"><span>Total</span><b>${money(apartado?.total)}</b></div>
+        <div class="metric paid"><span>Abonado</span><b>${money(abonado)}</b></div>
+        <div class="metric balance"><span>Saldo</span><b>${money(saldo)}</b></div>
       </section>
 
       <section class="progress">
@@ -164,7 +166,7 @@ function buildApartadoPdfHtml(apartado: any): string {
       ${notas ? `<div class="notes"><strong>Notas:</strong> ${notas}</div>` : ''}
 
       <section class="footer">
-        <div>Generado el ${new Date().toLocaleString('es-DO')} por el sistema.</div>
+        <div>Generado el ${formatSystemDateTime(new Date())} por el sistema.</div>
         <div class="signature">Firma del cliente</div>
       </section>
     </main>

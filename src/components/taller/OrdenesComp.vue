@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -27,10 +28,16 @@ import TicketTallerPrint from './TicketTallerPrint.vue'
 import OrdenTallerForm from './OrdenTallerForm.vue'
 import QRCode from 'qrcode'
 import JsBarcode from 'jsbarcode'
+import { getImageUrl } from '@/services/tmCloudClient'
+import { useEmpresa } from '@/composables/useEmpresa'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 import { envioElectron, encryptarPassword } from '@/funciones/funciones.js'
 
 const toast = useToast()
+const route = useRoute()
+const { nombre: nombreEmpresa, cargar: cargarEmpresa } = useEmpresa()
+const { addAlmacenId, store: almacenStore } = useAlmacenFilter()
 
 // ─── Estado general ───
 const ordenes = ref<any[]>([])
@@ -42,14 +49,31 @@ const viewMode = ref<'table' | 'cards'>('cards')
 const isEditing = ref(false)
 const selectedOrden = ref<any>(null)
 const selectedOrdenes = ref<any[]>([])
+const dialogMoverAlmacenMulti = ref(false)
+const almacenDestinoMulti = ref<any>(null)
+const almacenesDestinoMulti = ref<any[]>([])
+const moviendoAlmacenMulti = ref(false)
 const deleteDialogVisible = ref(false)
 const deleteOtpEnviado = ref(false)
 const deleteOtpLoading = ref(false)
 const deleteOtpConfirmando = ref(false)
 const deleteOtp = ref('')
+
+const dialogPiezaCard = ref(false)
+const piezaOrdenActual = ref<any>(null)
+const piezasLista = ref<any[]>([])
+const buscarPiezaCard = ref('')
+
+const dialogAbonoCard = ref(false)
+const abonoOrdenActual = ref<any>(null)
+const abonoMonto = ref(0)
+
+const dialogFacturaPieza = ref(false)
+const piezaSeleccionadaInfo = ref<any>(null)
+const creandoFactura = ref(false)
 const deleteOtpEmail = ref('')
 const deleteOtpError = ref('')
-const busqueda = ref('')
+const busqueda = ref(String(route.query.search || ''))
 const activeTab = ref('0')
 const ticketTallerRef = ref<any>(null)
 const dialogEtiquetaTaller = ref(false)
@@ -59,7 +83,7 @@ const printers = ref<any[]>([])
 const printerSel = ref('')
 const escaneando = ref(false)
 
-const tecnicos = ref<{ nombre: string; porcentaje: number }[]>([])
+const tecnicos = ref<{ id?: number; nombre: string; porcentaje: number; tipo_comision?: string; valor_comision?: number }[]>([])
 const dialogNuevoTecnico = ref(false)
 const nuevoTecnicoForm = ref({ nombre: '', telefono: '', email: '', porcentaje: 0 })
 const nuevoTecnicoPorcentaje = ref(0)
@@ -70,6 +94,12 @@ const ordenParaTotales = ref<any>(null)
 const dialogEntregar = ref(false)
 const entregaForm = ref({ estado: 'ENTREGADO', abono: 0 })
 const ordenParaEntrega = ref<any>(null)
+const dialogWhatsappEstado = ref(false)
+const ordenWhatsappEstado = ref<any>(null)
+const whatsappTelefono = ref('')
+const whatsappNota = ref('')
+const whatsappEstadoAnterior = ref('')
+const whatsappEstadoNuevo = ref('')
 
 watch(() => formaTotales.value.total, (val) => {
   const calc = Math.max(0, (val || 0) - (formaTotales.value.precio_pieza || 0))
@@ -157,7 +187,6 @@ const metodosPago = [
   { label: 'Tarjeta', value: 'TARJETA' },
   { label: 'Transferencia', value: 'TRANSFERENCIA' },
   { label: 'Pago Movil', value: 'PAGO_MOVIL' },
-  { label: 'USD', value: 'USD' },
 ]
 
 const estadosOrden = [
@@ -231,6 +260,8 @@ const formDefault = () => ({
   beneficio_empresa: 0,
   beneficio_tecnico: 0,
   porcentaje_tecnico: 0,
+  tipo_comision_tecnico: 'PORCENTAJE_MANO_OBRA',
+  valor_comision_tecnico: 0,
   estado_pago_tecnico: 'PENDIENTE',
 })
 
@@ -245,6 +276,8 @@ const ordenesFiltradas = computed(() => {
     o.cedula?.toLowerCase().includes(texto) ||
     o.telefono?.toLowerCase().includes(texto) ||
     o.equipo?.toLowerCase().includes(texto) ||
+    o.imei?.toLowerCase().includes(texto) ||
+    o.serial?.toLowerCase().includes(texto) ||
     o.tecnico?.toLowerCase().includes(texto) ||
     String(o.id).includes(texto)
   )
@@ -278,21 +311,29 @@ watch(() => form.value.tecnico, (nombre) => {
     const encontrado = tecnicos.value.find(t => t.nombre === nombre)
     if (encontrado) {
       form.value.porcentaje_tecnico = encontrado.porcentaje
+      form.value.tipo_comision_tecnico = encontrado.tipo_comision || 'PORCENTAJE_MANO_OBRA'
+      form.value.valor_comision_tecnico = Number(encontrado.valor_comision ?? encontrado.porcentaje ?? 0)
     }
   }
 })
 
-watch(() => form.value.porcentaje_tecnico, (pct) => {
-  const mano = form.value.mano_obra || 0
-  form.value.beneficio_tecnico = Math.round((mano * (pct || 0) / 100) * 100) / 100
+function recalcularComisionTecnico() {
+  const tipo = form.value.tipo_comision_tecnico || 'PORCENTAJE_MANO_OBRA'
+  const valor = Number(form.value.valor_comision_tecnico ?? form.value.porcentaje_tecnico ?? 0)
+  const mano = Number(form.value.mano_obra || 0)
+  const piezas = Number(form.value.precio_pieza || 0)
+  const comision = tipo === 'MONTO_FIJO' ? valor : (tipo === 'PORCENTAJE_PIEZAS' ? piezas : mano) * valor / 100
+  form.value.beneficio_tecnico = Math.round(comision * 100) / 100
   form.value.beneficio_empresa = Math.round((mano - form.value.beneficio_tecnico) * 100) / 100
-})
+}
 
-watch(() => form.value.mano_obra, (mano) => {
-  const pct = form.value.porcentaje_tecnico || 0
-  form.value.beneficio_tecnico = Math.round(((mano || 0) * pct / 100) * 100) / 100
-  form.value.beneficio_empresa = Math.round(((mano || 0) - form.value.beneficio_tecnico) * 100) / 100
-})
+watch([
+  () => form.value.porcentaje_tecnico,
+  () => form.value.valor_comision_tecnico,
+  () => form.value.tipo_comision_tecnico,
+  () => form.value.mano_obra,
+  () => form.value.precio_pieza,
+], recalcularComisionTecnico)
 
 // ─── Funciones CRUD ───
 async function cargarOrdenes() {
@@ -307,7 +348,13 @@ async function cargarOrdenes() {
   }
   if (tecnicosRes.success) {
     tecnicos.value = (tecnicosRes.data || [])
-      .map((t: any) => ({ nombre: (t.nombre || '').toUpperCase(), porcentaje: t.porcentaje || 0 }))
+      .map((t: any) => ({
+        id: t.id,
+        nombre: (t.nombre || '').toUpperCase(),
+        porcentaje: Number(t.porcentaje || 0),
+        tipo_comision: t.tipo_comision || 'PORCENTAJE_MANO_OBRA',
+        valor_comision: Number(t.valor_comision ?? t.porcentaje ?? 0),
+      }))
       .filter(t => t.nombre)
       .sort((a, b) => a.nombre.localeCompare(b.nombre))
   }
@@ -345,6 +392,162 @@ function confirmarBorrarSeleccionadas() {
   deleteOtpEmail.value = ''
   deleteOtpError.value = ''
   deleteDialogVisible.value = true
+}
+
+async function abrirMoverAlmacenSeleccionadas() {
+  if (!selectedOrdenes.value.length) return
+  almacenDestinoMulti.value = null
+  try {
+    await almacenStore.load()
+    const origenUids = new Set(selectedOrdenes.value.map((orden: any) => String(orden.almacen_uid || '')).filter(Boolean))
+    const origenIds = new Set(selectedOrdenes.value.map((orden: any) => Number(orden.almacen_id || 0)).filter(Boolean))
+    almacenesDestinoMulti.value = almacenStore.almacenes.filter((almacen: any) =>
+      !origenUids.has(String(almacen.uid || '')) && !origenIds.has(Number(almacen.id || 0))
+    )
+    dialogMoverAlmacenMulti.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron cargar los almacenes', life: 4000 })
+  }
+}
+
+async function aplicarMoverAlmacenSeleccionadas() {
+  if (!almacenDestinoMulti.value || moviendoAlmacenMulti.value || !selectedOrdenes.value.length) return
+  const destinoId = Number(almacenDestinoMulti.value.id || almacenDestinoMulti.value)
+  const destinoUid = String(almacenDestinoMulti.value.uid || '')
+  const destinoNombre = String(almacenDestinoMulti.value.nombre || '')
+  const seleccionadas = [...selectedOrdenes.value]
+  moviendoAlmacenMulti.value = true
+  try {
+    for (const orden of seleccionadas) {
+      const res = await window.db.update('ordenes_taller', orden.id, { almacen_id: destinoId, almacen_uid: destinoUid })
+      if (!res.success) throw new Error(res.error || `No se pudo mover la orden ${orden.no_orden || orden.id}`)
+    }
+    selectedOrdenes.value = []
+    dialogMoverAlmacenMulti.value = false
+    toast.add({ severity: 'success', summary: 'Almacen actualizado', detail: `${seleccionadas.length} orden(es) movidas a ${destinoNombre}`, life: 3000 })
+    await cargarOrdenes()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron mover las ordenes', life: 4000 })
+  } finally {
+    moviendoAlmacenMulti.value = false
+  }
+}
+
+const piezasFiltradasCard = computed(() => {
+  const q = buscarPiezaCard.value.toLowerCase().trim()
+  if (!q) return piezasLista.value
+  return piezasLista.value.filter((p: any) => (p.nombre || '').toLowerCase().includes(q))
+})
+
+async function abrirPiezaModal(orden: any) {
+  piezaOrdenActual.value = orden
+  buscarPiezaCard.value = ''
+  try {
+    const res = await window.db.getAll('piezas')
+    if (res.success && res.data) piezasLista.value = (res.data || []).filter((p: any) => (p.nombre || '').trim())
+  } catch {}
+  dialogPiezaCard.value = true
+}
+
+async function seleccionarPiezaCard(pieza: any) {
+  const orden = piezaOrdenActual.value
+  if (!orden) return
+  const disponibles = Number(pieza.cantidad || 0) - Number(pieza.reservada || 0)
+  if (disponibles <= 0) {
+    toast.add({ severity: 'warn', summary: 'Sin disponibilidad', detail: 'Todas las unidades de esta pieza están reservadas.', life: 3000 })
+    return
+  }
+  const texto = pieza.nombre || ''
+  const nuevasPiezas = orden.piezas ? orden.piezas + '\n' + texto : texto
+  const valorPieza = Number(pieza.precio_venta) || 0
+  const nuevoPrecioPieza = (Number(orden.precio_pieza) || 0) + valorPieza
+  const nuevoTotal = nuevoPrecioPieza + (Number(orden.mano_obra) || 0)
+  const nuevoPendiente = nuevoTotal - (Number(orden.abono) || 0)
+  await window.db.update('ordenes_taller', orden.id, {
+    piezas: nuevasPiezas,
+    precio_pieza: nuevoPrecioPieza,
+    total: nuevoTotal,
+    pendiente: nuevoPendiente,
+  })
+  await window.db.update('piezas', pieza.id, { reservada: Number(pieza.reservada || 0) + 1 })
+  await window.db.insert('reservas_piezas', addAlmacenId({
+    orden_id: orden.id,
+    pieza_id: pieza.id,
+    pieza_nombre: texto,
+    cantidad: 1,
+    estado: 'RESERVADA',
+    usuario: auth.user?.nombre || auth.user?.usuario || '',
+  }))
+  orden.piezas = nuevasPiezas
+  orden.precio_pieza = nuevoPrecioPieza
+  orden.total = nuevoTotal
+  orden.pendiente = nuevoPendiente
+  dialogPiezaCard.value = false
+  piezaSeleccionadaInfo.value = { orden, texto, valor: valorPieza, piezaId: pieza.id, cantidad: pieza.cantidad || 0 }
+  dialogFacturaPieza.value = true
+}
+
+async function crearFacturaPieza() {
+  if (creandoFactura.value) return
+  const info = piezaSeleccionadaInfo.value
+  if (!info) return
+  creandoFactura.value = true
+  const { orden, texto, valor, piezaId, cantidad } = info
+  const fecha = new Date().toISOString().split('T')[0]
+  const ahora = new Date()
+  const hora = ahora.toTimeString().split(' ')[0].slice(0, 5)
+  const factura = {
+    no_factura: `F-${Date.now().toString(36).toUpperCase()}`,
+    nombre_cliente: orden.nombre || '',
+    telefono_cliente: orden.telefono || '',
+    productos: JSON.stringify([{ nombre: texto, cantidad: 1, precio: valor, costo: 0 }]),
+    total: valor,
+    subtotal: valor,
+    descuento: 0,
+    ganancia: valor,
+    metodo_pago: 'EFECTIVO',
+    fecha_emision: fecha,
+    hora,
+    estado_factura: 'PENDIENTE',
+    vendedor: '',
+  }
+  const res = await window.db.insert('facturas', addAlmacenId(factura))
+  if (res.success) {
+    const piezaActualRes = await window.db.getById('piezas', piezaId)
+    const piezaActual = piezaActualRes.success ? piezaActualRes.data : {}
+    const cantidadActual = Number(piezaActual?.cantidad ?? cantidad)
+    const nuevaCantidad = Math.max(0, cantidadActual - 1)
+    await window.db.update('piezas', piezaId, {
+      cantidad: nuevaCantidad,
+      reservada: Math.max(0, Number(piezaActual?.reservada || 0) - 1),
+    })
+    const reservas = await window.db.getWhere('reservas_piezas', 'orden_id = ? AND pieza_id = ? AND estado = ?', [orden.id, piezaId, 'RESERVADA'])
+    const reserva = reservas.success ? reservas.data?.[0] : null
+    if (reserva) await window.db.update('reservas_piezas', reserva.id, { estado: 'CONSUMIDA', consumida_at: new Date().toISOString() })
+    const ahora = new Date()
+    await window.db.insert('movimientos_piezas', addAlmacenId({
+      pieza_id: piezaId,
+      pieza_nombre: texto,
+      tipo: 'SALIDA',
+      cantidad_antes: cantidad,
+      cantidad_despues: nuevaCantidad,
+      referencia: `Orden #${orden.id}`,
+      fecha: ahora.toISOString().split('T')[0],
+      hora: ahora.toTimeString().split(' ')[0].slice(0, 5),
+    }))
+    const idx = piezasLista.value.findIndex((p: any) => p.id === piezaId)
+    if (idx >= 0) piezasLista.value[idx].cantidad = nuevaCantidad
+    toast.add({ severity: 'success', summary: 'Factura creada', detail: `Factura para pieza: ${texto}`, life: 3000 })
+  } else {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo crear la factura', life: 3000 })
+  }
+  creandoFactura.value = false
+  dialogFacturaPieza.value = false
+}
+
+function cerrarFacturaPieza() {
+  dialogFacturaPieza.value = false
+  creandoFactura.value = false
 }
 
 function imprimirOrden(orden: any) {
@@ -403,9 +606,83 @@ async function confirmarEntrega() {
     })
     toast.add({ severity: 'success', summary: 'Entregada', detail: `Orden #${orden.no_orden} marcada como ${nuevoEstado}`, life: 3000 })
     dialogEntregar.value = false
+    prepararWhatsappEstado({ ...orden, estado: nuevoEstado, abono: nuevoAbono, pendiente: nuevoPendiente }, orden.estado || '', nuevoEstado)
     await cargarOrdenes()
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 3000 })
+  }
+}
+
+function normalizarTelefonoWhatsapp(valor: string) {
+  const digits = String(valor || '').replace(/\D/g, '')
+  if (!digits) return ''
+  if (digits.length === 10) return `1${digits}`
+  return digits
+}
+
+function etiquetaEstado(estado: string) {
+  return String(estado || '').replace(/_/g, ' ')
+}
+
+function generarMensajeWhatsappEstado(orden: any, estadoNuevo: string, nota: string) {
+  const lineas = [
+    `Hola ${orden?.nombre || ''}.`,
+    '',
+    `Le informamos que el estado de su equipo ha sido actualizado a: ${etiquetaEstado(estadoNuevo)}.`,
+    '',
+    `Orden: ${orden?.no_orden || orden?.id || '-'}`,
+    `Equipo: ${orden?.equipo || '-'}`,
+    `Marca/Modelo: ${orden?.marca_modelo || '-'}`,
+    orden?.imei ? `IMEI: ${orden.imei}` : '',
+    orden?.serial ? `Serial: ${orden.serial}` : '',
+    orden?.tecnico ? `Tecnico: ${orden.tecnico}` : '',
+    '',
+    nota ? `Nota: ${nota}` : '',
+    '',
+    'Gracias por confiar en nosotros.',
+  ]
+  return lineas.filter(line => line !== '').join('\n')
+}
+
+function prepararWhatsappEstado(orden: any, estadoAnterior: string, estadoNuevo: string) {
+  ordenWhatsappEstado.value = orden
+  whatsappEstadoAnterior.value = estadoAnterior || ''
+  whatsappEstadoNuevo.value = estadoNuevo || orden?.estado || ''
+  whatsappTelefono.value = orden?.telefono || ''
+  whatsappNota.value = mensajeNotaPorEstado(whatsappEstadoNuevo.value)
+  dialogWhatsappEstado.value = true
+}
+
+function mensajeNotaPorEstado(estado: string) {
+  switch (estado) {
+    case 'RECIBIDO': return 'Hemos recibido su equipo y sera revisado por nuestro equipo tecnico.'
+    case 'EN_PROCESO': return 'Su equipo ya esta en proceso de revision o reparacion.'
+    case 'COMPLETADO': return 'Su equipo ya fue completado. Puede pasar por tienda para retirarlo.'
+    case 'REPARADO': return 'Su equipo ya fue reparado. Puede pasar por tienda para retirarlo.'
+    case 'ENTREGADO': return 'Su equipo fue marcado como entregado. Gracias por su visita.'
+    case 'PARCIAL': return 'Su orden queda con balance pendiente. Puede contactarnos para mas detalles.'
+    case 'CANCELADO': return 'La orden fue cancelada. Puede contactarnos si necesita mas informacion.'
+    default: return 'Puede contactarnos si necesita mas informacion sobre su orden.'
+  }
+}
+
+function enviarWhatsappEstado() {
+  const telefono = normalizarTelefonoWhatsapp(whatsappTelefono.value)
+  if (!telefono) {
+    toast.add({ severity: 'warn', summary: 'Telefono requerido', detail: 'Agrega un telefono valido para WhatsApp', life: 3000 })
+    return
+  }
+  const mensaje = encodeURIComponent(generarMensajeWhatsappEstado(ordenWhatsappEstado.value, whatsappEstadoNuevo.value, whatsappNota.value))
+  window.open(`https://wa.me/${telefono}?text=${mensaje}`, '_blank')
+  dialogWhatsappEstado.value = false
+}
+
+async function onOrdenGuardada(payload?: any) {
+  dialogOrdenVisible.value = false
+  await cargarOrdenes()
+  await cargarTecnicos()
+  if (payload?.cambioEstado) {
+    prepararWhatsappEstado(payload.orden, payload.estadoAnterior, payload.estadoNuevo)
   }
 }
 
@@ -431,11 +708,11 @@ function abrirEtiquetaTaller(orden: any) {
   dialogEtiquetaTaller.value = true
 }
 
-function generarBarcodeSVG(data: string): string {
+function generarBarcodeSVG(data: string, altoMm = 9): string {
   if (!data) return ''
   try {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-    JsBarcode(svg, data, { format: 'CODE128', width: 1.5, height: 40, displayValue: true, fontSize: 10, margin: 2 })
+    JsBarcode(svg, data, { format: 'CODE128', width: 0.75, height: Math.max(12, altoMm * 1.8), displayValue: true, fontSize: 5, margin: 0 })
     return new XMLSerializer()
       .serializeToString(svg)
       .replace(/width="[^"]*"/, 'width="100%"')
@@ -456,7 +733,9 @@ async function generarQR(data: string): Promise<string> {
 function aplicarVariablesEtiqueta(valor: string, orden: any): string {
   const numeroOrden = orden?.no_orden || orden?.id || ''
   return String(valor || '')
+    .replace(/\{EMPRESA\}/gi, nombreEmpresa.value || 'MI EMPRESA')
     .replace(/\{CLIENTE\}/g, orden?.nombre || '')
+    .replace(/\{FALLAS\}/gi, orden?.fallas || '')
     .replace(/\{NO_ORDEN\}/g, numeroOrden)
     .replace(/\{ORDEN\}/g, numeroOrden)
     .replace(/\{NUMERO_ORDEN\}/g, numeroOrden)
@@ -468,6 +747,8 @@ async function imprimirEtiquetaTaller(plantilla: any) {
     return
   }
   if (!ordenEtiqueta.value || !plantilla?.elementos) return
+
+  await cargarEmpresa()
 
   localStorage.setItem('etiquetas_printer', printerSel.value)
   dialogEtiquetaTaller.value = false
@@ -481,7 +762,7 @@ async function imprimirEtiquetaTaller(plantilla: any) {
   const orden = ordenEtiqueta.value
 
   let html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiqueta Taller</title><style>'
-  html += 'body{margin:0;padding:0;font-family:Arial,sans-serif}'
+  html += `@page{size:${ancho}mm ${alto}mm;margin:0}html,body{margin:0;padding:0;width:${ancho}mm;height:${alto}mm;font-family:Arial,sans-serif}`
   html += `.label{width:${mmToPx(ancho)}px;height:${mmToPx(alto)}px;position:relative;overflow:hidden;background:white}`
   html += '.elem{position:absolute;overflow:hidden;word-wrap:break-word;display:flex;align-items:center;justify-content:center}'
   html += '</style></head><body><div class="label">'
@@ -493,9 +774,9 @@ async function imprimirEtiquetaTaller(plantilla: any) {
     }
     const style = `left:${mmToPx(el.x)}px;top:${mmToPx(el.y)}px;width:${mmToPx(el.ancho)}px;height:${mmToPx(el.alto)}px;`
     if (el.tipo === 'texto') {
-      html += `<div class="elem" style="${style}font-size:${(el.fontSize || 8) * 1.333}px;font-weight:${el.bold ? 'bold' : 'normal'}">${el.contenido}</div>`
+      html += `<div class="elem" style="${style}font-size:${el.fontSize || 8}px;font-weight:${el.bold ? 'bold' : 'normal'};line-height:1;text-align:center">${el.contenido}</div>`
     } else if (el.tipo === 'barcode') {
-      html += `<div class="elem" style="${style}overflow:hidden">${generarBarcodeSVG(el.contenido)}</div>`
+      html += `<div class="elem" style="${style}overflow:hidden">${generarBarcodeSVG(el.contenido, el.alto)}</div>`
     } else if (el.tipo === 'qr') {
       const qrData = await generarQR(el.contenido)
       if (qrData) html += `<img class="elem" style="${style}object-fit:contain;max-width:100%;max-height:100%" src="${qrData}" />`
@@ -504,7 +785,7 @@ async function imprimirEtiquetaTaller(plantilla: any) {
   html += '</div></body></html>'
 
   try {
-    const res = await window.electron.invoke('print:ticket', html, printerSel.value || undefined)
+    const res = await window.electron.invoke('print:ticket', html, printerSel.value || undefined, { width: ancho, height: alto })
     if (res.success) toast.add({ severity: 'success', summary: 'Impreso', detail: 'Etiqueta enviada a la impresora', life: 2000 })
     else toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo imprimir', life: 3000 })
   } catch (error: any) {
@@ -648,6 +929,8 @@ async function guardar() {
       beneficio_empresa: form.value.beneficio_empresa || 0,
       beneficio_tecnico: form.value.beneficio_tecnico || 0,
       porcentaje_tecnico: form.value.porcentaje_tecnico || 0,
+      tipo_comision_tecnico: form.value.tipo_comision_tecnico,
+      valor_comision_tecnico: form.value.valor_comision_tecnico || 0,
       estado_pago_tecnico: form.value.estado_pago_tecnico,
     }
 
@@ -657,7 +940,7 @@ async function guardar() {
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Orden actualizada', life: 3000 })
       }
     } else {
-      const res = await window.db.insert('ordenes_taller', data)
+      const res = await window.db.insert('ordenes_taller', addAlmacenId(data))
       if (res.success) {
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Orden creada', life: 3000 })
       }
@@ -691,7 +974,7 @@ async function solicitarOtpEliminarOrden() {
     if (!res?.success) throw new Error(res?.error || 'No se pudo enviar el codigo')
 
     deleteOtpEnviado.value = true
-    deleteOtpEmail.value = res.data?.email || ''
+    deleteOtpEmail.value = res.data?.networkUrl || ''
     toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
   } catch (error: any) {
     deleteOtpError.value = error?.message || 'No se pudo enviar el codigo'
@@ -758,6 +1041,31 @@ function formatCurrency(val: number) {
   return val != null ? `$${Number(val).toFixed(2)}` : '$0.00'
 }
 
+function imagenesOrden(orden: any): string[] {
+  const valor = orden?.imagen
+  if (!valor) return []
+  if (Array.isArray(valor)) return valor.filter(Boolean)
+  const texto = String(valor).trim()
+  if (!texto) return []
+  try {
+    const parsed = JSON.parse(texto)
+    if (Array.isArray(parsed)) return parsed.filter(Boolean)
+  } catch {}
+  return [texto]
+}
+
+function primeraImagen(orden: any): string {
+  return imagenesOrden(orden)[0] || ''
+}
+
+function cantidadImagenes(orden: any): number {
+  return imagenesOrden(orden).length
+}
+
+function imagenOrdenUrl(valor: string): string {
+  return getImageUrl(valor) || valor
+}
+
 // ─── Lifecycle ───
 onMounted(async () => {
   try {
@@ -817,6 +1125,14 @@ defineExpose({ cargarOrdenes })
                 <i class="pi pi-th-large"></i>
               </button>
             </div>
+            <Button
+              v-if="selectedOrdenes.length"
+              :label="`Cambiar Almacen (${selectedOrdenes.length})`"
+              icon="pi pi-warehouse"
+              severity="success"
+              outlined
+              @click="abrirMoverAlmacenSeleccionadas"
+            />
             <Button
               v-if="selectedOrdenes.length"
               :label="`Eliminar (${selectedOrdenes.length})`"
@@ -883,6 +1199,19 @@ defineExpose({ cargarOrdenes })
           </Column>
           <Column field="id" header="#" style="width: 4rem" sortable />
           <Column field="no_orden" header="No. Orden" sortable style="width: 7rem" />
+          <Column header="Fotos" style="width: 5rem">
+            <template #body="{ data }">
+              <div v-if="cantidadImagenes(data)" class="flex items-center gap-2">
+                <img
+                  :src="imagenOrdenUrl(primeraImagen(data))"
+                  class="w-10 h-10 rounded-lg object-cover border border-surface-200 dark:border-surface-700"
+                  alt="Foto de orden"
+                />
+                <span class="text-xs font-semibold text-surface-500">{{ cantidadImagenes(data) }}</span>
+              </div>
+              <span v-else class="text-xs text-surface-400">-</span>
+            </template>
+          </Column>
           <Column field="nombre" header="Cliente" sortable />
           <Column field="telefono" header="Telefono" sortable style="width: 9rem" />
           <Column field="equipo" header="Equipo" sortable />
@@ -930,9 +1259,24 @@ defineExpose({ cargarOrdenes })
                 <Tag :value="orden.estado" :severity="getEstadoSeverity(orden.estado)" />
               </div>
 
-              <div class="min-w-0">
-                <h4 class="font-bold text-lg leading-tight uppercase truncate">{{ orden.nombre }}</h4>
-                <p class="text-sm text-surface-500 dark:text-surface-400 truncate">{{ orden.equipo || 'Sin equipo' }}</p>
+              <div class="flex gap-3 min-w-0">
+                <div v-if="cantidadImagenes(orden)" class="relative w-16 h-16 shrink-0 rounded-xl overflow-hidden border border-surface-200 dark:border-surface-700 bg-surface-100 dark:bg-surface-800">
+                  <img
+                    :src="imagenOrdenUrl(primeraImagen(orden))"
+                    class="w-full h-full object-cover"
+                    alt="Foto de orden"
+                  />
+                  <span v-if="cantidadImagenes(orden) > 1" class="absolute bottom-1 right-1 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                    +{{ cantidadImagenes(orden) - 1 }}
+                  </span>
+                </div>
+                <div class="min-w-0">
+                  <h4 class="font-bold text-lg leading-tight uppercase truncate">{{ orden.nombre }}</h4>
+                  <p class="text-sm text-surface-500 dark:text-surface-400 truncate">{{ orden.equipo || 'Sin equipo' }}</p>
+                  <p v-if="cantidadImagenes(orden)" class="text-xs text-primary font-semibold mt-1">
+                    <i class="pi pi-images mr-1"></i>{{ cantidadImagenes(orden) }} imagen(es)
+                  </p>
+                </div>
               </div>
 
               <div class="grid grid-cols-2 gap-2 text-sm">
@@ -954,11 +1298,13 @@ defineExpose({ cargarOrdenes })
                     {{ formatCurrency(orden.pendiente) }}
                   </span>
                 </div>
+                <div class="col-span-2">
+                  <span class="block text-surface-400 text-xs">Piezas</span>
+                  <span class="font-medium text-xs break-words">{{ orden.piezas || '-' }}</span>
+                </div>
               </div>
 
-              <div class="flex items-center justify-between gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
-                <span class="text-xs text-surface-500">{{ orden.fecha_entrada || 'Sin fecha' }}</span>
-                <div class="flex gap-1">
+              <div class="flex justify-evenly gap-1 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700 flex-wrap">
                   <Button
                     icon="pi pi-print"
                     severity="info"
@@ -976,6 +1322,33 @@ defineExpose({ cargarOrdenes })
                     size="small"
                     @click.stop="abrirEtiquetaTaller(orden)"
                     v-tooltip="'Etiqueta'"
+                  />
+                  <Button
+                    icon="pi pi-dollar"
+                    severity="success"
+                    text
+                    rounded
+                    size="small"
+                    @click.stop="abrirAbonoModal(orden)"
+                    v-tooltip="'Agregar Abono'"
+                  />
+                  <Button
+                    icon="pi pi-whatsapp"
+                    severity="success"
+                    text
+                    rounded
+                    size="small"
+                    @click.stop="prepararWhatsappEstado(orden, orden.estado || '', orden.estado || '')"
+                    v-tooltip="'Notificar cliente'"
+                  />
+                  <Button
+                    icon="pi pi-cog"
+                    severity="warn"
+                    text
+                    rounded
+                    size="small"
+                    @click.stop="abrirPiezaModal(orden)"
+                    v-tooltip="'Agregar Pieza'"
                   />
                   <Button
                     icon="pi pi-pencil"
@@ -1013,7 +1386,6 @@ defineExpose({ cargarOrdenes })
                     @click.stop="confirmarBorrar(orden)"
                     v-tooltip="'Eliminar'"
                   />
-                </div>
               </div>
             </div>
           </div>
@@ -1028,8 +1400,38 @@ defineExpose({ cargarOrdenes })
       :order-id="editingOrderId"
       :visible="dialogOrdenVisible"
       @close="dialogOrdenVisible = false"
-      @saved="dialogOrdenVisible = false; cargarOrdenes(); cargarTecnicos()"
+      @saved="onOrdenGuardada"
     />
+
+    <Dialog v-model:visible="dialogWhatsappEstado" header="Notificar por WhatsApp" modal :style="{ width: 'min(34rem, 95vw)' }">
+      <div v-if="ordenWhatsappEstado" class="space-y-4 pt-2">
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800/60 p-3 text-sm space-y-1">
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Cliente</span><strong class="text-right">{{ ordenWhatsappEstado.nombre || '-' }}</strong></div>
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Orden</span><strong class="text-right">{{ ordenWhatsappEstado.no_orden || ordenWhatsappEstado.id || '-' }}</strong></div>
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Equipo</span><strong class="text-right">{{ ordenWhatsappEstado.equipo || '-' }}</strong></div>
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Estado</span><strong class="text-right text-primary">{{ etiquetaEstado(whatsappEstadoNuevo) }}</strong></div>
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label class="text-sm font-semibold">Telefono WhatsApp</label>
+          <InputText v-model="whatsappTelefono" placeholder="8090000000" fluid />
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label class="text-sm font-semibold">Nota para el cliente</label>
+          <Textarea v-model="whatsappNota" rows="4" fluid placeholder="Escribe una nota para el cliente..." />
+        </div>
+
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-900 p-3">
+          <p class="text-xs font-semibold text-surface-400 mb-2">Vista previa</p>
+          <pre class="whitespace-pre-wrap text-xs leading-relaxed text-surface-700 dark:text-surface-200 font-sans">{{ generarMensajeWhatsappEstado(ordenWhatsappEstado, whatsappEstadoNuevo, whatsappNota) }}</pre>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="No enviar" severity="secondary" text @click="dialogWhatsappEstado = false" />
+        <Button label="Enviar WhatsApp" icon="pi pi-whatsapp" severity="success" @click="enviarWhatsappEstado" />
+      </template>
+    </Dialog>
 
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- Dialog Totales                                              -->
@@ -1129,7 +1531,7 @@ defineExpose({ cargarOrdenes })
 
         <div v-if="deleteOtpEnviado" class="space-y-2">
           <p class="text-sm text-surface-600 dark:text-surface-300">
-            Codigo enviado a <strong>{{ deleteOtpEmail || 'correo de la empresa' }}</strong>.
+          Consulta el codigo en el Centro OTP: <strong>{{ deleteOtpEmail || 'Configuracion > OTP Local' }}</strong>.
           </p>
           <InputOtp v-model="deleteOtp" integerOnly :length="4" class="justify-center" />
         </div>
@@ -1155,6 +1557,18 @@ defineExpose({ cargarOrdenes })
           :disabled="deleteOtp.length !== 4"
           @click="borrar"
         />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogMoverAlmacenMulti" header="Cambiar Almacen" modal :style="{ width: 'min(30rem, 95vw)' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm">Mover <strong>{{ selectedOrdenes.length }}</strong> orden(es) de taller a otro almacen:</p>
+        <Select v-model="almacenDestinoMulti" :options="almacenesDestinoMulti" optionLabel="nombre" placeholder="Seleccionar almacen destino..." fluid />
+        <p v-if="almacenesDestinoMulti.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacen disponible para el traslado.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacenMulti" @click="dialogMoverAlmacenMulti = false" />
+        <Button label="Aplicar" icon="pi pi-warehouse" :loading="moviendoAlmacenMulti" :disabled="!almacenDestinoMulti" @click="aplicarMoverAlmacenSeleccionadas" />
       </template>
     </Dialog>
 
@@ -1199,6 +1613,65 @@ defineExpose({ cargarOrdenes })
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogEtiquetaTaller = false" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogPiezaCard" header="Agregar Pieza" :modal="true" :style="{ width: 'min(40rem, 95vw)' }">
+      <div class="flex flex-col gap-3">
+        <InputText v-model="buscarPiezaCard" placeholder="Buscar pieza..." fluid />
+        <div class="max-h-80 overflow-y-auto flex flex-col gap-1">
+          <div
+            v-for="p in piezasFiltradasCard"
+            :key="p.id"
+            class="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-surface-100 dark:hover:bg-surface-700 border border-transparent hover:border-surface-200 dark:hover:border-surface-600"
+            @click="seleccionarPiezaCard(p)"
+          >
+            <div>
+              <p class="text-sm font-medium">{{ p.nombre }}</p>
+              <p class="text-xs text-surface-500">Stock: {{ p.cantidad || 0 }}</p>
+            </div>
+            <span class="text-sm font-semibold text-emerald-600">${{ p.precio_venta || 0 }}</span>
+          </div>
+          <div v-if="piezasFiltradasCard.length === 0" class="text-center py-6 text-surface-400 text-sm">
+            No se encontraron piezas.
+          </div>
+        </div>
+      </div>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogAbonoCard" header="Agregar Abono" :modal="true" :style="{ width: 'min(24rem, 95vw)' }">
+      <div class="flex flex-col gap-4">
+        <p class="text-sm text-surface-500">
+          Cliente: <strong>{{ abonoOrdenActual?.nombre }}</strong><br/>
+          Total: <strong>{{ $formatMoney(abonoOrdenActual?.total || 0) }}</strong> &nbsp;| 
+          Abono actual: <strong>{{ $formatMoney(abonoOrdenActual?.abono || 0) }}</strong><br/>
+          Pendiente: <strong :class="(abonoOrdenActual?.pendiente || 0) > 0 ? 'text-red-500' : 'text-green-600'">{{ $formatMoney(abonoOrdenActual?.pendiente || 0) }}</strong>
+        </p>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Monto del Abono</label>
+          <InputNumber v-model="abonoMonto" :min="0" fluid placeholder="0" />
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogAbonoCard = false" />
+        <Button label="Guardar Abono" icon="pi pi-check" :disabled="abonoMonto <= 0" @click="guardarAbono" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogFacturaPieza" header="Crear Factura" :modal="true" :style="{ width: 'min(28rem, 95vw)' }">
+      <div class="flex flex-col gap-4">
+        <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+          <i class="pi pi-file text-amber-600 text-xl"></i>
+          <div>
+            <p class="text-sm font-medium">Pieza: <strong>{{ piezaSeleccionadaInfo?.texto }}</strong></p>
+            <p class="text-sm text-surface-500">Valor: <strong>${{ piezaSeleccionadaInfo?.valor }}</strong></p>
+          </div>
+        </div>
+        <p class="text-sm">¿Deseas crear una factura por esta pieza?</p>
+      </div>
+      <template #footer>
+        <Button label="No" severity="secondary" text @click="cerrarFacturaPieza" :disabled="creandoFactura" />
+        <Button label="Sí, crear factura" icon="pi pi-check" @click="crearFacturaPieza" :loading="creandoFactura" />
       </template>
     </Dialog>
 

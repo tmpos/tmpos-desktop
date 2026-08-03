@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { shallowRef, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
@@ -9,8 +10,11 @@ import GastosComp from '@/components/reportes/GastosComp.vue'
 import VentasReporteComp from '@/components/reportes/VentasReporteComp.vue'
 import GananciasComp from '@/components/reportes/GananciasComp.vue'
 import ReporteGeneralComp from '@/components/reportes/ReporteGeneralComp.vue'
+import { useLocaleProfile } from '@/composables/useLocaleProfile'
 
 const auth = useAuthStore()
+const route = useRoute()
+const { isDominicanFiscal } = useLocaleProfile()
 
 const allItems: SubMenuItem[] = [
   { label: 'General', icon: 'pi pi-chart-pie', key: 'general' },
@@ -21,7 +25,9 @@ const allItems: SubMenuItem[] = [
   { label: 'Ganancias', icon: 'pi pi-chart-line', key: 'ganancias' },
 ]
 
-const items = computed(() => allItems.filter(item => auth.tienePermiso(item.key)))
+const items = computed(() => allItems.filter(item =>
+  auth.tienePermiso(item.key) && (isDominicanFiscal.value || !['606', '607'].includes(item.key))
+))
 
 const components: Record<string, any> = {
   general: ReporteGeneralComp,
@@ -38,12 +44,17 @@ function onSelect(key: string) {
   active.value = key
 }
 
-active.value = items.value.length > 0 ? items.value[0].key : ''
+const tabRuta = String(route.query.tab || '')
+active.value = items.value.some(item => item.key === tabRuta)
+  ? tabRuta
+  : (items.value[0]?.key || '')
 </script>
 
 <template>
   <div>
     <SubMenu :items="items" :active="active" @select="onSelect" />
-    <component :is="components[active]" />
+    <KeepAlive>
+      <component :is="components[active]" />
+    </KeepAlive>
   </div>
 </template>

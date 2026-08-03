@@ -3,20 +3,25 @@ import { ref } from 'vue'
 import QRCode from 'qrcode'
 import JsBarcode from 'jsbarcode'
 import { useToast } from 'primevue/usetoast'
+import { ensureConfigLoaded, getConfig, getImageUrl } from '@/services/tmCloudClient'
+import { formatSystemCurrency, getFiscalLabels, getSystemCurrencyCode } from '@/i18n/localeProfiles'
+import { getSalesDocumentLabels, prepareDocumentData, translateDocumentCustomerName, translateDocumentPaymentMethod, translateDocumentType } from '@/services/documentDataService'
 
 function formatearMetodoPago(factura: any): string {
-  if (String(factura.metodo_pago || '').toLowerCase() !== 'mixto') return factura.metodo_pago || ''
+  const labels = getSalesDocumentLabels()
+  if (String(factura.metodo_pago || '').toLowerCase() !== 'mixto') return translateDocumentPaymentMethod(factura.metodo_pago)
   const partes: string[] = []
-  const fmt = (n: any) => Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })
-  if (Number(factura.efectivo) > 0) partes.push(`Efectivo: $${fmt(factura.efectivo)}`)
-  if (Number(factura.tarjeta) > 0) partes.push(`Tarjeta: $${fmt(factura.tarjeta)}`)
-  if (Number(factura.transferencia) > 0) partes.push(`Transferencia: $${fmt(factura.transferencia)}`)
-  if (Number(factura.cheque) > 0) partes.push(`Cheque: $${fmt(factura.cheque)}`)
-  return `MIXTO (${partes.join(', ')})`
+  const fmt = (n: any) => formatSystemCurrency(n)
+  if (Number(factura.efectivo) > 0) partes.push(`${labels.cash}: ${fmt(factura.efectivo)}`)
+  if (Number(factura.tarjeta) > 0) partes.push(`${labels.card}: ${fmt(factura.tarjeta)}`)
+  if (Number(factura.transferencia) > 0) partes.push(`${labels.transfer}: ${fmt(factura.transferencia)}`)
+  if (Number(factura.cheque) > 0) partes.push(`${labels.check}: ${fmt(factura.cheque)}`)
+  return `${labels.mixed} (${partes.join(', ')})`
 }
 import Toast from 'primevue/toast'
 
 const toast = useToast()
+const fiscal = getFiscalLabels()
 const printerName = ref('')
 
 const DEFAULT_TICKET_CONFIG = {
@@ -79,6 +84,60 @@ function resolveLogo(empresa: any): string {
   return String(empresa?.logoprinter || empresa?.logo || '').trim()
 }
 
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
+// La ventana que imprime el ticket no hereda la autenticacion de TM Cloud.
+// Se incrusta el logo para que tambien funcione con uid de Storage (fil_xxx).
+async function resolverLogoTicket(ruta: any): Promise<string> {
+  const valor = String(ruta || '').trim()
+  if (!valor || /^data:/i.test(valor)) return valor
+  if (/^(https?:\/\/|file:|blob:|\/)/i.test(valor)) return valor
+  try {
+    await ensureConfigLoaded()
+    const url = getImageUrl(valor)
+    const key = getConfig()?.key || ''
+    if (!url) return valor
+    const response = await fetch(url, { headers: key ? { Authorization: `Bearer ${key}` } : {} })
+    if (!response.ok) return valor
+    const type = response.headers.get('content-type') || 'image/png'
+    return `data:${type};base64,${arrayBufferToBase64(await response.arrayBuffer())}`
+  } catch (_) {
+    return valor
+  }
+}
+
+function normalizarAlanubeData(factura: any, ecf: any = {}) {
+  const otro = parseJson(factura?.otro, {})
+  const response = otro?.alanube_response || factura?.alanube_response || {}
+  return {
+    documentStampUrl: ecf?.document_stamp_url || factura?.document_stamp_url || factura?.documentStampUrl || otro?.documentStampUrl || otro?.document_stamp_url || response?.documentStampUrl || response?.document_stamp_url || '',
+    securityCode: ecf?.security_code || factura?.codigo_seguridad || factura?.securityCode || otro?.securityCode || otro?.security_code || response?.securityCode || response?.security_code || '',
+  }
+}
+
+async function obtenerAlanubeData(factura: any) {
+  if (factura?.id) {
+    try {
+      const res = await window.db.getWhere('facturas_ecf', 'factura_id = ?', [factura.id])
+      const ecf = res?.success && Array.isArray(res.data) ? res.data[0] : null
+      if (ecf) return normalizarAlanubeData(factura, ecf)
+    } catch (_) {}
+  }
+  return normalizarAlanubeData(factura)
+}
+
+function tieneComprobanteElectronico(factura: any): boolean {
+  return /^E\d{2}/i.test(String(factura?.ncf || factura?.comprobante || factura?.tipo_comprobante || ''))
+}
+
 async function generarQR(data: string): Promise<string> {
   try {
     return await QRCode.toDataURL(data, { width: 200, margin: 1 })
@@ -115,12 +174,23 @@ function buildProductosHTML(productos: any[], simbolo: string, mostrarDescuento:
     const totalProducto = getProductTotal(producto)
     const descuento = toNumber(producto.descuento)
     const nombre = producto.nombre || producto.descripcion || producto.producto || ''
-    const imei = producto.imei ? `<br><span style="font-size:8px;color:#555;">IMEI: ${producto.imei}</span>` : ''
+    const imeis = [producto.imeis, producto.imei]
+      .flatMap((valor: any) => Array.isArray(valor) ? valor : (valor ? String(valor).split(',') : []))
+      .map((valor: any) => String(valor || '').trim())
+      .filter(Boolean)
+      .filter((valor: string, index: number, lista: string[]) => lista.indexOf(valor) === index)
+    const seriales = [producto.seriales, producto.serial]
+      .flatMap((valor: any) => Array.isArray(valor) ? valor : (valor ? String(valor).split(',') : []))
+      .map((valor: any) => String(valor || '').trim())
+      .filter(Boolean)
+      .filter((valor: string, index: number, lista: string[]) => lista.indexOf(valor) === index)
+    const imei = imeis.length ? `<br><span style="font-size:8px;color:#555;">IMEI: ${imeis.join(', ')}</span>` : ''
+    const serial = seriales.length ? `<br><span style="font-size:8px;color:#555;">Serial: ${seriales.join(', ')}</span>` : ''
 
     return `
       <tr>
         <td colspan="${mostrarDescuento ? 5 : 4}" style="overflow-wrap: break-word; font-weight: bold; white-space: normal; word-break: break-word;">
-          ${nombre}${imei}
+          ${nombre}${imei}${serial}
         </td>
       </tr>
       <tr>
@@ -141,35 +211,39 @@ function buildTicketHtml({
   empresa,
   productos,
   qrCodeData,
+  alanubeData,
   ticketConfig,
 }: {
   factura: any
   empresa: any
   productos: any[]
   qrCodeData: string
+  alanubeData: any
   ticketConfig: any
 }) {
-  const simbolo = 'RD$'
+  const labels = getSalesDocumentLabels()
+  const documentData = prepareDocumentData({ factura, empresa, items: productos })
+  productos = documentData.items
+  const simbolo = getSystemCurrencyCode()
   const logoEmpresa = resolveLogo(empresa)
   const paperWidth = toNumber(ticketConfig.paper_width, 80)
   const pageWidth = paperWidth === 58 ? 230 : 300
   const bodyWidth = paperWidth === 58 ? 210 : 250
   const ticketWidth = paperWidth === 58 ? 200 : 240
-  const descuentoFactura = toNumber(factura.descuento)
-  const impuestoFactura = toNumber(factura.impuesto ?? factura.impuestos)
-  const totalFactura = toNumber(factura.total)
-  const subtotal = toNumber(
-    factura.subtotal,
-    totalFactura + descuentoFactura - impuestoFactura
-  )
+  const descuentoFactura = documentData.totals.discount
+  const impuestoFactura = documentData.totals.tax
+  const totalFactura = documentData.totals.total
+  const subtotal = documentData.totals.subtotal
   const mostrarDescuento = descuentoFactura > 0 || productos.some((p) => toNumber(p.descuento) > 0)
   const productosHTML = buildProductosHTML(productos, simbolo, mostrarDescuento)
   const otro = parseJson(factura.otro, [])
-  const pagocon = toNumber(otro?.[0]?.pagocon)
-  const sucambio = toNumber(otro?.[0]?.sucambio)
-  const delivery = otro?.[0]?.delivery || ''
+  const otroPago = Array.isArray(otro) ? otro[0] : {}
+  const pagocon = toNumber(otroPago?.pagocon)
+  const sucambio = toNumber(otroPago?.sucambio)
+  const delivery = otroPago?.delivery || ''
   const rncCliente = factura.rnc_cliente || factura.cedula_cliente || factura.rnc || ''
   const barcodeSvg = generarBarcodeSVG(factura.no_factura || factura.id || '')
+  const mostrarQrFiscal = Boolean(qrCodeData && (alanubeData?.documentStampUrl || tieneComprobanteElectronico(factura)))
 
   const infoParts: string[] = []
   if (isOn(ticketConfig.show_address) && empresa.direccion) infoParts.push(empresa.direccion)
@@ -177,14 +251,14 @@ function buildTicketHtml({
   if (isOn(ticketConfig.show_phone) && empresa.telefono) pe.push(empresa.telefono)
   if (isOn(ticketConfig.show_email) && empresa.email) pe.push(empresa.email)
   if (pe.length) infoParts.push(pe.join(' / '))
-  if (isOn(ticketConfig.show_legal) && (empresa.legal || empresa.rnc)) infoParts.push(`RNC: ${empresa.legal || empresa.rnc}`)
+  if (isOn(ticketConfig.show_legal) && (empresa.legal || empresa.rnc)) infoParts.push(`${fiscal.businessIdLabel}: ${empresa.legal || empresa.rnc}`)
   const empresaInfoHtml = infoParts.length ? `<div class="info"><p style="width:100%;text-align:center;">${infoParts.join('<br>')}</p></div>` : ''
 
   return `<!DOCTYPE html>
-<html>
+<html lang="${labels.language}">
 <head>
   <meta charset="utf-8">
-  <title>Ticket - ${factura.no_factura || ''}</title>
+  <title>${labels.invoice} - ${factura.no_factura || ''}</title>
   <style>
     * { font-size: 10px; font-family: Arial, Helvetica, sans-serif; }
     @page { size: ${pageWidth}px auto; margin: 5px; }
@@ -217,7 +291,7 @@ function buildTicketHtml({
           : ''
         }
         ${isOn(ticketConfig.show_company_name)
-          ? `<div style="font-size:18px !important;font-weight:bold">${empresa.nombre || 'MI EMPRESA'}</div>`
+          ? `<div style="font-size:18px !important;font-weight:bold">${empresa.nombre || labels.company}</div>`
           : ''
         }
       </div>
@@ -228,34 +302,34 @@ function buildTicketHtml({
       <div class="info">
         <div class="left-column1">
           <p>
-            ${factura.fecha_emision ? `Fecha: ${factura.fecha_emision || ''} ${factura.hora || ''}<br>` : ''}
+            ${factura.fecha_emision ? `${labels.date}: ${factura.fecha_emision || ''} ${factura.hora || ''}<br>` : ''}
             DOC: <b style="font-size:16px">#${factura.no_factura || ''}</b><br>
-            ${factura.comprobante || factura.ncf ? `NCF: ${factura.comprobante || factura.ncf}<br>` : ''}
-            ${isOn(ticketConfig.show_cliente) ? `CLIENTE: ${factura.nombre_cliente || 'SIN REGISTRO'}<br>` : ''}
-            ${isOn(ticketConfig.show_cliente) && rncCliente ? `CEDULA/RNC: ${rncCliente}<br>` : ''}
-            ${isOn(ticketConfig.show_cliente) && factura.telefono_cliente ? `TELEFONO: ${factura.telefono_cliente}<br>` : ''}
-            ${isOn(ticketConfig.show_cliente) && factura.direccion_cliente ? `DIRECCION: ${factura.direccion_cliente}<br>` : ''}
-            ${factura.vendedor ? `VENDEDOR: ${factura.vendedor}<br>` : ''}
-            ${factura.cajero ? `CAJERO: ${factura.cajero}<br>` : ''}
+            ${factura.ncf || factura.comprobante ? `${fiscal.fiscalDocumentLabel}: ${factura.ncf || factura.comprobante}<br>` : ''}
+            ${isOn(ticketConfig.show_cliente) ? `${labels.customer}: ${translateDocumentCustomerName(factura.nombre_cliente)}<br>` : ''}
+            ${isOn(ticketConfig.show_cliente) && rncCliente ? `${fiscal.customerIdLabel.toUpperCase()}: ${rncCliente}<br>` : ''}
+            ${isOn(ticketConfig.show_cliente) && factura.telefono_cliente ? `${labels.phone}: ${factura.telefono_cliente}<br>` : ''}
+            ${isOn(ticketConfig.show_cliente) && factura.direccion_cliente ? `${labels.address}: ${factura.direccion_cliente}<br>` : ''}
+            ${factura.vendedor ? `${labels.seller}: ${factura.vendedor}<br>` : ''}
+            ${factura.cajero ? `${labels.cashier}: ${factura.cajero}<br>` : ''}
             ${delivery ? `DELIVERY: ${delivery}<br>` : ''}
-            ${factura.metodo_pago ? `METODO DE PAGO: ${formatearMetodoPago(factura)}` : ''}
+            ${factura.metodo_pago ? `${labels.paymentMethod}: ${formatearMetodoPago(factura)}` : ''}
           </p>
         </div>
       </div>
     </div>
 
     <div class="bordeado" style="text-align:center;padding:3px">
-      ${factura.tipo_factura || 'FACTURA DE VENTA'}
+      ${translateDocumentType(factura.tipo_factura)}
     </div>
 
     ${isOn(ticketConfig.show_items) ? `<table cellspacing="0" cellpadding="0">
       <thead class="linea">
         <tr>
-          <th style="text-align:left;padding-top:5px;padding-bottom:5px;">CANT.</th>
-          <th class="precio" style="text-align:left;padding-top:5px;padding-bottom:5px;">EMPAQ.</th>
-          <th class="precio" style="text-align:left;padding-top:5px;padding-bottom:5px;">PRECIO</th>
-          ${mostrarDescuento ? `<th class="precio" style="text-align:left;padding-top:5px;padding-bottom:5px;">DESC</th>` : ''}
-          <th class="precio centrado" style="text-align:right;padding-top:5px;padding-bottom:5px;">TOTAL</th>
+          <th style="text-align:left;padding-top:5px;padding-bottom:5px;">${labels.quantity}</th>
+          <th class="precio" style="text-align:left;padding-top:5px;padding-bottom:5px;">${labels.package}</th>
+          <th class="precio" style="text-align:left;padding-top:5px;padding-bottom:5px;">${labels.price}</th>
+          ${mostrarDescuento ? `<th class="precio" style="text-align:left;padding-top:5px;padding-bottom:5px;">${labels.discount}</th>` : ''}
+          <th class="precio centrado" style="text-align:right;padding-top:5px;padding-bottom:5px;">${labels.total}</th>
         </tr>
       </thead>
       <tbody>
@@ -268,7 +342,7 @@ function buildTicketHtml({
     <div style="font-weight: bold;">
       <table>
         <tr>
-          <td>SUBTOTAL:</td>
+          <td>${labels.subtotal}:</td>
           <td style="text-align:right;"><span style="font-size: 1.5em !important;margin-top: 5px;margin-bottom: 5px;">${simbolo}${formatCurrency(subtotal)}</span></td>
         </tr>
       </table>
@@ -277,7 +351,7 @@ function buildTicketHtml({
     ${isOn(ticketConfig.show_totals) && descuentoFactura > 0 ? `<div style="font-weight: bold;">
       <table>
         <tr>
-          <td>DESCUENTO:</td>
+          <td>${labels.discount}:</td>
           <td style="text-align:right;"><span style="font-size: 1.5em !important;margin-top: 5px;margin-bottom: 5px;">${simbolo}${formatCurrency(descuentoFactura)}</span></td>
         </tr>
       </table>
@@ -286,7 +360,7 @@ function buildTicketHtml({
     ${isOn(ticketConfig.show_totals) && impuestoFactura > 0 ? `<div style="font-weight: bold;">
       <table>
         <tr>
-          <td>ITBIS:</td>
+          <td>${fiscal.shortName}:</td>
           <td style="text-align:right;"><span style="font-size: 1.5em !important;margin-top: 5px;margin-bottom: 5px;">${simbolo}${formatCurrency(impuestoFactura)}</span></td>
         </tr>
       </table>
@@ -295,7 +369,7 @@ function buildTicketHtml({
     ${isOn(ticketConfig.show_totals) ? `<div style="font-weight: bold;">
       <table>
         <tr>
-          <td>TOTAL:</td>
+          <td>${labels.total}:</td>
           <td style="text-align:right;"><span style="font-size: 1.5em !important;margin-top: 5px;margin-bottom: 5px;">${simbolo}${formatCurrency(totalFactura)}</span></td>
         </tr>
       </table>
@@ -304,7 +378,7 @@ function buildTicketHtml({
     ${isOn(ticketConfig.show_totals) && pagocon > 0 ? `<div style="font-weight: bold;">
       <table>
         <tr>
-          <td>PAGO CON:</td>
+          <td>${labels.paidWith}:</td>
           <td style="text-align:right;"><span style="font-size: 1.5em !important;margin-top: 5px;margin-bottom: 5px;">${simbolo}${formatCurrency(pagocon)}</span></td>
         </tr>
       </table>
@@ -313,7 +387,7 @@ function buildTicketHtml({
     ${isOn(ticketConfig.show_totals) && pagocon > 0 ? `<div style="font-weight: bold;">
       <table>
         <tr>
-          <td>SU CAMBIO:</td>
+          <td>${labels.change}:</td>
           <td style="text-align:right;"><span style="font-size: 1.5em !important;margin-top: 5px;margin-bottom: 5px;">${simbolo}${formatCurrency(sucambio)}</span></td>
         </tr>
       </table>
@@ -329,15 +403,16 @@ function buildTicketHtml({
       </center>
     </div>` : ''}
 
-    ${isOn(ticketConfig.show_qr) ? `<div id="qrcode" class="qr-code">
+    ${(isOn(ticketConfig.show_qr) || mostrarQrFiscal) ? `<div id="qrcode" class="qr-code">
       <center>
         <div class="bordeado2">
           <img src="${qrCodeData}" alt="Codigo QR" width="150" height="150"/>
         </div>
+        ${alanubeData?.securityCode ? `<div style="font-size:9px;font-weight:bold;margin-top:3px">${labels.securityCode}: ${alanubeData.securityCode}</div>` : ''}
       </center>
     </div>` : ''}
 
-    ${isOn(ticketConfig.show_footer) ? `<div class="linea" style="margin-top: 8px;"></div><div style="text-align:center;">${ticketConfig.footer_text || ''}</div>` : ''}
+    ${isOn(ticketConfig.show_footer) ? `<div class="linea" style="margin-top: 8px;"></div><div style="text-align:center;">${ticketConfig.footer_text === DEFAULT_TICKET_CONFIG.footer_text ? labels.thanks : (ticketConfig.footer_text || '')}</div>` : ''}
   </div>
 </body>
 </html>`
@@ -363,13 +438,18 @@ async function printTicket(factura: any) {
     const res = await window.db.getAll('empresa')
     if (res.success && res.data?.length > 0) empresa = res.data[0]
   } catch (_) {}
+  const logo = await resolverLogoTicket(empresa?.logoprinter || empresa?.logo)
+  if (logo) empresa = { ...empresa, logo, logoprinter: logo }
 
-  const qrCodeData = await generarQR(`https://tmposrd.com/factura/${factura.no_factura}`)
+  const alanubeData = await obtenerAlanubeData(factura)
+  const qrUrl = alanubeData.documentStampUrl || `https://tmposrd.com/factura/${factura.no_factura}`
+  const qrCodeData = await generarQR(qrUrl)
   const html = buildTicketHtml({
     factura,
     empresa,
     productos: Array.isArray(productos) ? productos : [],
     qrCodeData,
+    alanubeData,
     ticketConfig,
   })
 

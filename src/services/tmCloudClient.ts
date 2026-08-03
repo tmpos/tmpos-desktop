@@ -40,14 +40,37 @@ export async function loadConfig(): Promise<TMCloudConfig> {
   return { url: '', key: '', serviceKey: '' }
 }
 
+export function resetConfig() {
+  currentConfig = null
+}
+
+export async function ensureConfigLoaded(force = false): Promise<TMCloudConfig | null> {
+  if (!force && currentConfig?.url && (currentConfig.key || currentConfig.serviceKey)) return currentConfig
+  const cfg = await loadConfig()
+  if (!cfg.url || (!cfg.key && !cfg.serviceKey)) return null
+  currentConfig = {
+    url: normalizeUrl(cfg.url),
+    key: cfg.key.trim(),
+    serviceKey: cfg.serviceKey.trim(),
+  }
+  return currentConfig
+}
+
 export async function saveConfig(url: string, key: string, serviceKey: string) {
   if (!(window as any).electron?.invoke) throw new Error('Electron no disponible')
+  const normalized = normalizeUrl(url)
   const res = await (window as any).electron.invoke('tmcloud:saveConfig', {
-    url: normalizeUrl(url),
+    url: normalized,
     public_key: key.trim(),
     secret_key: serviceKey.trim(),
   })
   if (!res.success) throw new Error(res.error || 'No se pudo guardar configuracion de TM Cloud')
+  currentConfig = {
+    url: res.data?.url || normalized,
+    key: res.data?.public_key || key.trim(),
+    serviceKey: res.data?.secret_key || serviceKey.trim(),
+  }
+  return currentConfig
 }
 
 export function init(config: { url: string; key: string; serviceKey?: string }) {
@@ -68,6 +91,33 @@ export function getConfig() {
 
 export function isConnected() {
   return currentConfig !== null
+}
+
+export function getRealtimeUrl(table?: string, event?: 'INSERT' | 'UPDATE' | 'DELETE'): string | null {
+  if (!currentConfig?.url || !currentConfig.key) return null
+  const params = new URLSearchParams({ apikey: currentConfig.key })
+  if (table) params.set('table', table)
+  if (event) params.set('event', event)
+  return `${currentConfig.url}/realtime?${params.toString()}`
+}
+
+export function subscribeRealtime(
+  onChange: (payload: any) => void,
+  onError?: (error: Event) => void,
+  table?: string,
+) {
+  const url = getRealtimeUrl(table)
+  if (!url) throw new Error('TM Cloud no configurado')
+  const source = new EventSource(url)
+  source.addEventListener('postgres_changes', (event) => {
+    try {
+      onChange(JSON.parse((event as MessageEvent).data))
+    } catch {
+      // Ignore malformed realtime payloads and keep the stream alive.
+    }
+  })
+  source.onerror = (event) => onError?.(event)
+  return () => source.close()
 }
 
 export async function testConnection(url: string, key: string) {
@@ -186,11 +236,7 @@ export function cleanRecord(data: any, updating = false): any {
 function getStorageUrl(): string | null {
   if (!currentConfig?.url) return null
   const apiUrl = currentConfig.url.replace(/\/+$/, '')
-  const base = apiUrl.replace(/\/api\/[^/]+$/, '')
-  const projectMatch = apiUrl.match(/\/(prj_[A-Za-z0-9]+)$/i)
-  if (!projectMatch) return null
-  const projectUid = projectMatch[1]
-  return `${base}/storage/${projectUid}`
+  return apiUrl + '/storage'
 }
 
 function getStorageWriteKey(): { key: string; type: 'secret' | 'public' } | null {
@@ -200,6 +246,7 @@ function getStorageWriteKey(): { key: string; type: 'secret' | 'public' } | null
 }
 
 export async function uploadImage(file: File, directory: string): Promise<string> {
+  await ensureConfigLoaded()
   const storageUrl = getStorageUrl()
   const auth = getStorageWriteKey()
   if (!storageUrl || !auth) throw new Error('TM Cloud no configurado')
@@ -221,24 +268,53 @@ export async function uploadImage(file: File, directory: string): Promise<string
     )
   }
   const json = await res.json()
-  return json.data?.uid || json.uid || ''
+  const uid = json.data?.uid || json.data?.id || json.file?.uid || json.uid || json.id || json.data?.url || json.url || ''
+  if (!uid) throw new Error('TM Cloud no devolvio el identificador de la imagen')
+  return uid
 }
 
 export function getImageUrl(uid: string): string | null {
   const storageUrl = getStorageUrl()
   if (!storageUrl || !uid) return null
+  if (/^(data:|https?:\/\/|blob:)/i.test(uid)) return uid
   return `${storageUrl}/${uid}`
 }
 
 export async function deleteImage(uid: string): Promise<boolean> {
+  await ensureConfigLoaded()
   const storageUrl = getStorageUrl()
   const key = getStorageWriteKey()
   if (!storageUrl || !key || !uid) return false
+  if (/^(data:|blob:)/i.test(uid)) return false
   const res = await fetch(`${storageUrl}/${uid}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${key}` },
   })
   return res.ok
+}
+
+export function dataUrlToFile(dataUrl: string, fileName: string): File {
+  const [header, data] = dataUrl.split(',')
+  const mime = header.match(/data:([^;]+)/)?.[1] || 'image/jpeg'
+  const binary = atob(data || '')
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new File([bytes], fileName, { type: mime })
+}
+
+export async function uploadImageSource(source: File | string, directory: string, fileName = 'imagen.jpg'): Promise<string> {
+  if (source instanceof File) return uploadImage(source, directory)
+  if (/^(https?:\/\/|fil_)/i.test(source)) return source
+  if (/^data:/i.test(source)) return uploadImage(dataUrlToFile(source, fileName), directory)
+  throw new Error('Formato de imagen no soportado')
+}
+
+export async function uploadImageSources(sources: string[], directory: string, prefix = 'imagen'): Promise<string[]> {
+  const uploaded: string[] = []
+  for (let i = 0; i < sources.length; i++) {
+    uploaded.push(await uploadImageSource(sources[i], directory, `${prefix}-${i + 1}.jpg`))
+  }
+  return uploaded
 }
 
 export { authHeaders, getCloudApi, getCloudWriteApi, responseError, getStorageUrl, getStorageWriteKey }

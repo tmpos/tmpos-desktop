@@ -1,29 +1,53 @@
 <script setup lang="ts">
+import { getSystemCurrencyCode, getSystemLocale } from '@/i18n/localeProfiles'
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
+import InputOtp from 'primevue/inputotp'
 import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Fieldset from 'primevue/fieldset'
+import Menu from 'primevue/menu'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import TicketCuentaCobrarPrint from './TicketCuentaCobrarPrint.vue'
+import { matchesSearch } from '@/composables/useSearch'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import Swal from 'sweetalert2'
+import { resolvePrintableImage } from '@/services/printImageService'
 
 const toast = useToast()
-const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
+const router = useRouter()
+const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
 const cuentas = ref<any[]>([])
 const loading = ref(false)
 const busqueda = ref('')
 const filtroEstado = ref('')
 
+const selectedCuentas = ref<any[]>([])
+const deleteDialogVisible = ref(false)
+const deleteOtpEnviado = ref(false)
+const deleteOtpLoading = ref(false)
+const deleteOtpConfirmando = ref(false)
+const deleteOtp = ref('')
+const deleteOtpEmail = ref('')
+const deleteOtpError = ref('')
+const cuentaParaEliminar = ref<any>(null)
+
 const dialogPago = ref(false)
 const cuentaSelected = ref<any>(null)
 const montoPago = ref(0)
+const metodoPago = ref('EFECTIVO')
+const metodosPagoAbono = [
+  { label: 'Efectivo', value: 'EFECTIVO' },
+  { label: 'Transferencia', value: 'TRANSFERENCIA' },
+  { label: 'Tarjeta', value: 'TARJETA' },
+]
 const guardando = ref(false)
 const productosFactura = ref<any[]>([])
 const facturaRelacionada = ref<any>(null)
@@ -31,6 +55,41 @@ const facturaRelacionada = ref<any>(null)
 const dialogTelefono = ref(false)
 const telefonoInput = ref('')
 const cuentaTelefonoPendiente = ref<any>(null)
+
+const generandoPdf = ref(false)
+const actionMenu = ref()
+const cuentaAccion = ref<any>(null)
+const actionMenuItems = ref([
+  { label: 'Editar cuenta por cobrar', icon: 'pi pi-pencil', command: () => editarCuenta(cuentaAccion.value) },
+  { label: 'PDF Estado de Cuenta', icon: 'pi pi-file-pdf', command: () => generarPdfEstadoCuenta(cuentaAccion.value) },
+  { label: 'Imprimir Recibo', icon: 'pi pi-print', command: () => imprimirEstadoCuenta(cuentaAccion.value) },
+  { label: 'WhatsApp', icon: 'pi pi-whatsapp', command: () => enviarWhatsApp(cuentaAccion.value) },
+  { label: 'Notificar Pago', icon: 'pi pi-bell', command: () => notificarCliente(cuentaAccion.value) },
+  { separator: true },
+  { label: 'Eliminar', icon: 'pi pi-trash', command: () => confirmarBorrar(cuentaAccion.value) },
+])
+
+async function editarCuenta(cuenta: any) {
+  if (!cuenta) return
+  try {
+    const res = await window.db.getAll('facturas')
+    const factura = res.success
+      ? (res.data || []).find((item: any) => String(item.no_factura || '') === String(cuenta.no_factura || ''))
+      : null
+    if (!factura?.id) {
+      toast.add({ severity: 'warn', summary: 'Factura no encontrada', detail: 'No se encontro la factura relacionada con esta cuenta', life: 3500 })
+      return
+    }
+    await router.push({ name: 'editar-cuenta-cobrar', params: { facturaId: factura.id } })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo abrir la cuenta por cobrar', life: 3500 })
+  }
+}
+
+function toggleActionMenu(event: Event, cuenta: any) {
+  cuentaAccion.value = cuenta
+  actionMenu.value.toggle(event)
+}
 
 const ticketRef = ref<InstanceType<typeof TicketCuentaCobrarPrint> | null>(null)
 
@@ -43,22 +102,24 @@ const estados = [
 
 const cuentasFiltradas = computed(() => {
   let data = cuentas.value
-  const texto = busqueda.value.toLowerCase().trim()
-  if (texto) {
-    data = data.filter(c =>
-      c.nombre_cliente?.toLowerCase().includes(texto) ||
-      c.no_factura?.toLowerCase().includes(texto) ||
-      c.telefono_cliente?.toLowerCase().includes(texto)
-    )
-  }
+  if (busqueda.value) data = data.filter(c => matchesSearch(c, busqueda.value, ['nombre_cliente', 'no_factura', 'telefono_cliente', 'cod_cliente', 'estado']))
   if (filtroEstado.value) {
     data = data.filter(c => c.estado === filtroEstado.value)
   }
   return data
 })
 
+const cuentasParaEliminar = computed(() => {
+  if (cuentaParaEliminar.value) return [cuentaParaEliminar.value]
+  return selectedCuentas.value || []
+})
+
+const totalSeleccionadoEliminar = computed(() =>
+  cuentasParaEliminar.value.reduce((sum, c) => sum + Number(c?.total || 0), 0)
+)
+
 function formatCurrency(n: number): string {
-  return Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 function formatFecha(fechaStr: string): string {
@@ -66,6 +127,146 @@ function formatFecha(fechaStr: string): string {
   const d = new Date(fechaStr)
   if (isNaN(d.getTime())) return fechaStr
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
+}
+
+function buildEstadoCuentaHtml(cuenta: any, empresa: any, pagos: any[], productos: any[] = [], logoResuelto = ''): string {
+  const logo = logoResuelto || String(empresa?.logoprinter || empresa?.logo || '').trim()
+  const ahora = new Date()
+  const fecha = `${String(ahora.getDate()).padStart(2, '0')}/${String(ahora.getMonth() + 1).padStart(2, '0')}/${ahora.getFullYear()} ${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`
+  const pagosHtml = pagos.map((p: any, i: number) => `
+    <tr>
+      <td class="text-center">${i + 1}</td>
+      <td class="text-center">${p.fecha || ''} ${p.hora || ''}</td>
+      <td>${p.metodo || p.metodo_pago || 'ABONO'}</td>
+      <td>${p.nota || ''}</td>
+      <td class="text-right">${getSystemCurrencyCode()} ${formatCurrency(p.monto || p.cantidad)}</td>
+    </tr>
+  `).join('')
+  const productosHtml = productos.map((p: any, i: number) => {
+    const cantidad = Number(p.cantidad || 1)
+    const precio = Number(p.precio ?? p.precio_venta ?? 0)
+    const identificador = p.imei ? `IMEI: ${p.imei}` : p.serial ? `Serial: ${p.serial}` : ''
+    return `<tr><td>${i + 1}</td><td><strong>${p.nombre || p.descripcion || 'Producto'}</strong>${identificador ? `<small>${identificador}</small>` : ''}</td><td class="text-right">${cantidad}</td><td class="text-right">${getSystemCurrencyCode()} ${formatCurrency(precio)}</td><td class="text-right">${getSystemCurrencyCode()} ${formatCurrency(cantidad * precio)}</td></tr>`
+  }).join('') || '<tr><td colspan="5" class="empty">Sin productos registrados</td></tr>'
+  const total = Number(cuenta.total || 0)
+  const abonado = Number(cuenta.abonado || 0)
+  const porcentaje = total > 0 ? Math.min(100, (abonado / total) * 100) : 0
+  const estado = Number(cuenta.saldo || 0) <= 0 ? 'PAGADA' : String(cuenta.estado || 'ACTIVA').toUpperCase()
+  const estadoClass = estado === 'PAGADA' ? 'paid' : estado === 'VENCIDA' ? 'overdue' : 'active'
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Estado de Cuenta ${cuenta.no_factura || ''}</title>
+  <style>
+    * { box-sizing: border-box; }
+    @page{size:A4;margin:12mm}body{margin:0;color:#172033;font-family:Arial,Helvetica,sans-serif;font-size:11px}.page{border:1px solid #d8e0ea;min-height:270mm}.header{background:linear-gradient(120deg,#102a43,#1e4f7a);color:#fff;padding:25px 30px;display:flex;justify-content:space-between;align-items:center}.brand{display:flex;align-items:center;gap:16px}.header img{width:72px;height:72px;object-fit:contain;background:#fff;border-radius:8px;padding:5px}.header h1{margin:0 0 4px;font-size:21px}.header p{margin:2px 0;color:#dbeafe}.document{text-align:right}.document small{letter-spacing:1.8px;color:#93c5fd}.document h2{font-size:24px;margin:5px 0}.content{padding:25px 30px}.info-grid{display:grid;grid-template-columns:1.3fr 1fr .6fr;gap:12px}.info-box{border:1px solid #dbe3ec;border-radius:8px;padding:13px 15px;background:#f8fafc}.info-box p{margin:4px 0}.label{display:block;text-transform:uppercase;letter-spacing:.8px;font-size:8px;font-weight:bold;color:#64748b;margin-bottom:6px}.status{display:inline-block;border-radius:99px;padding:6px 12px;font-weight:bold}.paid{background:#dcfce7;color:#166534}.active{background:#dbeafe;color:#1d4ed8}.overdue{background:#fee2e2;color:#b91c1c}.totals{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid #dbe3ec;border-radius:10px;overflow:hidden;margin:16px 0}.total-card{padding:17px 18px;border-right:1px solid #dbe3ec}.total-card:last-child{border:0;background:#fff7ed}.total-card .label{font-size:9px}.total-card .value{font-size:22px;font-weight:bold}.progress{height:7px;background:#e5e7eb;border-radius:99px;overflow:hidden;margin-bottom:23px}.bar{height:100%;width:${porcentaje}%;background:#059669}.section{margin-top:22px}.section h3{font-size:13px;color:#102a43;border-bottom:2px solid #1e4f7a;padding-bottom:7px;text-transform:uppercase}table{width:100%;border-collapse:collapse}th{background:#edf3f8;color:#334e68;text-transform:uppercase;font-size:8px;text-align:left}th,td{padding:8px 7px;border-bottom:1px solid #e2e8f0}tbody tr:nth-child(even){background:#fafcff}td small{display:block;color:#64748b;margin-top:3px}.empty{text-align:center;color:#94a3b8;padding:20px}
+    .text-center { text-align: center; }
+    .text-right { text-align: right; }
+    .footer{display:flex;justify-content:space-between;border-top:1px solid #dbe3ec;margin-top:26px;padding-top:10px;font-size:8px;color:#64748b}
+  </style>
+</head>
+<body>
+  <div class="page"><div class="header"><div class="brand">${logo ? `<img src="${logo}">` : ''}<div><h1>${empresa.nombre || 'MI EMPRESA'}</h1><p>${empresa.legal || ''}${empresa.rnc ? ` · RNC: ${empresa.rnc}` : ''}</p><p>${empresa.direccion || ''}</p><p>${empresa.telefono || ''}${empresa.email ? ` · ${empresa.email}` : ''}</p></div></div><div class="document"><small>DOCUMENTO FINANCIERO</small><h2>ESTADO DE CUENTA</h2><p>Factura #${cuenta.no_factura || cuenta.id}</p><p>Emitido: ${fecha}</p></div></div><div class="content">
+    <div class="info-grid"><div class="info-box"><span class="label">Cliente</span><strong>${cuenta.nombre_cliente || 'CONSUMIDOR FINAL'}</strong><p>Codigo: ${cuenta.cod_cliente || '-'} · Telefono: ${cuenta.telefono_cliente || '-'}</p></div><div class="info-box"><span class="label">Informacion del credito</span><strong>Factura #${cuenta.no_factura || '-'}</strong><p>Venta: ${formatFecha(cuenta.fecha_venta) || '-'}</p><p>Vencimiento: ${formatFecha(cuenta.fecha_vencimiento) || '-'}</p></div><div class="info-box"><span class="label">Estado actual</span><span class="status ${estadoClass}">${estado}</span><p>${pagos.length} abono(s)</p></div></div>
+
+    <div class="totals">
+      <div class="total-card">
+        <div class="label">Total</div>
+        <div class="value" style="color:#2563eb;">${getSystemCurrencyCode()} ${formatCurrency(cuenta.total)}</div>
+      </div>
+      <div class="total-card">
+        <div class="label">Abonado</div>
+        <div class="value" style="color:#16a34a;">${getSystemCurrencyCode()} ${formatCurrency(cuenta.abonado)}</div>
+      </div>
+      <div class="total-card">
+        <div class="label">Saldo Pendiente</div>
+        <div class="value" style="color:#dc2626;">${getSystemCurrencyCode()} ${formatCurrency(cuenta.saldo)}</div>
+      </div>
+    </div>
+
+    <div class="progress"><div class="bar"></div></div>
+    <div class="section"><h3>Detalle de productos facturados</h3><table><thead><tr><th>#</th><th>Descripcion</th><th class="text-right">Cantidad</th><th class="text-right">Precio unitario</th><th class="text-right">Importe</th></tr></thead><tbody>${productosHtml}</tbody></table></div>
+    <div class="section"><h3>Historial de abonos</h3>${pagos.length ? `<table>
+      <thead>
+        <tr><th>#</th><th>Fecha y hora</th><th>Metodo</th><th>Referencia / nota</th><th class="text-right">Monto</th></tr>
+      </thead>
+      <tbody>
+        ${pagosHtml}
+        <tr style="font-weight:700;background:#f9fafb;">
+          <td colspan="4" class="text-right">Total Abonado:</td>
+          <td class="text-right">${getSystemCurrencyCode()} ${formatCurrency(cuenta.abonado)}</td>
+        </tr>
+      </tbody>
+    </table>` : '<div class="empty">Sin abonos registrados</div>'}</div>
+
+    <div class="footer"><span>Este documento refleja los movimientos registrados hasta su fecha de emision.</span><span>Generado por TMPOS</span></div></div></div>
+</body>
+</html>`
+}
+
+async function generarPdfEstadoCuenta(cuenta: any) {
+  generandoPdf.value = true
+  try {
+    let empresa: any = {}
+    try {
+      const res = await window.db.getAll('empresa')
+      if (res.success && res.data?.length) empresa = res.data[0]
+    } catch {}
+    const pagos: any[] = []
+    try {
+      const p = JSON.parse(cuenta.pagos || '[]')
+      if (Array.isArray(p)) pagos.push(...p)
+    } catch {}
+    let productos: any[] = []
+    try {
+      const facturasRes = await window.db.getAll('facturas')
+      const factura = facturasRes.success
+        ? (facturasRes.data || []).find((item: any) => String(item.no_factura || '') === String(cuenta.no_factura || ''))
+        : null
+      const detalle = typeof factura?.productos === 'string' ? JSON.parse(factura.productos || '[]') : factura?.productos
+      productos = Array.isArray(detalle) ? detalle : []
+    } catch {}
+    const logo = await resolvePrintableImage(empresa?.logoprinter || empresa?.logo)
+    const html = buildEstadoCuentaHtml(cuenta, empresa, pagos, productos, logo)
+    const nombre = `Estado_Cuenta_${cuenta.no_factura || cuenta.id}.pdf`
+    const res = await window.electron.invoke('generate:pdf', html, nombre) as { success: boolean; dataUrl?: string; error?: string }
+    if (res.success && res.dataUrl) {
+      const resp = await fetch(res.dataUrl)
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const result = await Swal.fire({
+        title: `Estado de Cuenta #${cuenta.no_factura || ''}`,
+        html: `<iframe src="${url}" style="width:100%;height:75vh;border:0;border-radius:6px;background:#fff"></iframe>`,
+        width: '90vw',
+        padding: '1rem',
+        showCancelButton: true,
+        confirmButtonText: 'Descargar PDF',
+        cancelButtonText: 'Cerrar',
+        focusConfirm: false,
+        customClass: { popup: 'swal-pdf-popup' },
+      })
+      if (result.isConfirmed) {
+        const resp2 = await fetch(url)
+        const blob2 = await resp2.blob()
+        const buffer = await blob2.arrayBuffer()
+        const bytes = new Uint8Array(buffer)
+        let binary = ''
+        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+        const dataUrl = `data:application/pdf;base64,${btoa(binary)}`
+        const saveRes = await window.electron.invoke('save:pdf', dataUrl, nombre) as { success: boolean; error?: string }
+        if (saveRes.success) toast.add({ severity: 'success', summary: 'Guardado', detail: 'PDF descargado', life: 2000 })
+        else toast.add({ severity: 'error', summary: 'Error', detail: saveRes.error || 'No se pudo guardar', life: 3000 })
+      }
+      URL.revokeObjectURL(url)
+    } else {
+      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo generar el PDF', life: 3000 })
+    }
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error.message || 'Error al generar PDF', life: 3000 })
+  } finally {
+    generandoPdf.value = false
+  }
 }
 
 function getEstadoSeverity(estado: string): 'success' | 'danger' | 'warn' | 'info' | undefined {
@@ -86,6 +287,100 @@ async function cargarCuentas() {
   loading.value = false
 }
 
+function confirmarBorrar(cuenta: any) {
+  cuentaParaEliminar.value = cuenta
+  selectedCuentas.value = []
+  deleteOtpEnviado.value = false
+  deleteOtp.value = ''
+  deleteOtpEmail.value = ''
+  deleteOtpError.value = ''
+  deleteDialogVisible.value = true
+}
+
+async function confirmarBorrarSeleccionadas() {
+  if (!selectedCuentas.value.length) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona al menos una cuenta', life: 2500 })
+    return
+  }
+  cuentaParaEliminar.value = null
+  deleteOtpEnviado.value = false
+  deleteOtp.value = ''
+  deleteOtpEmail.value = ''
+  deleteOtpError.value = ''
+  deleteDialogVisible.value = true
+}
+
+async function solicitarOtpEliminarCuenta() {
+  const cuentas = cuentasParaEliminar.value
+  if (!cuentas.length) return
+  deleteOtpError.value = ''
+  deleteOtp.value = ''
+  deleteOtpLoading.value = true
+  try {
+    const res = await window.electron.invoke('facturas:solicitarOtpEliminar', {
+      id: cuentas[0]?.id,
+      facturaIds: cuentas.map(c => c.id),
+      no_factura: cuentas.length === 1 ? cuentas[0]?.no_factura : '',
+      nombre_cliente: cuentas.length === 1 ? cuentas[0]?.nombre_cliente : '',
+      cantidad: cuentas.length,
+      total: totalSeleccionadoEliminar.value,
+    }) as any
+    if (res.success) {
+    deleteOtpEmail.value = res.data?.networkUrl || ''
+      deleteOtpEnviado.value = true
+      toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
+    } else {
+      deleteOtpError.value = res.error || 'No se pudo enviar el codigo'
+    }
+  } catch (e: any) {
+    deleteOtpError.value = e.message || 'Error solicitando codigo'
+  } finally {
+    deleteOtpLoading.value = false
+  }
+}
+
+async function borrar() {
+  try {
+    const cuentas = cuentasParaEliminar.value
+    if (!cuentas.length) return
+    deleteOtpError.value = ''
+    const codigo = String(deleteOtp.value || '').replace(/\D/g, '')
+    if (!/^\d{4}$/.test(codigo)) {
+      deleteOtpError.value = 'Introduce el codigo de 4 digitos'
+      return
+    }
+    deleteOtpConfirmando.value = true
+    const otpRes = await window.electron.invoke('facturas:confirmarOtpEliminar', {
+      facturaId: cuentas[0]?.id,
+      facturaIds: cuentas.map(c => c.id),
+      codigo,
+    }) as any
+    if (!otpRes.success) {
+      deleteOtpError.value = otpRes.error || 'Codigo no valido'
+      return
+    }
+
+    let eliminadas = 0
+    for (const cuenta of cuentas) {
+      const res = await window.db.delete('cuentas_cobrar', cuenta.id)
+      if (res.success) eliminadas++
+      else {
+        toast.add({ severity: 'error', summary: 'Error', detail: res.error || `No se pudo eliminar ${cuenta.no_factura || cuenta.id}`, life: 3000 })
+        return
+      }
+    }
+    toast.add({ severity: 'success', summary: 'Exito', detail: `${eliminadas} cuenta(s) eliminada(s)`, life: 3000 })
+    deleteDialogVisible.value = false
+    selectedCuentas.value = []
+    cuentaParaEliminar.value = null
+    await cargarCuentas()
+  } catch (error) {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'Error al eliminar', life: 3000 })
+  } finally {
+    deleteOtpConfirmando.value = false
+  }
+}
+
 const pagosHistorialParsed = computed(() => {
   if (!cuentaSelected.value) return []
   try {
@@ -97,6 +392,7 @@ const pagosHistorialParsed = computed(() => {
 async function abrirPago(cuenta: any) {
   cuentaSelected.value = cuenta
   montoPago.value = cuenta.saldo
+  metodoPago.value = 'EFECTIVO'
   productosFactura.value = []
   facturaRelacionada.value = null
   dialogPago.value = true
@@ -131,6 +427,11 @@ async function registrarPago() {
   }
   guardando.value = true
   try {
+    const turnoRes = await window.electron.invoke('caja:getTurnoActivo', almacenStore.activeUid || '') as any
+    if (!turnoRes?.success || !turnoRes.data?.id) {
+      toast.add({ severity: 'warn', summary: 'Caja cerrada', detail: 'Abre un turno de caja antes de registrar el pago', life: 3500 })
+      return
+    }
     // Agregar pago al historial primero
     let pagosHistorial: any[] = []
     try {
@@ -142,8 +443,12 @@ async function registrarPago() {
     pagosHistorial.push({
       nopago: pagosHistorial.length + 1,
       cantidad: montoPago.value,
-      fecha: ahora.toLocaleDateString('es-DO'),
+      fecha: `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}-${String(ahora.getDate()).padStart(2, '0')}`,
       hora: `${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`,
+      metodo: metodoPago.value,
+      turno_id: Number(turnoRes.data.id),
+      almacen_uid: almacenStore.activeUid || cuentaSelected.value.almacen_uid || '',
+      created_at: ahora.toISOString(),
     })
 
     // Recalcular abonado sumando todos los pagos
@@ -310,10 +615,20 @@ onMounted(cargarCuentas)
           </span>
           <Select v-model="filtroEstado" :options="estados" optionLabel="label" optionValue="value" placeholder="Estado" class="w-32" fluid />
         </div>
-        <Button label="Actualizar" icon="pi pi-refresh" severity="secondary" @click="cargarCuentas" />
+        <div class="flex items-center gap-2">
+          <Button
+            v-if="selectedCuentas.length"
+            :label="`Eliminar (${selectedCuentas.length})`"
+            icon="pi pi-trash"
+            severity="danger"
+            @click="confirmarBorrarSeleccionadas"
+          />
+          <Button label="Actualizar" icon="pi pi-refresh" severity="secondary" @click="cargarCuentas" />
+        </div>
       </div>
 
       <DataTable
+        v-model:selection="selectedCuentas"
         :value="cuentasFiltradas"
         :loading="loading"
         stripedRows
@@ -324,26 +639,23 @@ onMounted(cargarCuentas)
         responsiveLayout="scroll"
         @row-click="abrirPago($event.data)"
       >
-        <Column header="" style="width: 8rem">
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
+        <Column header="" style="width: 4rem">
           <template #body="{ data }">
-            <div class="flex gap-1">
-              <Button icon="pi pi-print" severity="info" text rounded size="small" @click.stop="imprimirEstadoCuenta(data)" v-tooltip="'Imprimir recibo'" />
-              <Button icon="pi pi-whatsapp" severity="success" text rounded size="small" @click.stop="enviarWhatsApp(data)" v-tooltip="'Compartir por WhatsApp'" />
-              <Button icon="pi pi-bell" severity="warn" text rounded size="small" @click.stop="notificarCliente(data)" v-tooltip="'Notificar pago pendiente'" />
-            </div>
+            <Button icon="pi pi-ellipsis-v" severity="secondary" text rounded @click.stop="toggleActionMenu($event, data)" v-tooltip="'Acciones'" />
           </template>
         </Column>
         <Column field="no_factura" header="Factura" sortable style="width: 8rem" />
         <Column field="nombre_cliente" header="Cliente" sortable />
         <Column field="total" header="Total" sortable style="width: 8rem">
-          <template #body="{ data }">${{ formatCurrency(data.total) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.total) }}</template>
         </Column>
         <Column field="abonado" header="Abonado" sortable style="width: 8rem">
-          <template #body="{ data }">${{ formatCurrency(data.abonado) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.abonado) }}</template>
         </Column>
         <Column field="saldo" header="Saldo" sortable style="width: 8rem">
           <template #body="{ data }">
-            <span :class="data.saldo > 0 ? 'text-red-600 font-bold' : 'text-green-600'">${{ formatCurrency(data.saldo) }}</span>
+            <span :class="data.saldo > 0 ? 'text-red-600 font-bold' : 'text-green-600'">{{ $formatMoney(data.saldo) }}</span>
           </template>
         </Column>
         <Column field="fecha_venta" header="Fecha" sortable style="width: 7rem">
@@ -361,7 +673,7 @@ onMounted(cargarCuentas)
       </DataTable>
     </Fieldset>
 
-    <Dialog v-model:visible="dialogPago" header="Registrar Pago" modal :style="{ width: '36rem' }">
+    <Dialog v-model:visible="dialogPago" header="Registrar Pago" modal :style="{ width: '50rem' }">
       <div v-if="cuentaSelected" class="space-y-4 pt-2">
         <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-3 space-y-2 text-sm">
           <div class="flex justify-between">
@@ -374,15 +686,15 @@ onMounted(cargarCuentas)
           </div>
           <div class="flex justify-between">
             <span class="text-surface-500">Total</span>
-            <span>${{ formatCurrency(cuentaSelected.total) }}</span>
+            <span>{{ $formatMoney(cuentaSelected.total) }}</span>
           </div>
           <div class="flex justify-between">
             <span class="text-surface-500">Abonado</span>
-            <span class="text-green-600">${{ formatCurrency(cuentaSelected.abonado) }}</span>
+            <span class="text-green-600">{{ $formatMoney(cuentaSelected.abonado) }}</span>
           </div>
           <div class="flex justify-between font-bold border-t border-surface-200 dark:border-surface-700 pt-2">
             <span>Saldo pendiente</span>
-            <span class="text-red-600">${{ formatCurrency(cuentaSelected.saldo) }}</span>
+            <span class="text-red-600">{{ $formatMoney(cuentaSelected.saldo) }}</span>
           </div>
         </div>
 
@@ -395,12 +707,12 @@ onMounted(cargarCuentas)
                 <span class="font-semibold">{{ prod.nombre || prod.descripcion || prod.producto || 'Producto' }}</span>
                 <span class="text-surface-500 ml-2">x{{ prod.cantidad || prod.quantity || 1 }}</span>
               </div>
-              <span class="font-semibold">${{ formatCurrency(prod.total || ((prod.precio_venta || prod.precio_unitario || prod.precio || 0) * (prod.cantidad || prod.quantity || 1))) }}</span>
+              <span class="font-semibold">{{ $formatMoney(prod.total || ((prod.precio_venta || prod.precio_unitario || prod.precio || 0) * (prod.cantidad || prod.quantity || 1))) }}</span>
             </div>
           </div>
           <div v-if="facturaRelacionada" class="flex justify-between font-bold border-t border-surface-200 dark:border-surface-700 pt-2 mt-2">
             <span>Total factura</span>
-            <span>${{ formatCurrency(facturaRelacionada.total) }}</span>
+            <span>{{ $formatMoney(facturaRelacionada.total) }}</span>
           </div>
         </div>
 
@@ -414,7 +726,7 @@ onMounted(cargarCuentas)
                 <span class="text-surface-500 ml-2">{{ pago.fecha }} {{ pago.hora }}</span>
               </div>
               <div class="flex items-center gap-2">
-                <span class="text-green-600 font-semibold">${{ formatCurrency(pago.cantidad) }}</span>
+                <span class="text-green-600 font-semibold">{{ $formatMoney(pago.cantidad) }}</span>
                 <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click="eliminarPago(index)" v-tooltip="'Eliminar pago'" />
               </div>
             </div>
@@ -427,6 +739,7 @@ onMounted(cargarCuentas)
           <div class="space-y-1">
             <label class="text-sm font-semibold">Monto a abonar (RD$)</label>
             <InputNumber v-model="montoPago" :min="0" :max="cuentaSelected.saldo" fluid @focus="(e: any) => e.target.select()" />
+            <Select v-model="metodoPago" :options="metodosPagoAbono" optionLabel="label" optionValue="value" placeholder="Metodo de pago" fluid />
           </div>
 
           <div class="flex gap-2 pt-1">
@@ -454,6 +767,50 @@ onMounted(cargarCuentas)
       </template>
     </Dialog>
 
+    <Dialog
+      v-model:visible="deleteDialogVisible"
+      header="Eliminar cuenta por cobrar"
+      modal
+      :style="{ width: '24rem' }"
+    >
+      <div class="space-y-4">
+        <div class="flex items-center gap-3">
+          <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
+          <span v-if="cuentasParaEliminar.length === 1">Seguro que deseas eliminar la cuenta <strong>{{ cuentasParaEliminar[0]?.no_factura }}</strong>?</span>
+          <span v-else>Seguro que deseas eliminar <strong>{{ cuentasParaEliminar.length }}</strong> cuentas seleccionadas?</span>
+        </div>
+        <div v-if="cuentasParaEliminar.length > 1" class="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-xs text-red-700 dark:text-red-300">
+          Total combinado: <strong>{{ $formatMoney(totalSeleccionadoEliminar) }}</strong>
+        </div>
+        <div v-if="deleteOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
+          <p class="text-xs text-surface-500 text-center">
+            Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.
+          </p>
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly />
+        </div>
+        <p v-if="deleteOtpError" class="text-red-500 text-xs text-center">{{ deleteOtpError }}</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
+        <Button
+          v-if="!deleteOtpEnviado"
+          label="Enviar OTP"
+          icon="pi pi-envelope"
+          severity="danger"
+          :loading="deleteOtpLoading"
+          @click="solicitarOtpEliminarCuenta"
+        />
+        <Button
+          v-else
+          label="Eliminar"
+          icon="pi pi-trash"
+          severity="danger"
+          :loading="deleteOtpConfirmando"
+          @click="borrar"
+        />
+      </template>
+    </Dialog>
+
     <Dialog v-model:visible="dialogTelefono" header="Telefono del cliente" modal :style="{ width: '90%', maxWidth: '400px' }">
       <div class="space-y-3">
         <p class="text-sm text-surface-500">El cliente no tiene telefono registrado. Ingresa el numero para enviar por WhatsApp:</p>
@@ -464,5 +821,6 @@ onMounted(cargarCuentas)
         <Button label="Enviar WhatsApp" icon="pi pi-whatsapp" severity="success" @click="confirmarTelefonoEnviar" />
       </template>
     </Dialog>
+    <Menu ref="actionMenu" :model="actionMenuItems" popup />
   </div>
 </template>

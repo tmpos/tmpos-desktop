@@ -1,7 +1,61 @@
 import * as tmc from './tmCloudClient'
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
-const LOCAL_SYSTEM_TABLES = ['configuracion', 'tmcloud_config', 'sync_deletes', 'bitacora', 'licencia']
+// Las credenciales SMTP son configuracion sensible de cada instalacion. No se
+// descargan ni se sobrescriben mediante sincronizacion o realtime.
+const LOCAL_SYSTEM_TABLES = ['configuracion', 'tmcloud_config', 'sync_deletes', 'bitacora', 'licencia', 'correo', 'otp_local_config']
+
+// imei depende de telefonos (telefono_uid) y serial depende de electrodomesticos
+// (equipo_uid): upsertLocal busca el id local del "padre" para resolver id_equi
+// en el momento en que procesa la fila. El servidor devuelve las tablas en
+// orden alfabetico, asi que en una instalacion nueva "imei" se procesaba antes
+// que "telefonos" -- la tabla local aun estaba vacia, y CADA imei quedaba con
+// id_equi null para siempre (nada vuelve a marcarlos como "cambiados" en
+// sincronizaciones futuras, asi que nunca se autocorregian). Esta prioridad
+// obliga a procesar primero las tablas "padre".
+const TABLE_DEPENDENCY_PRIORITY: Record<string, number> = {
+  telefonos: 0,
+  electrodomesticos: 0,
+  imei: 1,
+  serial: 1,
+}
+
+function sortTablesByDependency<T>(items: T[], getName: (item: T) => string): T[] {
+  return [...items].sort((a, b) => (TABLE_DEPENDENCY_PRIORITY[getName(a)] ?? 0.5) - (TABLE_DEPENDENCY_PRIORITY[getName(b)] ?? 0.5))
+}
+
+// Red de seguridad ademas del orden de descarga: si por cualquier motivo un
+// imei/serial quedo con id_equi vacio pero ya tiene el uid del telefono o
+// electrodomestico (telefono_uid/equipo_uid), lo reconecta usando lo que haya
+// localmente en ese momento. Barato de correr siempre: si no hay nada roto,
+// no actualiza nada.
+async function repairRelationalLinks(): Promise<void> {
+  try {
+    const [imeiRows, telefonos] = await Promise.all([getLocalRows('imei'), getLocalRows('telefonos')])
+    const telefonosByUid = new Map(telefonos.filter((t: any) => t.uid).map((t: any) => [String(t.uid), t]))
+    for (const imei of imeiRows) {
+      if (imei.id_equi) continue
+      const uid = String(imei.telefono_uid || '').trim()
+      if (!uid) continue
+      const telefono = telefonosByUid.get(uid)
+      if (!telefono) continue
+      await (window as any).db.update('imei', imei.id, { id_equi: telefono.id, equipo: telefono.nombre || imei.equipo || '' })
+    }
+  } catch { /* se reintenta en el proximo ciclo */ }
+
+  try {
+    const [serialRows, electrodomesticos] = await Promise.all([getLocalRows('serial'), getLocalRows('electrodomesticos')])
+    const equiposByUid = new Map(electrodomesticos.filter((t: any) => t.uid).map((t: any) => [String(t.uid), t]))
+    for (const serial of serialRows) {
+      if (serial.id_equi) continue
+      const uid = String(serial.equipo_uid || '').trim()
+      if (!uid) continue
+      const equipo = equiposByUid.get(uid)
+      if (!equipo) continue
+      await (window as any).db.update('serial', serial.id, { id_equi: equipo.id, equipo: equipo.nombre || serial.equipo || '' })
+    }
+  } catch { /* se reintenta en el proximo ciclo */ }
+}
 
 const SYSTEM_TABLE_DEFS: Record<string, string[]> = {
   configuracion: ['id INTEGER PRIMARY KEY AUTOINCREMENT', 'clave TEXT UNIQUE NOT NULL', 'valor TEXT DEFAULT ""', 'tipo TEXT DEFAULT "string"', 'categoria TEXT DEFAULT "general"', 'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP', 'updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP'],
@@ -16,6 +70,8 @@ interface ServerColumn {
   type: string
   nullable?: boolean
   primary?: boolean
+  pk?: boolean
+  notnull?: boolean
 }
 
 interface ServerTableInfo {
@@ -50,10 +106,13 @@ export interface SyncStatus {
   mode?: SyncMode
   result?: SyncResult
   details?: SyncDetail[]
+  realtime?: boolean
 }
 
 let intervalId: ReturnType<typeof setInterval> | null = null
+let realtimeStop: (() => void) | null = null
 let syncingInProgress = false
+let realtimeConnected = false
 let currentMode: SyncMode = 'ambos'
 let onStatusChange: ((status: SyncStatus) => void) | null = null
 let onSyncComplete: ((details: SyncDetail[]) => void) | null = null
@@ -78,8 +137,18 @@ export function isOnline(): boolean {
   return currentMode !== 'offline' && tmc.isConnected()
 }
 
+export function isRealtimeConnected(): boolean {
+  return realtimeConnected
+}
+
 function notify(status: SyncStatus) {
   onStatusChange?.(status)
+}
+
+function notifyLocalRealtimeChange(eventType: 'INSERT' | 'UPDATE', tabla: string, uid?: string) {
+  window.dispatchEvent(new CustomEvent('tmcloud:local-change', {
+    detail: { eventType, table: tabla, uid },
+  }))
 }
 
 function nowSql(): string {
@@ -124,6 +193,17 @@ async function ensureCloudApi(): Promise<boolean> {
   }
 }
 
+async function reloadCloudApi(): Promise<boolean> {
+  const config = await tmc.loadConfig()
+  if (!config.url || !config.key) return false
+  try {
+    tmc.init(config)
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function getLocalRows(tabla: string): Promise<any[]> {
   try {
     const res = await (window as any).db.getAll(tabla)
@@ -137,23 +217,39 @@ function timestamp(row: any): string {
   return String(row?.updated_at || row?.created_at || '')
 }
 
-function sameData(a: any, b: any): boolean {
-  const clean = (row: any) => {
-    const value = { ...row }
-    delete value.id
-    delete value._rowId
-    delete value.created_at
-    delete value.updated_at
-    return value
+// El esquema local tiene columnas legado que el servidor no conoce (campos
+// viejos de una integracion anterior, siempre null). Antes se comparaban los
+// dos objetos completos con JSON.stringify, asi que esas columnas de mas
+// hacian que CUALQUIER fila descargada pareciera "distinta" aunque nada
+// hubiera cambiado realmente -- por eso una sincronizacion podia reportar
+// "144 imei actualizados" sin que el usuario hubiera tocado nada. Ahora solo
+// se comparan los campos que realmente vienen en la fila del servidor.
+const IGNORED_COMPARE_FIELDS = new Set(['id', '_rowId', 'created_at', 'updated_at'])
+
+function sameData(existing: any, incoming: any): boolean {
+  for (const key of Object.keys(incoming || {})) {
+    if (IGNORED_COMPARE_FIELDS.has(key)) continue
+    const local = existing?.[key] ?? null
+    const remote = incoming[key] ?? null
+    if (String(local) !== String(remote)) return false
   }
-  return JSON.stringify(clean(a)) === JSON.stringify(clean(b))
+  return true
 }
 
 interface CloudSyncChanges {
   updated: any[]
-  deleted: string[]
+  // El endpoint /sync?since= devuelve cada borrado como un objeto
+  // { uid, data, deleted_at }, no como un string suelto.
+  deleted: Array<{ uid: string } | string>
 }
 
+// Devuelve null cuando la descarga realmente fallo (error de red, servidor
+// caido, respuesta invalida) para que el llamador NO avance la marca de
+// "ultimo_sync_tm". Si esa marca avanzara igual en un fallo, un borrado o
+// cambio ocurrido justo en ese momento quedaria fuera de rango en el
+// proximo "since" y nunca se volveria a descargar (revive/queda "pegado").
+// Solo se devuelve {} cuando el servidor confirmo una respuesta valida sin
+// cambios pendientes.
 async function fetchCloudSyncAll(since?: string): Promise<Record<string, CloudSyncChanges> | null> {
   const api = tmc.getCloudApi()
   if (!api) throw new Error('TM Cloud no configurado')
@@ -163,9 +259,7 @@ async function fetchCloudSyncAll(since?: string): Promise<Record<string, CloudSy
   try {
     const res = await fetch(url, { headers: tmc.authHeaders(api.key) })
     if (!res.ok) {
-      if (res.status === 404) return null
-      if (res.status === 400 || res.status === 429) return {}
-      throw new Error(await tmc.responseError(res))
+      return null
     }
     const json = await res.json()
     // Try various possible response shapes:
@@ -173,9 +267,9 @@ async function fetchCloudSyncAll(since?: string): Promise<Record<string, CloudSy
     //   2. { data: { changes: { table: { updated, deleted } } } }
     //   3. { data: { table: { updated, deleted } } }
     const raw = json.changes || json.data?.changes || json.data
-    if (!raw || typeof raw !== 'object') return {}
+    if (!raw || typeof raw !== 'object') return null
     return raw as Record<string, CloudSyncChanges>
-  } catch { return {} }
+  } catch { return null }
 }
 
 async function fetchCloudRows(tabla: string, since?: string): Promise<any[]> {
@@ -217,23 +311,46 @@ async function fetchCloudRows(tabla: string, since?: string): Promise<any[]> {
   return all
 }
 
+export async function fetchServerSchema(): Promise<ServerTableInfo[]> {
+  return fetchServerFullSchema()
+}
+
+// El esquema remoto casi nunca cambia entre un ciclo de sync y el siguiente,
+// pero antes se pedia de nuevo por completo (GET /schema) en CADA sincronizacion
+// periodica Y en CADA guardado individual que usa pushLocalRowToCloud (el cual
+// se llama despues de casi cualquier alta/edicion en la app). En una sesion
+// activa eso significaba decenas de peticiones identicas por minuto. Se cachea
+// por un rato corto para no saturar el servidor sin dejar de detectar cambios
+// reales de esquema en un tiempo razonable.
+const SCHEMA_CACHE_TTL_MS = 20000
+let schemaCache: { data: ServerTableInfo[]; fetchedAt: number } | null = null
+
+export function invalidateSchemaCache(): void {
+  schemaCache = null
+}
+
 async function fetchServerFullSchema(): Promise<ServerTableInfo[]> {
+  if (schemaCache && Date.now() - schemaCache.fetchedAt < SCHEMA_CACHE_TTL_MS) {
+    return schemaCache.data
+  }
   const api = tmc.getCloudApi()
   if (!api) return []
   try {
     const res = await fetch(`${api.url}/schema`, { headers: tmc.authHeaders(api.key) })
     if (!res.ok) {
       if (res.status === 429) await delay(2000)
-      return []
+      return schemaCache?.data || []
     }
     const json = await res.json()
     const data = json.data || {}
-    return Object.entries(data).map(([name, info]: [string, any]) => ({
+    const parsed = Object.entries(data).map(([name, info]: [string, any]) => ({
       name,
       count: info.count || 0,
       columns: info.columns || [],
     }))
-  } catch { return [] }
+    schemaCache = { data: parsed, fetchedAt: Date.now() }
+    return parsed
+  } catch { return schemaCache?.data || [] }
 }
 
 function columnsToSqlDefs(cols: ServerColumn[]): string[] {
@@ -256,20 +373,119 @@ async function recreateLocalTable(tabla: string, columns: ServerColumn[]): Promi
   }
 }
 
-async function upsertLocal(tabla: string, cloudRow: any): Promise<'inserted' | 'updated' | 'skipped'> {
-  const localRows = await getLocalRows(tabla)
-  const existing = localRows.find((row: any) => row.uid === cloudRow.uid)
+async function upsertLocal(tabla: string, cloudRow: any, preloadedRows?: any[]): Promise<'inserted' | 'updated' | 'skipped'> {
+  const localRows = preloadedRows ?? await getLocalRows(tabla)
+  let existing = localRows.find((row: any) => row.uid === cloudRow.uid)
+  // Una instalacion nueva crea usuarios iniciales con UID local. Al recibir los
+  // definitivos desde la API se reconcilian por email/usuario para no duplicar
+  // cuentas ni dejar que el registro inicial oculte al registro remoto.
+  if (!existing && tabla === 'usuarios') {
+    const email = String(cloudRow.email || '').trim().toLowerCase()
+    const usuario = String(cloudRow.usuario || '').trim().toLowerCase()
+    existing = localRows.find((row: any) =>
+      (email && String(row.email || '').trim().toLowerCase() === email) ||
+      (usuario && String(row.usuario || '').trim().toLowerCase() === usuario)
+    )
+  }
   const cleanRow = { ...cloudRow }
+  if (tabla === 'imei') {
+    const telefonoUid = String(cleanRow.telefono_uid || cleanRow.id_equi || '').trim()
+    if (telefonoUid) {
+      cleanRow.telefono_uid = telefonoUid
+      const telefonos = await getLocalRows('telefonos')
+      const telefono = telefonos.find((item: any) => String(item.uid || '') === telefonoUid)
+      cleanRow.id_equi = telefono ? telefono.id : null
+    }
+  }
+  if (tabla === 'serial') {
+    const equipoUid = String(cleanRow.equipo_uid || '').trim()
+    if (equipoUid) {
+      const equipos = await getLocalRows('electrodomesticos')
+      const equipo = equipos.find((item: any) => String(item.uid || '') === equipoUid)
+      cleanRow.id_equi = equipo ? equipo.id : null
+      if (!cleanRow.equipo && equipo) cleanRow.equipo = equipo.nombre || ''
+    }
+  }
   delete cleanRow.id
   if (!existing) {
     const result = await (window as any).db.insert(tabla, cleanRow)
     if (!result.success) throw new Error(result.error || `No se pudo insertar en ${tabla}`)
     return 'inserted'
   }
-  if (sameData(existing, cloudRow) || timestamp(existing) >= timestamp(cloudRow)) return 'skipped'
+  if (sameData(existing, cleanRow) || (existing.uid === cleanRow.uid && timestamp(existing) >= timestamp(cleanRow))) return 'skipped'
   const result = await (window as any).db.update(tabla, existing.id, cleanRow)
   if (!result.success) throw new Error(result.error || `No se pudo actualizar ${tabla}`)
   return 'updated'
+}
+
+async function applyRealtimeChange(payload: any): Promise<void> {
+  const tabla = String(payload?.table || '')
+  if (!tabla || LOCAL_SYSTEM_TABLES.includes(tabla)) return
+  // El servidor TMPBASE envia { type: 'event', event: 'record.deleted'|'record.created'|'record.updated',
+  // table, record, created_at }. El campo "type" siempre vale literalmente "event" (es el
+  // discriminador del mensaje de websocket, no el tipo de cambio); el tipo de cambio real
+  // esta en "event", y el registro completo (con su uid) viene siempre en "record".
+  const event = String(payload?.event || '').toLowerCase()
+  const record = payload?.record
+  const recordUid = record?.uid
+  if (!recordUid) return
+
+  if (event === 'record.deleted') {
+    const local = (await getLocalRows(tabla)).find((row: any) => row.uid === recordUid)
+    if (local) {
+      await deleteLocalFromRealtime(tabla, local.id)
+      window.dispatchEvent(new CustomEvent('tmcloud:table-changed', { detail: { table: tabla, updated: 0, deleted: 1 } }))
+    }
+    notify({ running: false, tabla, progreso: `Realtime DELETE ${tabla}`, realtime: true })
+    return
+  }
+
+  if (event === 'record.created' || event === 'record.updated') {
+    const action = await upsertLocal(tabla, record)
+    if (action === 'inserted' || action === 'updated') {
+      notifyLocalRealtimeChange(event === 'record.created' ? 'INSERT' : 'UPDATE', tabla, recordUid)
+      window.dispatchEvent(new CustomEvent('tmcloud:table-changed', { detail: { table: tabla, updated: 1, deleted: 0 } }))
+    }
+    notify({ running: false, tabla, progreso: `Realtime ${event} ${tabla}`, realtime: true })
+  }
+}
+
+async function deleteLocalFromRealtime(tabla: string, id: number): Promise<void> {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tabla)) throw new Error('Tabla invalida en realtime')
+  const result = await (window as any).electron?.invoke('consultaservidor', 'rawQuery', `DELETE FROM "${tabla}" WHERE id = ${Number(id)}`)
+  if (result && result.success === false) throw new Error(result.error || `No se pudo borrar ${tabla}`)
+}
+
+export async function startRealtime() {
+  stopRealtime()
+  if (!await ensureCloudApi() || currentMode === 'offline') return false
+  realtimeStop = tmc.subscribeRealtime(
+    (payload) => {
+      applyRealtimeChange(payload).catch((error) => {
+        notify({ running: false, error: error?.message || 'Error aplicando realtime', realtime: false })
+      })
+    },
+    () => {
+      // El navegador (EventSource) reintenta esta conexion indefinidamente cada
+      // pocos segundos por diseno. El endpoint /realtime aun no existe en el
+      // servidor, asi que ese reintento nunca puede tener exito: dejarlo activo
+      // solo genera trafico continuo contra el servidor sin ningun beneficio.
+      // Se corta la conexion en el primer error y se sigue solo con el polling
+      // periodico (executeSync), que ya es el mecanismo que mantiene todo
+      // sincronizado.
+      stopRealtime()
+      notify({ running: false, error: 'Realtime no disponible; usando solo sincronizacion periodica', realtime: false })
+    },
+  )
+  realtimeConnected = true
+  notify({ running: false, progreso: 'Realtime conectado', realtime: true })
+  return true
+}
+
+export function stopRealtime() {
+  if (realtimeStop) realtimeStop()
+  realtimeStop = null
+  realtimeConnected = false
 }
 
 async function upsertCloud(tabla: string, rows: any[]): Promise<{ inserted: number; updated: number; errors: number }> {
@@ -283,6 +499,11 @@ async function upsertCloud(tabla: string, rows: any[]): Promise<{ inserted: numb
     const batch = rows.slice(offset, offset + 500).map(row => {
       const record = tmc.cleanRecord(row)
       if (tabla === 'gastos') delete record.turno_id
+      if (tabla === 'imei') {
+        if (record.telefono_uid) record.id_equi = record.telefono_uid
+        delete record.telefono_uid
+      }
+      if (tabla === 'serial') delete record.id_equi
       return record
     })
     const res = await fetch(`${api.url}/${encodeURIComponent(tabla)}/upsert`, {
@@ -317,7 +538,7 @@ async function syncTable(tabla: string, mode: SyncMode, incremental: boolean, sk
       for (const row of cloudRows) {
         if (row.uid) cloudByUid.set(row.uid, row)
         try {
-          const action = await upsertLocal(tabla, row)
+          const action = await upsertLocal(tabla, row, localBeforeDownload)
           if (action !== 'skipped') downloaded++
         } catch {
           errors++
@@ -328,7 +549,7 @@ async function syncTable(tabla: string, mode: SyncMode, incremental: boolean, sk
     }
   }
 
-  if (mode !== 'offline') {
+  {
     const candidates = incremental && lastSync
       ? localBeforeDownload.filter(row => timestamp(row) > lastSync)
       : localBeforeDownload
@@ -362,7 +583,7 @@ async function syncDeletes(): Promise<number> {
         `${api.url}/${encodeURIComponent(row.tabla)}/${encodeURIComponent(String(uid))}`,
         { method: 'DELETE', headers: tmc.authHeaders(api.key) },
       )
-      if (res.ok || res.status === 404) {
+      if (res.ok || res.status === 404 || res.status === 400) {
         await (window as any).db.delete('sync_deletes', row.id)
         deleted++
       }
@@ -423,44 +644,75 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
   let totalErrors = 0
   const completedAt = nowSql()
 
+  // Los borrados locales pendientes deben llegar a la nube ANTES de descargar.
+  // Si se descarga primero, un registro borrado localmente pero aun no borrado
+  // en la nube se vuelve a insertar (upsertLocal lo trata como nuevo) y "revive".
+  await syncDeletes()
+
   // --- DOWNLOAD from cloud (single call for ALL tables) ---
+  // Si la descarga falla (red, servidor, respuesta invalida), downloadOk queda
+  // en false y "ultimo_sync_tm" NO avanza: sin esto, un fallo puntual dejaba
+  // el proximo "since" mas adelante en el tiempo que un borrado/cambio real,
+  // y ese cambio jamas volvia a aparecer en ningun sync futuro.
+  let downloadOk = true
   if (incremental) {
-    const lastSync = await getConfigValue('ultimo_sync_tm')
-    if (lastSync) {
-      const changes = await fetchCloudSyncAll(lastSync)
+    // En la primera sincronizacion no existe marca local. Consultar desde el
+    // inicio permite descargar el proyecto antes de intentar subir defaults.
+    const lastSync = await getConfigValue('ultimo_sync_tm') || '1970-01-01 00:00:00'
+    const changes = await fetchCloudSyncAll(lastSync)
       if (changes !== null) {
-        for (const [tabla, change] of Object.entries(changes)) {
+        const entradas = sortTablesByDependency(Object.entries(changes), ([tabla]) => tabla)
+        for (const [tabla, change] of entradas) {
           if (LOCAL_SYSTEM_TABLES.includes(tabla)) continue
           let tabDownloaded = 0
+          let tabDeleted = 0
           let tabErrors = 0
-          for (const row of change.updated) {
+          // Se cargan las filas locales de esta tabla una sola vez y se
+          // reutilizan para cada fila actualizada/borrada del lote, en vez de
+          // volver a pedir la tabla completa por cada elemento (era el patron
+          // anterior y multiplicaba las consultas IPC en tablas grandes).
+          const localRows = await getLocalRows(tabla)
+          const localByUid = new Map<string, any>(localRows.filter((r: any) => r.uid).map((r: any) => [r.uid, r]))
+          for (const row of (Array.isArray(change?.updated) ? change.updated : [])) {
             try {
-              const action = await upsertLocal(tabla, row)
+              const action = await upsertLocal(tabla, row, localRows)
               if (action !== 'skipped') tabDownloaded++
             } catch { tabErrors++ }
           }
-          for (const uid of change.deleted) {
+          for (const item of (Array.isArray(change?.deleted) ? change.deleted : [])) {
+            const uid = typeof item === 'string' ? item : item?.uid
+            if (!uid) continue
             try {
-              const local = (await getLocalRows(tabla)).find((r: any) => r.uid === uid)
-              if (local) await (window as any).db.delete(tabla, local.id)
+              const local = localByUid.get(uid)
+              if (local) { await (window as any).db.delete(tabla, local.id); tabDeleted++ }
             } catch { tabErrors++ }
           }
-          if (tabDownloaded > 0 || tabErrors > 0) {
+          if (tabDownloaded > 0 || tabDeleted > 0 || tabErrors > 0) {
             details.push({ tabla, downloaded: tabDownloaded, uploaded: 0, errors: tabErrors })
             totalDownloaded += tabDownloaded
             totalErrors += tabErrors
           }
+          // Avisa a los componentes visibles que tengan datos de esta tabla
+          // para que se refresquen solos (ver useCloudRefresh), en vez de
+          // esperar a que el usuario cambie de pantalla o recargue la app.
+          if (tabDownloaded > 0 || tabDeleted > 0) {
+            window.dispatchEvent(new CustomEvent('tmcloud:table-changed', {
+              detail: { table: tabla, updated: tabDownloaded, deleted: tabDeleted },
+            }))
+          }
         }
         notify({ running: true, progreso: `Descarga completada (${totalDownloaded} cambios)`, mode })
       } else {
-        // bulk endpoint not available (404) — skip download entirely
-        notify({ running: true, progreso: 'Bulk sync no disponible', mode })
+        // Fallo la descarga (red, servidor, endpoint no disponible, etc.):
+        // no se avanza la marca de sincronizacion, se reintentara en el
+        // proximo ciclo desde el mismo punto.
+        downloadOk = false
+        notify({ running: true, progreso: 'No se pudo descargar cambios; se reintentara', mode })
       }
-    }
   }
 
   // --- UPLOAD local→cloud (only tables with local modifications) ---
-  if (mode !== 'offline') {
+  {
     const uploadBatch: { tabla: string; rows: any[] }[] = []
     for (const table of schema) {
       const tabla = table.name
@@ -478,20 +730,38 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
     }
 
     for (const { tabla, rows } of uploadBatch) {
-      notify({ running: true, tabla, progreso: `Subiendo ${tabla} (${rows.length} registros)...`, mode })
-      const result = await upsertCloud(tabla, rows)
+      const serverCols = tableSchemaMap.get(tabla)
+      const serverColNames = serverCols ? serverCols.columns.map(c => c.name) : null
+      const cleanRows = serverColNames
+        ? rows.map(r => {
+            const cleaned: any = { uid: r.uid }
+            for (const col of serverColNames) {
+              if (col in r) cleaned[col] = r[col]
+            }
+            return cleaned
+          })
+        : rows
+      notify({ running: true, tabla, progreso: `Subiendo ${tabla} (${cleanRows.length} registros)...`, mode })
+      const result = await upsertCloud(tabla, cleanRows)
       if (result.inserted + result.updated > 0 || result.errors > 0) {
         const ups = result.inserted + result.updated
         details.push({ tabla, downloaded: 0, uploaded: ups, errors: result.errors })
         totalUploaded += ups
         totalErrors += result.errors
       }
+      // Igual que con la descarga: si hubo errores no se avanza la marca de
+      // subida de esta tabla, para que esas filas se reintenten en el
+      // proximo ciclo en vez de quedar "atrapadas" detras del watermark.
+      if (result.errors > 0) continue
       await setConfigValue(`last_sync_${tabla}`, completedAt)
     }
   }
 
   await syncDeletes()
-  await setConfigValue('ultimo_sync_tm', completedAt)
+  if (downloadOk) {
+    await setConfigValue('ultimo_sync_tm', completedAt)
+  }
+  await repairRelationalLinks()
   onSyncComplete?.(details)
 
   const result: SyncResult = {
@@ -503,6 +773,24 @@ async function executeSync(mode: SyncMode, incremental: boolean): Promise<SyncRe
   }
   notify({ running: false, lastSync: completedAt, mode, result, details })
   return result
+}
+
+export async function refreshLoginUsers(): Promise<{ success: boolean; downloaded: number; error?: string }> {
+  try {
+    // La verificacion de licencia puede cambiar proyecto y llaves con la app
+    // abierta. Se recarga la configuracion para evitar credenciales en cache.
+    if (!await reloadCloudApi()) return { success: false, downloaded: 0, error: 'TM Cloud no configurado' }
+    const rows = await fetchCloudRows('usuarios')
+    let downloaded = 0
+    for (const row of rows) {
+      if (!row?.uid) continue
+      const action = await upsertLocal('usuarios', row)
+      if (action !== 'skipped') downloaded++
+    }
+    return { success: true, downloaded }
+  } catch (error: any) {
+    return { success: false, downloaded: 0, error: error?.message || 'No se pudieron descargar los usuarios' }
+  }
 }
 
 async function repairSystemTables(): Promise<void> {
@@ -536,7 +824,8 @@ export async function downloadAllTables(): Promise<SyncResult> {
   }
 
   const details: SyncDetail[] = []
-  for (const [index, table] of schema.entries()) {
+  const schemaOrdenado = sortTablesByDependency(schema, t => t.name)
+  for (const [index, table] of schemaOrdenado.entries()) {
     const tabla = table.name
     if (LOCAL_SYSTEM_TABLES.includes(tabla)) continue
     if (index > 0) await delay(350)
@@ -546,10 +835,11 @@ export async function downloadAllTables(): Promise<SyncResult> {
     try {
       if (!(await ensureLocalTableExists(tabla, table.columns))) continue
       const cloudRows = await fetchCloudRows(tabla)
+      const localRows = await getLocalRows(tabla)
       for (const row of cloudRows) {
         if (row.uid) {
           try {
-            const action = await upsertLocal(tabla, row)
+            const action = await upsertLocal(tabla, row, localRows)
             if (action !== 'skipped') downloaded++
           } catch {
             errors++
@@ -569,6 +859,7 @@ export async function downloadAllTables(): Promise<SyncResult> {
   const errors = details.reduce((total, item) => total + item.errors, 0)
   const completedAt = nowSql()
   await setConfigValue('ultimo_sync_tm', completedAt)
+  await repairRelationalLinks()
   onSyncComplete?.(details)
 
   const result: SyncResult = {
@@ -593,7 +884,24 @@ export async function pushLocalRowToCloud(tabla: string, id: number): Promise<{ 
     const rows = await getLocalRows(tabla)
     const row = rows.find(item => Number(item.id) === Number(id))
     if (!row) return { success: false, error: 'Registro local no encontrado' }
-    const result = await upsertCloud(tabla, [row])
+    // Las tablas locales pueden tener columnas nuevas antes de que TM Cloud las tenga.
+    // En el envio inmediato filtramos por el esquema remoto para no rechazar todo el registro.
+    const schema = await fetchServerFullSchema()
+    const tablaRemota = schema.find(item => item.name === tabla)
+    const columnasRemotas = tablaRemota?.columns.map(columna => columna.name)
+    const fila = columnasRemotas
+      ? columnasRemotas.reduce((acumulado: any, columna: string) => {
+          if (row[columna] !== undefined) acumulado[columna] = row[columna]
+          return acumulado
+        }, {})
+      : row
+    if (tabla === 'imei') {
+      if (row.telefono_uid) fila.id_equi = row.telefono_uid
+      delete fila.telefono_uid
+    }
+    if (tabla === 'serial') delete fila.id_equi
+    if (row.uid && fila.uid === undefined) fila.uid = row.uid
+    const result = await upsertCloud(tabla, [fila])
     if (result.errors > 0) return { success: false, error: 'TMPBase rechazo el registro' }
     return { success: true }
   } catch (error: any) {
@@ -608,6 +916,7 @@ export async function syncAll(mode?: SyncMode, incremental = false): Promise<Syn
 export async function startAutoSync(intervalMs = 30000) {
   stopAutoSync()
   if (!await ensureCloudApi() || currentMode === 'offline') return
+  await startRealtime()
   if (syncingInProgress) return
 
   syncingInProgress = true
@@ -633,6 +942,7 @@ export function stopAutoSync() {
   if (intervalId) clearInterval(intervalId)
   intervalId = null
   syncingInProgress = false
+  stopRealtime()
 }
 
 export async function initAutoSyncFromConfig() {
@@ -643,5 +953,6 @@ export async function initAutoSyncFromConfig() {
     const enabled = await getConfigValue('tm_auto_sync') === '1'
     currentMode = mode
     if (enabled && mode !== 'offline') await startAutoSync(interval)
+    else if (mode !== 'offline') await startRealtime()
   } catch { /* Configuration will be retried when the user opens TM Cloud. */ }
 }

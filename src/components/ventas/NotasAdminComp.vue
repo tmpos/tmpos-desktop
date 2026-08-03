@@ -9,8 +9,10 @@ import Textarea from 'primevue/textarea'
 import Fieldset from 'primevue/fieldset'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
+const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
 const notas = ref<any[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
@@ -23,7 +25,7 @@ async function cargarNotas() {
   loading.value = true
   try {
     const res = await window.db.getAll('notas')
-    if (res.success) notas.value = res.data || []
+    if (res.success) notas.value = filterByAlmacen(res.data || [])
   } catch (error) {
     console.error(error)
   } finally {
@@ -65,7 +67,7 @@ async function guardar() {
       const res = await window.db.update('notas', selectedNota.value.id, data)
       if (res.success) toast.add({ severity: 'success', summary: 'Exito', detail: 'Nota actualizada', life: 3000 })
     } else {
-      const res = await window.db.insert('notas', data)
+      const res = await window.db.insert('notas', addAlmacenId(data))
       if (res.success) toast.add({ severity: 'success', summary: 'Exito', detail: 'Nota creada', life: 3000 })
     }
     dialogVisible.value = false

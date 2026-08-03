@@ -9,16 +9,20 @@ import Chip from 'primevue/chip'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
 import { useAuthStore } from '@/stores/auth.store'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 const toast = useToast()
 const auth = useAuthStore()
+const systemMode = useSystemModeStore()
 const usuarios = ref<any[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
 const selectedUser = ref<any>(null)
 const permisosSeleccionados = ref<string[]>([])
+const deleteDialogVisible = ref(false)
+const selectedDeleteUser = ref<any>(null)
 
-const opcionesPermisos = [
+const opcionesPermisosBase = [
   { label: 'Inicio', key: 'home', grupo: 'General' },
   { label: 'Vender', key: 'vender', grupo: 'Ventas' },
   { label: 'Inventario', key: 'inventario', grupo: 'Inventario' },
@@ -31,12 +35,15 @@ const opcionesPermisos = [
   { label: 'Marcas', key: 'marcas', grupo: 'Inventario' },
   { label: 'Etiquetas', key: 'etiquetas', grupo: 'Inventario' },
   { label: 'Cambiazo', key: 'cambiazo', grupo: 'Inventario' },
+  { label: 'Transferencias', key: 'transferencias', grupo: 'Inventario' },
   { label: 'Reporte Inventario', key: 'reporte', grupo: 'Inventario' },
+  { label: 'Perdidas', key: 'perdidas', grupo: 'Inventario' },
   { label: 'Taller', key: 'taller', grupo: 'Taller' },
   { label: 'Ordenes', key: 'ordenes', grupo: 'Taller' },
   { label: 'Orden Express', key: 'orden-express', grupo: 'Taller' },
   { label: 'Piezas', key: 'piezas', grupo: 'Taller' },
   { label: 'Tecnicos', key: 'tecnicos', grupo: 'Taller' },
+  { label: 'Garantias', key: 'garantias', grupo: 'Taller' },
   { label: 'Reporte Taller', key: 'reporte', grupo: 'Taller' },
   { label: 'Contactos', key: 'contactos', grupo: 'Contactos' },
   { label: 'Clientes', key: 'clientes', grupo: 'Contactos' },
@@ -70,7 +77,18 @@ const opcionesPermisos = [
   { label: 'Reporte Ventas', key: 'ventas', grupo: 'Reportes' },
   { label: 'Reporte Ganancias', key: 'ganancias', grupo: 'Reportes' },
   { label: 'Configuracion', key: 'configuracion', grupo: 'Configuracion' },
+  { label: 'Eliminar registros', key: 'accion_eliminar', grupo: 'Acciones sensibles' },
+  { label: 'Modificar precios y costos', key: 'accion_precios', grupo: 'Acciones sensibles' },
+  { label: 'Administrar usuarios', key: 'accion_usuarios', grupo: 'Acciones sensibles' },
+  { label: 'Mover inventario entre almacenes', key: 'accion_trasladar', grupo: 'Acciones sensibles' },
+  { label: 'Anular o editar facturas', key: 'accion_facturas', grupo: 'Acciones sensibles' },
 ]
+
+const opcionesPermisos = computed(() => opcionesPermisosBase
+  .filter(option => !systemMode.isGeneralStore || !['telefonos', 'imei', 'cambiazo', 'recibidos'].includes(option.key))
+  .map(option => option.key === 'accesorios' && systemMode.isGeneralStore
+    ? { ...option, label: 'Productos' }
+    : option))
 
 async function cargarUsuarios() {
   loading.value = true
@@ -120,7 +138,7 @@ async function guardarPermisos() {
 const gruposPermisos = ['General', 'Ventas', 'Inventario', 'Taller', 'Contactos', 'Contabilidad', 'Reportes', 'Configuracion']
 
 function opcionesPorGrupo(grupo: string) {
-  return opcionesPermisos.filter(o => o.grupo === grupo)
+  return opcionesPermisos.value.filter(o => o.grupo === grupo)
 }
 
 function togglePermiso(key: string) {
@@ -129,6 +147,27 @@ function togglePermiso(key: string) {
   if (idx >= 0) current.splice(idx, 1)
   else current.push(key)
   permisosSeleccionados.value = current
+}
+
+function confirmarBorrar(usuario: any) {
+  selectedDeleteUser.value = usuario
+  deleteDialogVisible.value = true
+}
+
+async function borrarUsuario() {
+  if (!selectedDeleteUser.value) return
+  try {
+    const res = await window.db.delete('usuarios', selectedDeleteUser.value.id)
+    if (res.success) {
+      toast.add({ severity: 'success', summary: 'Eliminado', detail: 'Usuario eliminado', life: 3000 })
+      deleteDialogVisible.value = false
+      await cargarUsuarios()
+    } else {
+      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo eliminar', life: 3000 })
+    }
+  } catch {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'Error al eliminar', life: 3000 })
+  }
 }
 
 onMounted(cargarUsuarios)
@@ -156,9 +195,12 @@ onMounted(cargarUsuarios)
             <span v-else class="text-surface-400 text-sm">Todos</span>
           </template>
         </Column>
-        <Column header="Acciones" style="width: 8rem">
+        <Column header="Acciones" style="width: 10rem">
           <template #body="{ data }">
-            <Button v-if="!esSoporte(data)" icon="pi pi-shield" label="Permisos" size="small" @click="abrirPermisos(data)" />
+            <div class="flex gap-1" v-if="!esSoporte(data)">
+              <Button icon="pi pi-shield" label="Permisos" size="small" @click="abrirPermisos(data)" />
+              <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click="confirmarBorrar(data)" v-tooltip="'Eliminar'" />
+            </div>
             <span v-else class="text-xs text-surface-400">—</span>
           </template>
         </Column>
@@ -194,6 +236,17 @@ onMounted(cargarUsuarios)
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
         <Button label="Guardar" icon="pi pi-check" @click="guardarPermisos" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="deleteDialogVisible" header="Confirmar Eliminacion" :modal="true" :style="{ width: '400px' }">
+      <div class="flex items-center gap-3">
+        <i class="pi pi-exclamation-triangle text-amber-500 text-2xl"></i>
+        <p>¿Estas seguro de eliminar al usuario <strong>{{ selectedDeleteUser?.nombre }}</strong>?</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
+        <Button label="Eliminar" severity="danger" icon="pi pi-trash" @click="borrarUsuario" />
       </template>
     </Dialog>
   </div>

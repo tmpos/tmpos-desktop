@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getSystemCurrencyCode, getSystemLocale } from '@/i18n/localeProfiles'
 import { ref, computed, onMounted, nextTick } from 'vue'
 import Button from 'primevue/button'
 import DataTable from 'primevue/datatable'
@@ -23,10 +24,16 @@ const facturas = ref<any[]>([])
 const taller = ref<any[]>([])
 const tallerTodas = ref<any[]>([])
 const gastos = ref<any[]>([])
+const abonosCuentas = ref<any[]>([])
 const loading = ref(false)
 const busqueda = ref('')
 const rangoPersonalizado = ref<Date[]>([])
 const rangoActivo = ref<string>('hoy')
+
+const rangoLabel = computed(() => {
+  const labels: Record<string, string> = { hoy: 'Hoy', semana: 'Esta semana', mes: 'Este mes', trimestre: 'Este trimestre', ano: 'Este año' }
+  return labels[rangoActivo.value] || 'Rango personalizado'
+})
 
 let chartDiario: Chart | null = null
 const canvasDiario = ref<HTMLCanvasElement | null>(null)
@@ -36,6 +43,12 @@ const canvasPago = ref<HTMLCanvasElement | null>(null)
 
 let chartTopClientes: Chart | null = null
 const canvasTopClientes = ref<HTMLCanvasElement | null>(null)
+
+let chartTopProductos: Chart | null = null
+const canvasTopProductos = ref<HTMLCanvasElement | null>(null)
+
+let chartCategoria: Chart | null = null
+const canvasCategoria = ref<HTMLCanvasElement | null>(null)
 
 let chartTaller: Chart | null = null
 const canvasTaller = ref<HTMLCanvasElement | null>(null)
@@ -93,9 +106,71 @@ function labelEstadoTaller(estado: string): string {
   return labels[estado] || estado.replace(/_/g, ' ')
 }
 
+function fechaLocalIso(fecha: Date): string {
+  return `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}-${String(fecha.getDate()).padStart(2, '0')}`
+}
+
+function normalizarFechaRegistro(valor: any): string {
+  const texto = String(valor || '').trim()
+  const iso = texto.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (iso) return iso[1]
+  const local = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+  if (local) {
+    const usaMesPrimero = getSystemLocale().toLowerCase().startsWith('en-us')
+    const mes = usaMesPrimero ? local[1] : local[2]
+    const dia = usaMesPrimero ? local[2] : local[1]
+    return `${local[3]}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}`
+  }
+  return ''
+}
+
+function parsePagosCuenta(cuenta: any): any[] {
+  try {
+    const parsed = JSON.parse(cuenta?.pagos || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch { return [] }
+}
+
+const totalAbonosCuentas = computed(() => abonosCuentas.value.reduce((total, pago) => total + toNumber(pago.monto), 0))
+
+function fechaEfectivaFactura(factura: any): string {
+  const fechaGuardada = normalizarFechaRegistro(factura?.fecha_emision)
+  const creadoRaw = String(factura?.created_at || '').trim()
+  if (!creadoRaw) return fechaGuardada
+  const tieneZona = /(?:z|[+-]\d{2}:?\d{2})$/i.test(creadoRaw)
+  const creado = new Date(`${creadoRaw.replace(' ', 'T')}${tieneZona ? '' : 'Z'}`)
+  if (Number.isNaN(creado.getTime())) return fechaGuardada
+  const fechaCreadaDb = creadoRaw.slice(0, 10)
+  const fechaCreadaLocal = fechaLocalIso(creado)
+  return fechaGuardada === fechaCreadaDb && fechaCreadaLocal < fechaGuardada
+    ? fechaCreadaLocal
+    : (fechaGuardada || fechaCreadaLocal)
+}
+
+function esFacturaVenta(factura: any): boolean {
+  const tipo = String(factura?.tipo_factura || '').trim().toUpperCase()
+  const estado = String(factura?.estado_factura || '').trim().toUpperCase()
+  if (tipo.includes('COTIZACION') || tipo.includes('NOTA_CREDITO') || tipo.includes('NOTA CREDITO') || tipo.includes('RECIBIDO')) return false
+  return estado === 'PAGADA' || estado === 'COBRADO'
+}
+
+function getGastoFecha(gasto: any): string {
+  const fechaGuardada = normalizarFechaRegistro(gasto?.fecha)
+  const creadoRaw = String(gasto?.created_at || '').trim()
+  if (!creadoRaw) return fechaGuardada
+  const tieneZona = /(?:z|[+-]\d{2}:?\d{2})$/i.test(creadoRaw)
+  const creado = new Date(`${creadoRaw.replace(' ', 'T')}${tieneZona ? '' : 'Z'}`)
+  if (Number.isNaN(creado.getTime())) return fechaGuardada
+  const fechaCreadaDb = creadoRaw.slice(0, 10)
+  const fechaCreadaLocal = fechaLocalIso(creado)
+  return fechaGuardada === fechaCreadaDb && fechaCreadaLocal < fechaGuardada
+    ? fechaCreadaLocal
+    : (fechaGuardada || fechaCreadaLocal)
+}
+
 function getRango(key: string): { inicio: string; fin: string } {
   const now = new Date()
-  const y = (d: Date) => d.toISOString().split('T')[0]
+  const y = (d: Date) => fechaLocalIso(d)
 
   switch (key) {
     case 'hoy': return { inicio: y(now), fin: y(now) }
@@ -150,11 +225,14 @@ const tallerFiltrado = computed(() => {
 })
 
 const totales = computed(() => {
-  let total = 0, ganancia = 0, descuento = 0, count = 0, tallerIngresos = 0, tallerGanancia = 0, tallerOrdenes = 0, totalGastos = 0
+  let total = 0, ganancia = 0, descuento = 0, porcentajeTarjeta = 0, facturasTarjeta = 0, count = 0, tallerIngresos = 0, tallerGanancia = 0, tallerOrdenes = 0, totalGastos = 0, totalGastosEfectivo = 0, totalGastosTransferencia = 0
   for (const f of facturasFiltradas.value) {
     total += toNumber(f.total)
     ganancia += toNumber(f.ganancia)
     descuento += toNumber(f.descuento)
+    const montoTarjeta = calcularRecargoTarjetaFactura(f)
+    porcentajeTarjeta += montoTarjeta
+    if (montoTarjeta > 0) facturasTarjeta++
     count++
   }
   for (const t of tallerFiltrado.value) {
@@ -163,9 +241,145 @@ const totales = computed(() => {
     tallerOrdenes++
   }
   for (const g of gastos.value) {
-    totalGastos += toNumber(g.cantidad)
+    const montoGasto = toNumber(g.cantidad || g.monto)
+    const metodoGasto = String(g.metodo_pago || 'EFECTIVO').trim().toUpperCase()
+    totalGastos += montoGasto
+    if (metodoGasto.includes('TRANSFERENCIA')) totalGastosTransferencia += montoGasto
+    else totalGastosEfectivo += montoGasto
   }
-  return { total, ganancia, descuento, count, tallerIngresos, tallerGanancia, tallerOrdenes, totalGastos }
+  let costo = 0, itemsCount = 0
+  for (const f of facturasFiltradas.value) {
+    costo += calcularCostoFactura(f)
+    itemsCount += parseProductos(f.productos).length
+  }
+  const ventasSinRecargoTarjeta = Math.max(0, total - porcentajeTarjeta)
+  const margen = ventasSinRecargoTarjeta > 0 ? (ganancia / ventasSinRecargoTarjeta) * 100 : 0
+  const ticketPromedio = count > 0 ? total / count : 0
+  const itemsPorFactura = count > 0 ? itemsCount / count : 0
+  const gananciaTotal = ganancia + tallerGanancia
+  const gananciaNeta = total - totalGastosEfectivo
+  return { total, ganancia, gananciaTotal, gananciaNeta, descuento, porcentajeTarjeta, facturasTarjeta, count, tallerIngresos, tallerGanancia, tallerOrdenes, totalGastos, totalGastosEfectivo, totalGastosTransferencia, costo, margen, ticketPromedio, itemsPorFactura, itemsCount }
+})
+
+function parseProductos(productos: any): any[] {
+  if (!productos) return []
+  if (Array.isArray(productos)) return productos
+  try {
+    return JSON.parse(productos)
+  } catch {
+    return []
+  }
+}
+
+function getProductoCantidad(producto: any): number {
+  const cantidad = toNumber(producto?.cantidad ?? producto?.quantity)
+  return cantidad > 0 ? cantidad : 1
+}
+
+function getProductoCostoUnitario(producto: any): number {
+  return toNumber(
+    producto?.costo ??
+    producto?.precio_compra ??
+    producto?.preciocompra ??
+    producto?.cost
+  )
+}
+
+function calcularCostoProductos(productos: any[]): number {
+  return productos.reduce((sum: number, p: any) => (
+    sum + (getProductoCostoUnitario(p) * getProductoCantidad(p))
+  ), 0)
+}
+
+function calcularCostoFactura(factura: any): number {
+  const prods = parseProductos(factura.productos)
+  return calcularCostoProductos(prods)
+}
+
+function calcularRecargoTarjetaFactura(factura: any): number {
+  const guardado = toNumber(factura?.monto_porcentaje_tarjeta)
+  if (guardado > 0) return guardado
+  if (!String(factura?.metodo_pago || '').toUpperCase().includes('TARJETA')) return 0
+  try {
+    const financiera = typeof factura?.financiera === 'string' ? JSON.parse(factura.financiera || '{}') : factura?.financiera || {}
+    const financieraMonto = toNumber(financiera?.monto_comision)
+    if (financieraMonto > 0) return financieraMonto
+  } catch {}
+  const subtotalProductos = parseProductos(factura?.productos).reduce((sum: number, producto: any) => (
+    sum + (toNumber(producto?.precio ?? producto?.precio_venta) * getProductoCantidad(producto))
+  ), 0)
+  return Math.max(0, toNumber(factura?.total) - subtotalProductos + toNumber(factura?.descuento) - toNumber(factura?.impuesto))
+}
+
+const topProductos = computed(() => {
+  const mapa = new Map<string, { nombre: string; cantidad: number; total: number; costo: number }>()
+  for (const f of facturas.value) {
+    const prods = parseProductos(f.productos)
+    for (const p of prods) {
+      const key = p.codigo || p.nombre || 'SIN NOMBRE'
+      const entry = mapa.get(key) || { nombre: p.nombre || 'SIN NOMBRE', cantidad: 0, total: 0, costo: 0 }
+      entry.cantidad += toNumber(p.cantidad)
+      entry.total += toNumber(p.total) || (toNumber(p.precio) * toNumber(p.cantidad))
+      entry.costo += toNumber(p.costo) * toNumber(p.cantidad)
+      mapa.set(key, entry)
+    }
+  }
+  return Array.from(mapa.values())
+    .sort((a, b) => b.cantidad - a.cantidad)
+    .slice(0, 10)
+})
+
+const productosVendidos = computed(() => {
+  const items: any[] = []
+  for (const f of facturas.value) {
+    const prods = parseProductos(f.productos)
+    for (const p of prods) {
+      items.push({
+        no_factura: f.no_factura,
+        fecha: f.fecha_emision,
+        cliente: f.nombre_cliente,
+        producto: p.nombre || 'SIN NOMBRE',
+        cantidad: toNumber(p.cantidad),
+        precio: toNumber(p.precio) || toNumber(p.precio_venta) || 0,
+        costo: toNumber(p.costo) || 0,
+        total: toNumber(p.total) || ((toNumber(p.precio) || toNumber(p.precio_venta) || 0) * toNumber(p.cantidad)),
+      })
+    }
+  }
+  return items.sort((a, b) => {
+    if (a.fecha < b.fecha) return 1
+    if (a.fecha > b.fecha) return -1
+    return 0
+  })
+})
+
+const ventasPorCategoria = computed(() => {
+  const mapa = new Map<string, { categoria: string; cantidad: number; total: number; costo: number }>()
+  for (const f of facturas.value) {
+    const prods = parseProductos(f.productos)
+    for (const p of prods) {
+      const cat = p.categoria || p.tipo || 'SIN CATEGORIA'
+      const entry = mapa.get(cat) || { categoria: cat, cantidad: 0, total: 0, costo: 0 }
+      entry.cantidad += toNumber(p.cantidad)
+      entry.total += toNumber(p.total) || ((toNumber(p.precio) || toNumber(p.precio_venta) || 0) * toNumber(p.cantidad))
+      entry.costo += (toNumber(p.costo) || 0) * toNumber(p.cantidad)
+      mapa.set(cat, entry)
+    }
+  }
+  return Array.from(mapa.values()).sort((a, b) => b.total - a.total)
+})
+
+const ventasPorVendedor = computed(() => {
+  const mapa = new Map<string, { vendedor: string; total: number; ganancia: number; count: number }>()
+  for (const f of facturas.value) {
+    const vendedor = f.vendedor || 'SIN VENDEDOR'
+    const entry = mapa.get(vendedor) || { vendedor, total: 0, ganancia: 0, count: 0 }
+    entry.total += toNumber(f.total)
+    entry.ganancia += toNumber(f.ganancia)
+    entry.count++
+    mapa.set(vendedor, entry)
+  }
+  return Array.from(mapa.values()).sort((a, b) => b.total - a.total)
 })
 
 const datosPorDia = computed(() => {
@@ -182,7 +396,7 @@ const datosPorDia = computed(() => {
   }
 
   for (const f of facturas.value) {
-    const fecha = f.fecha_emision
+    const fecha = fechaEfectivaFactura(f)
     if (mapa.has(fecha)) {
       const existing = mapa.get(fecha)!
       existing.ventas += f.total || 0
@@ -283,17 +497,19 @@ const topClientes = computed(() => {
 
 async function cargarDatos() {
   if (rangoActivo.value === 'personalizado' && rangoPersonalizado.value.length !== 2) return
+  if (!almacenStore.activeUid) await almacenStore.load()
 
   const rango = getRango(rangoActivo.value)
   if (!rango.inicio || !rango.fin) return
 
   loading.value = true
   try {
-    const [resFact, resTaller, resCli, resGastos] = await Promise.all([
+    const [resFact, resTaller, resCli, resGastos, resCuentas] = await Promise.all([
       window.db.getAll('facturas'),
       window.db.getAll('ordenes_taller'),
       window.db.getAll('clientes'),
       window.db.getAll('gastos'),
+      window.db.getAll('cuentas_cobrar'),
     ])
 
     const cm = new Map<string, string>()
@@ -304,11 +520,11 @@ async function cargarDatos() {
     }
     clientesMap.value = cm
 
-    const almacenId = almacenStore.activeId || 0
+    const almacenUid = almacenStore.activeUid || ''
     if (resFact.success) {
       facturas.value = (resFact.data || []).filter((f: any) =>
-        f.fecha_emision >= rango.inicio && f.fecha_emision <= rango.fin &&
-        (!almacenId || Number(f.almacen_id) === almacenId)
+        fechaEfectivaFactura(f) >= rango.inicio && fechaEfectivaFactura(f) <= rango.fin &&
+        Boolean(almacenUid) && String(f.almacen_uid || '') === almacenUid && esFacturaVenta(f)
       )
     }
     if (resTaller.success) {
@@ -319,8 +535,26 @@ async function cargarDatos() {
     }
     if (resGastos.success) {
       gastos.value = (resGastos.data || []).filter((g: any) =>
-        g.fecha >= rango.inicio && g.fecha <= rango.fin
+        getGastoFecha(g) >= rango.inicio && getGastoFecha(g) <= rango.fin &&
+        Boolean(almacenUid) && String(g.almacen_uid || '') === almacenUid
       )
+    }
+    if (resCuentas.success) {
+      abonosCuentas.value = (resCuentas.data || [])
+        .filter((cuenta: any) => Boolean(almacenUid) && String(cuenta.almacen_uid || '') === almacenUid)
+        .flatMap((cuenta: any) => parsePagosCuenta(cuenta).map((pago: any, index: number) => ({
+          id: `${cuenta.id}-${index}`,
+          no_factura: cuenta.no_factura || '',
+          cliente: cuenta.nombre_cliente || 'CONSUMIDOR FINAL',
+          fecha: normalizarFechaRegistro(pago.fecha),
+          hora: pago.hora || '',
+          metodo: String(pago.metodo || 'EFECTIVO').toUpperCase(),
+          monto: toNumber(pago.monto ?? pago.cantidad),
+        })))
+        .filter((pago: any) => pago.fecha >= rango.inicio && pago.fecha <= rango.fin)
+        .sort((a: any, b: any) => `${b.fecha} ${b.hora}`.localeCompare(`${a.fecha} ${a.hora}`))
+    } else {
+      abonosCuentas.value = []
     }
   } catch (error) {
     console.error(error)
@@ -338,6 +572,8 @@ function crearCharts() {
   if (chartPago) { chartPago.destroy(); chartPago = null }
   if (chartTopClientes) { chartTopClientes.destroy(); chartTopClientes = null }
   if (chartTaller) { chartTaller.destroy(); chartTaller = null }
+  if (chartTopProductos) { chartTopProductos.destroy(); chartTopProductos = null }
+  if (chartCategoria) { chartCategoria.destroy(); chartCategoria = null }
 
   if (canvasDiario.value) {
     chartDiario = new Chart(canvasDiario.value, {
@@ -418,6 +654,76 @@ function crearCharts() {
         },
       })
     }
+
+  if (canvasTopProductos.value && topProductos.value.length > 0) {
+    try {
+      chartTopProductos = new Chart(canvasTopProductos.value, {
+        type: 'bar',
+        data: {
+          labels: topProductos.value.map(p => p.nombre.length > 20 ? p.nombre.slice(0, 18) + '...' : p.nombre),
+          datasets: [
+            {
+              label: 'Cantidad',
+              data: topProductos.value.map(p => p.cantidad),
+              backgroundColor: 'rgba(251, 146, 60, 0.7)',
+              borderColor: 'rgb(251, 146, 60)',
+              borderWidth: 1,
+              xAxisID: 'x',
+            },
+            {
+              label: 'Total Venta',
+              data: topProductos.value.map(p => p.total),
+              backgroundColor: 'rgba(59, 130, 246, 0.7)',
+              borderColor: 'rgb(59, 130, 246)',
+              borderWidth: 1,
+              xAxisID: 'x1',
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y',
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { position: 'top' } },
+          scales: {
+            x: { position: 'bottom', beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'Cantidad' } },
+            x1: { position: 'top', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'RD$' } },
+            y: { beginAtZero: true, title: { display: true, text: 'Productos' } },
+          },
+        },
+      })
+    } catch (_) {}
+  }
+
+  if (canvasCategoria.value && ventasPorCategoria.value.length > 0) {
+    try {
+      chartCategoria = new Chart(canvasCategoria.value, {
+        type: 'doughnut',
+        data: {
+          labels: ventasPorCategoria.value.map(c => c.categoria),
+          datasets: [{
+            data: ventasPorCategoria.value.map(c => c.total),
+            backgroundColor: [
+              'rgba(59, 130, 246, 0.7)',
+              'rgba(16, 185, 129, 0.7)',
+              'rgba(251, 146, 60, 0.7)',
+              'rgba(168, 85, 247, 0.7)',
+              'rgba(236, 72, 153, 0.7)',
+              'rgba(245, 158, 11, 0.7)',
+              'rgba(14, 165, 233, 0.7)',
+              'rgba(239, 68, 68, 0.7)',
+            ],
+            borderWidth: 1,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom' } },
+        },
+      })
+    } catch (_) {}
   }
 
   if (canvasTaller.value && tallerTieneDatos.value) {
@@ -461,8 +767,8 @@ function crearCharts() {
                 const item = datosTallerEstados.value[context.dataIndex]
                 if (!item) return ''
                 return [
-                  `Ingresos: RD$ ${formatCurrency(item.ingresos)}`,
-                  `Ganancia: RD$ ${formatCurrency(item.ganancia)}`,
+                  `Ingresos: ${getSystemCurrencyCode()} ${formatCurrency(item.ingresos)}`,
+                  `Ganancia: ${getSystemCurrencyCode()} ${formatCurrency(item.ganancia)}`,
                 ]
               },
             },
@@ -474,6 +780,7 @@ function crearCharts() {
       },
     })
   }
+}
 
 function seleccionarRango(key: string) {
   rangoActivo.value = key
@@ -520,21 +827,35 @@ async function generarReportePDF() {
 
   // Summary cards
   const cards = [
-    { label: 'Ventas', value: `RD$ ${formatCurrency(totales.value.total)}`, color: [37, 99, 235] as [number, number, number] },
-    { label: 'Ganancia', value: `RD$ ${formatCurrency(totales.value.ganancia)}`, color: [5, 150, 105] as [number, number, number] },
-    { label: 'Descuentos', value: `RD$ ${formatCurrency(totales.value.descuento)}`, color: [245, 158, 11] as [number, number, number] },
+    { label: 'Ventas', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.total)}`, color: [37, 99, 235] as [number, number, number] },
+    { label: 'Ganancia Total', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.gananciaTotal)}`, color: [20, 184, 166] as [number, number, number] },
+    { label: 'Ganancia Neta', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.gananciaNeta)}`, color: [8, 145, 178] as [number, number, number] },
+    { label: 'Ganancia', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.ganancia)}`, color: [5, 150, 105] as [number, number, number] },
+    { label: 'Costo Ventas', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.costo)}`, color: [251, 146, 60] as [number, number, number] },
+    { label: 'Descuentos', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.descuento)}`, color: [245, 158, 11] as [number, number, number] },
+    { label: 'Recargos Tarjeta', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.porcentajeTarjeta)}`, color: [37, 99, 235] as [number, number, number] },
     { label: 'Facturas', value: `${totales.value.count}`, color: [124, 58, 237] as [number, number, number] },
-    { label: 'Taller Ingresos', value: `RD$ ${formatCurrency(totales.value.tallerIngresos)}`, color: [6, 182, 212] as [number, number, number] },
-    { label: 'Taller Ganancia', value: `RD$ ${formatCurrency(totales.value.tallerGanancia)}`, color: [225, 29, 72] as [number, number, number] },
+    { label: 'Taller Ingresos', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.tallerIngresos)}`, color: [6, 182, 212] as [number, number, number] },
+    { label: 'Taller Ganancia', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.tallerGanancia)}`, color: [225, 29, 72] as [number, number, number] },
     { label: 'Ordenes Taller', value: `${totales.value.tallerOrdenes}`, color: [14, 165, 233] as [number, number, number] },
-    { label: 'Gastos', value: `RD$ ${formatCurrency(totales.value.totalGastos)}`, color: [220, 38, 38] as [number, number, number] },
+    { label: 'Gastos', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.totalGastos)}`, color: [220, 38, 38] as [number, number, number] },
+    { label: 'Gastos Efectivo', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.totalGastosEfectivo)}`, color: [234, 88, 12] as [number, number, number] },
+    { label: 'Gastos Transfer.', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.totalGastosTransferencia)}`, color: [147, 51, 234] as [number, number, number] },
+    { label: 'Margen %', value: `${totales.value.margen.toFixed(1)}%`, color: [13, 148, 136] as [number, number, number] },
+    { label: 'Ticket Prom.', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.ticketPromedio)}`, color: [79, 70, 229] as [number, number, number] },
+    { label: 'Items/Fact.', value: `${totales.value.itemsPorFactura.toFixed(1)}`, color: [190, 24, 93] as [number, number, number] },
   ]
 
-  const cardW = (pageW - margin * 2 - 14) / 8
+  const cardsPorFila = 6
+  const separacionCard = 3
+  const altoCard = 14
+  const cardW = (pageW - margin * 2 - separacionCard * (cardsPorFila - 1)) / cardsPorFila
   for (let i = 0; i < cards.length; i++) {
-    addCard(cards[i].label, cards[i].value, cards[i].color, margin + i * (cardW + 2), cardW)
+    const columna = i % cardsPorFila
+    if (columna === 0 && i > 0) y += altoCard + separacionCard
+    addCard(cards[i].label, cards[i].value, cards[i].color, margin + columna * (cardW + separacionCard), cardW)
   }
-  y += 20
+  y += altoCard + 6
 
   // Charts as images
   const chartCanvases = [
@@ -542,6 +863,8 @@ async function generarReportePDF() {
     { ref: canvasPago.value, label: 'Por Metodo de Pago' },
     { ref: canvasTaller.value, label: 'Taller' },
     { ref: canvasTopClientes.value, label: 'Top 10 Clientes' },
+    { ref: canvasTopProductos.value, label: 'Top 10 Productos' },
+    { ref: canvasCategoria.value, label: 'Ventas por Categoria' },
   ]
 
   const chartsRow = chartCanvases.filter(c => c.ref)
@@ -567,19 +890,70 @@ async function generarReportePDF() {
   const cols = facturasFiltradas.value.length
   autoTable(doc, {
     startY: y,
-    head: [['Factura', 'Fecha', 'Cliente', 'Pago', 'Total', 'Ganancia']],
+    head: [['Factura', 'Fecha', 'Cliente', 'Pago', 'Costo', 'Total', 'Ganancia']],
     body: facturasFiltradas.value.slice(0, cols).map((f: any) => [
       f.no_factura || '',
-      f.fecha_emision || '',
+      fechaEfectivaFactura(f),
       f.nombre_cliente || '',
       f.metodo_pago || '',
-      `RD$ ${formatCurrency(f.total)}`,
-      `RD$ ${formatCurrency(f.ganancia)}`,
+      `${getSystemCurrencyCode()} ${formatCurrency(calcularCostoFactura(f))}`,
+      `${getSystemCurrencyCode()} ${formatCurrency(f.total)}`,
+      `${getSystemCurrencyCode()} ${formatCurrency(f.ganancia)}`,
     ]),
     theme: 'striped',
     headStyles: { fillColor: [37, 99, 235], fontSize: 8 },
     bodyStyles: { fontSize: 7 },
     styles: { cellPadding: 2 },
+  })
+
+  autoTable(doc, {
+    startY: (doc as any).lastAutoTable.finalY + 8,
+    head: [['Abonos CxC', 'Fecha', 'Cliente', 'Metodo', 'Monto']],
+    body: abonosCuentas.value.map((pago: any) => [
+      pago.no_factura || '',
+      `${pago.fecha || ''} ${pago.hora || ''}`,
+      pago.cliente || '',
+      pago.metodo || '',
+      `${getSystemCurrencyCode()} ${formatCurrency(pago.monto)}`,
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: [5, 150, 105], fontSize: 8 },
+    bodyStyles: { fontSize: 7 },
+    styles: { cellPadding: 2 },
+  })
+
+  autoTable(doc, {
+    startY: (doc as any).lastAutoTable.finalY + 8,
+    head: [['Factura', 'Fecha', 'Cliente', 'Producto', 'Cant.', 'Precio', 'Costo', 'Total']],
+    body: productosVendidos.value.slice(0, 500).map((p: any) => [
+      p.no_factura || '',
+      p.fecha || '',
+      p.cliente || '',
+      p.producto || '',
+      String(p.cantidad),
+      `${getSystemCurrencyCode()} ${formatCurrency(p.precio)}`,
+      `${getSystemCurrencyCode()} ${formatCurrency(p.costo)}`,
+      `${getSystemCurrencyCode()} ${formatCurrency(p.total)}`,
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: [251, 146, 60], fontSize: 7 },
+    bodyStyles: { fontSize: 6 },
+    styles: { cellPadding: 1.5 },
+  })
+
+  autoTable(doc, {
+    startY: (doc as any).lastAutoTable.finalY + 8,
+    head: [['Vendedor', 'Facturas', 'Total', 'Ganancia']],
+    body: ventasPorVendedor.value.map((v: any) => [
+      v.vendedor,
+      String(v.count),
+      `${getSystemCurrencyCode()} ${formatCurrency(v.total)}`,
+      `${getSystemCurrencyCode()} ${formatCurrency(v.ganancia)}`,
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: [79, 70, 229], fontSize: 7 },
+    bodyStyles: { fontSize: 6 },
+    styles: { cellPadding: 1.5 },
   })
 
   autoTable(doc, {
@@ -591,8 +965,8 @@ async function generarReportePDF() {
       t.nombre || t.nombre_cliente || '',
       t.tecnico || '',
       t.estado || '',
-      `RD$ ${formatCurrency(getTallerTotal(t))}`,
-      `RD$ ${formatCurrency(getTallerGanancia(t))}`,
+      `${getSystemCurrencyCode()} ${formatCurrency(getTallerTotal(t))}`,
+      `${getSystemCurrencyCode()} ${formatCurrency(getTallerGanancia(t))}`,
     ]),
     theme: 'striped',
     headStyles: { fillColor: [6, 182, 212], fontSize: 8 },
@@ -624,7 +998,7 @@ async function generarReportePDF() {
 }
 
 function formatCurrency(n: number): string {
-  return Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 onMounted(() => cargarDatos())
@@ -653,7 +1027,6 @@ onMounted(() => cargarDatos())
           size="small"
           @click="seleccionarRango(item.key)"
         />
-        <Select v-if="almacenStore.hasMultiple" v-model="almacenStore.activeId" :options="almacenStore.almacenes" optionLabel="nombre" optionValue="id" placeholder="Almacen" class="w-44" size="small" @change="cargarDatos" />
         <Button label="Generar PDF" icon="pi pi-file-pdf" severity="danger" size="small" @click="generarReportePDF" class="ml-auto" />
       </div>
 
@@ -665,15 +1038,24 @@ onMounted(() => cargarDatos())
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-3 mb-4">
         <div class="rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 p-4 text-white shadow">
           <p class="text-blue-100 text-xs font-semibold">Ventas</p>
-          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.total) }}</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.total) }}</p>
         </div>
         <div class="rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 p-4 text-white shadow">
           <p class="text-emerald-100 text-xs font-semibold">Ganancia</p>
-          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.ganancia) }}</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.ganancia) }}</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-orange-500 to-orange-700 p-4 text-white shadow">
+          <p class="text-orange-100 text-xs font-semibold">Costo Ventas</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.costo) }}</p>
         </div>
         <div class="rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 p-4 text-white shadow">
           <p class="text-amber-100 text-xs font-semibold">Descuentos</p>
-          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.descuento) }}</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.descuento) }}</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-blue-600 to-indigo-800 p-4 text-white shadow">
+          <p class="text-blue-100 text-xs font-semibold">Recargos de Tarjeta</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.porcentajeTarjeta) }}</p>
+          <p class="text-[10px] text-blue-100 mt-1">{{ totales.facturasTarjeta }} factura(s)</p>
         </div>
         <div class="rounded-xl bg-gradient-to-br from-violet-500 to-violet-700 p-4 text-white shadow">
           <p class="text-violet-100 text-xs font-semibold">Facturas</p>
@@ -681,11 +1063,11 @@ onMounted(() => cargarDatos())
         </div>
         <div class="rounded-xl bg-gradient-to-br from-cyan-500 to-cyan-700 p-4 text-white shadow">
           <p class="text-cyan-100 text-xs font-semibold">Taller Ingresos</p>
-          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.tallerIngresos) }}</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.tallerIngresos) }}</p>
         </div>
         <div class="rounded-xl bg-gradient-to-br from-rose-500 to-rose-700 p-4 text-white shadow">
           <p class="text-rose-100 text-xs font-semibold">Taller Ganancia</p>
-          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.tallerGanancia) }}</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.tallerGanancia) }}</p>
         </div>
         <div class="rounded-xl bg-gradient-to-br from-sky-500 to-sky-700 p-4 text-white shadow">
           <p class="text-sky-100 text-xs font-semibold">Ordenes Taller</p>
@@ -693,7 +1075,37 @@ onMounted(() => cargarDatos())
         </div>
         <div class="rounded-xl bg-gradient-to-br from-red-500 to-red-700 p-4 text-white shadow">
           <p class="text-red-100 text-xs font-semibold">Gastos</p>
-          <p class="text-xl font-bold">RD$ {{ formatCurrency(totales.totalGastos) }}</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.totalGastos) }}</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-orange-500 to-orange-700 p-4 text-white shadow">
+          <p class="text-orange-100 text-xs font-semibold">Gastos Efectivo</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.totalGastosEfectivo) }}</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-purple-500 to-purple-700 p-4 text-white shadow">
+          <p class="text-purple-100 text-xs font-semibold">Gastos Transferencia</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.totalGastosTransferencia) }}</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-teal-500 to-teal-700 p-4 text-white shadow">
+          <p class="text-teal-100 text-xs font-semibold">Margen %</p>
+          <p class="text-xl font-bold">{{ totales.margen.toFixed(1) }}%</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 p-4 text-white shadow">
+          <p class="text-indigo-100 text-xs font-semibold">Ticket Promedio</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.ticketPromedio) }}</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-pink-500 to-pink-700 p-4 text-white shadow">
+          <p class="text-pink-100 text-xs font-semibold">Items / Factura</p>
+          <p class="text-xl font-bold">{{ totales.itemsPorFactura.toFixed(1) }}</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-teal-500 to-teal-700 p-4 text-white shadow">
+          <p class="text-teal-100 text-xs font-semibold">Ganancia Total</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.gananciaTotal) }}</p>
+          <p class="text-[10px] text-teal-100 mt-1">Ventas + Taller</p>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-cyan-600 to-cyan-800 p-4 text-white shadow">
+          <p class="text-cyan-100 text-xs font-semibold">Ganancia Neta</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.gananciaNeta) }}</p>
+          <p class="text-[10px] text-cyan-100 mt-1">Ventas - Gastos efectivo</p>
         </div>
       </div>
 
@@ -730,12 +1142,110 @@ onMounted(() => cargarDatos())
             <canvas ref="canvasTopClientes"></canvas>
           </div>
         </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+          <h4 class="text-sm font-semibold mb-3">Top 10 Productos Vendidos</h4>
+          <div v-if="loading" class="h-48 flex items-center justify-center text-surface-400 text-sm">Cargando...</div>
+          <div v-else-if="topProductos.length > 0" class="h-48">
+            <canvas ref="canvasTopProductos"></canvas>
+          </div>
+          <div v-else class="h-48 flex flex-col items-center justify-center text-surface-400 text-sm">
+            <i class="pi pi-chart-bar text-2xl mb-2"></i>
+            <span>No hay productos vendidos en este rango.</span>
+          </div>
+        </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+          <h4 class="text-sm font-semibold mb-3">Ventas por Categoria</h4>
+          <div v-if="loading" class="h-48 flex items-center justify-center text-surface-400 text-sm">Cargando...</div>
+          <div v-else-if="ventasPorCategoria.length > 0" class="h-48">
+            <canvas ref="canvasCategoria"></canvas>
+          </div>
+          <div v-else class="h-48 flex flex-col items-center justify-center text-surface-400 text-sm">
+            <i class="pi pi-chart-pie text-2xl mb-2"></i>
+            <span>Sin datos de categoria.</span>
+          </div>
+        </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 overflow-hidden col-span-1 sm:col-span-2">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-700">
+            <h4 class="font-semibold text-sm flex items-center gap-2"><i class="pi pi-list text-primary"></i> Productos Vendidos</h4>
+            <span class="text-xs text-surface-400">{{ rangoLabel }}</span>
+          </div>
+          <div v-if="loading" class="text-center py-6 text-surface-400 text-sm">Cargando...</div>
+          <div v-else-if="topProductos.length === 0" class="text-center py-6 text-surface-400 text-sm">Sin ventas en este rango</div>
+          <div v-else class="divide-y divide-surface-100 dark:divide-surface-700">
+            <div v-for="(p, i) in topProductos" :key="i" class="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-50 dark:hover:bg-surface-800/50 transition-colors">
+              <span class="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                :style="{ background: i < 3 ? ['#FFD700','#C0C0C0','#CD7F32'][i] : 'var(--p-primary-300)' }">
+                {{ i + 1 }}
+              </span>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium truncate">{{ p.nombre }}</div>
+                <div class="text-xs text-surface-400">{{ p.cantidad }} vendido(s)</div>
+              </div>
+              <span class="text-sm font-semibold">{{ $formatMoney(p.total) }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4 col-span-1 sm:col-span-2">
+          <h4 class="text-sm font-semibold mb-3">Ventas por Vendedor</h4>
+          <DataTable
+            :value="ventasPorVendedor"
+            :loading="loading"
+            stripedRows
+            paginator
+            :rows="10"
+            :rowsPerPageOptions="[10, 25, 50]"
+            dataKey="vendedor"
+            responsiveLayout="scroll"
+            sortField="total"
+            :sortOrder="-1"
+            class="!text-xs"
+          >
+            <Column field="vendedor" header="Vendedor" sortable />
+            <Column field="count" header="Facturas" sortable style="width: 6rem" />
+            <Column field="total" header="Total" sortable style="width: 8rem">
+              <template #body="{ data }">{{ $formatMoney(data.total) }}</template>
+            </Column>
+            <Column field="ganancia" header="Ganancia" sortable style="width: 8rem">
+              <template #body="{ data }"><span class="text-emerald-600 font-semibold">{{ $formatMoney(data.ganancia) }}</span></template>
+            </Column>
+            <template #empty>
+              <div class="text-center py-6 text-surface-400">Sin datos de vendedor.</div>
+            </template>
+          </DataTable>
+        </div>
       </div>
 
       <div class="flex items-center gap-2 mb-3">
         <i class="pi pi-search text-surface-400" />
         <InputText v-model="busqueda" placeholder="Buscar factura, orden, cliente, tecnico, metodo pago..." fluid class="!text-sm" />
       </div>
+
+      <div class="flex items-center justify-between gap-3 mb-2">
+        <h4 class="text-sm font-semibold">Abonos de cuentas por cobrar</h4>
+        <span class="text-sm font-bold text-emerald-600">Total: {{ $formatMoney(totalAbonosCuentas) }}</span>
+      </div>
+      <DataTable
+        :value="abonosCuentas"
+        :loading="loading"
+        stripedRows
+        paginator
+        :rows="10"
+        :rowsPerPageOptions="[10, 25, 50]"
+        dataKey="id"
+        responsiveLayout="scroll"
+        class="mb-6"
+      >
+        <Column field="no_factura" header="Factura" sortable style="width: 8rem" />
+        <Column field="fecha" header="Fecha" sortable style="width: 8rem">
+          <template #body="{ data }">{{ data.fecha }} {{ data.hora }}</template>
+        </Column>
+        <Column field="cliente" header="Cliente" sortable />
+        <Column field="metodo" header="Metodo" sortable style="width: 9rem" />
+        <Column field="monto" header="Monto" sortable style="width: 8rem">
+          <template #body="{ data }"><span class="font-semibold text-emerald-600">{{ $formatMoney(data.monto) }}</span></template>
+        </Column>
+        <template #empty><div class="text-center py-6 text-surface-400">Sin abonos en este rango.</div></template>
+      </DataTable>
 
       <h4 class="text-sm font-semibold mb-2">Facturas</h4>
       <DataTable
@@ -751,23 +1261,30 @@ onMounted(() => cargarDatos())
         :sortOrder="-1"
       >
         <Column field="no_factura" header="Factura" sortable style="width: 8rem" />
-        <Column field="fecha_emision" header="Fecha" sortable style="width: 7rem" />
+        <Column field="fecha_emision" header="Fecha" sortable style="width: 7rem">
+          <template #body="{ data }">{{ fechaEfectivaFactura(data) }}</template>
+        </Column>
         <Column field="nombre_cliente" header="Cliente" sortable />
         <Column field="metodo_pago" header="Pago" sortable style="width: 7rem" />
         <Column field="descuento" header="Desc." sortable style="width: 6rem">
           <template #body="{ data }">
-            <span v-if="data.descuento > 0" class="text-amber-600 font-semibold">${{ formatCurrency(data.descuento) }}</span>
+            <span v-if="data.descuento > 0" class="text-amber-600 font-semibold">{{ $formatMoney(data.descuento) }}</span>
             <span v-else class="text-surface-300">-</span>
+          </template>
+        </Column>
+        <Column header="Costo" sortable style="width: 7rem">
+          <template #body="{ data }">
+            <span class="text-orange-600 font-semibold">{{ $formatMoney(calcularCostoFactura(data)) }}</span>
           </template>
         </Column>
         <Column field="total" header="Total" sortable style="width: 7rem">
           <template #body="{ data }">
-            <span class="font-semibold">${{ formatCurrency(getTallerTotal(data)) }}</span>
+            <span class="font-semibold">{{ $formatMoney(getTallerTotal(data)) }}</span>
           </template>
         </Column>
         <Column field="ganancia" header="Ganancia" sortable style="width: 7rem">
           <template #body="{ data }">
-            <span :class="data.ganancia >= 0 ? 'text-emerald-600 font-semibold' : 'text-red-500'">${{ formatCurrency(data.ganancia) }}</span>
+            <span :class="data.ganancia >= 0 ? 'text-emerald-600 font-semibold' : 'text-red-500'">{{ $formatMoney(data.ganancia) }}</span>
           </template>
         </Column>
 
@@ -802,12 +1319,12 @@ onMounted(() => cargarDatos())
         <Column field="estado" header="Estado" sortable style="width: 9rem" />
         <Column field="total" header="Total" sortable style="width: 7rem">
           <template #body="{ data }">
-            <span class="font-semibold">${{ formatCurrency(data.total) }}</span>
+            <span class="font-semibold">{{ $formatMoney(data.total) }}</span>
           </template>
         </Column>
         <Column header="Ganancia" sortable style="width: 7rem">
           <template #body="{ data }">
-            <span class="text-emerald-600 font-semibold">${{ formatCurrency(getTallerGanancia(data)) }}</span>
+            <span class="text-emerald-600 font-semibold">{{ $formatMoney(getTallerGanancia(data)) }}</span>
           </template>
         </Column>
 

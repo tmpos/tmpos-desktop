@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { useLocaleProfile } from '@/composables/useLocaleProfile'
+
+const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
+import { ref, computed, watch, onMounted } from 'vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -10,6 +13,7 @@ import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Fieldset from 'primevue/fieldset'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import QRCode from 'qrcode'
@@ -17,11 +21,22 @@ import JsBarcode from 'jsbarcode'
 
 import { envioElectron } from '@/funciones/funciones.js'
 import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
+import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useEmpresa } from '@/composables/useEmpresa'
+import { useSystemModeStore } from '@/stores/systemMode'
+import { useAuthStore } from '@/stores/auth.store'
+import { useCloudRefresh } from '@/composables/useCloudRefresh'
 
 const toast = useToast()
-const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
+const systemMode = useSystemModeStore()
+const { nombre: nombreEmpresa, cargar: cargarEmpresa } = useEmpresa()
+const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
+const auth = useAuthStore()
+const verTodosAlmacenes = ref(false)
+const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const accesorios = ref<any[]>([])
+const accesoriosRaw = ref<any[]>([])
 const marcas = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
@@ -52,6 +67,10 @@ const stockCantidad = ref(0)
 const selectedAccesorios = ref<any[]>([])
 const dialogCambioProveedorMulti = ref(false)
 const proveedorMultiSel = ref<any>(null)
+const dialogMoverAlmacenMulti = ref(false)
+const almacenDestinoMulti = ref<any>(null)
+const almacenesDestinoMulti = ref<any[]>([])
+const moviendoAlmacenMulti = ref(false)
 
 const camposArray = ['nombre', 'codigo_barra', 'costo', 'precio_venta', 'precio_min', 'precio_xmayor', 'cantidad', 'alerta', 'marca', 'categoria', 'proveedor_id']
 
@@ -213,11 +232,12 @@ async function cargarAccesorios() {
     if (res.success) {
       const marcaMap = new Map(marcas.value.map((m: any) => [m.id, m.nombre]))
       const catMap = new Map(categorias.value.map((c: any) => [c.id, c.nombre]))
-      accesorios.value = filterByAlmacen(res.data || []).map((a: any) => ({
+      accesoriosRaw.value = (res.data || []).map((a: any) => ({
         ...a,
         marca_nombre: marcaMap.get(a.marca) || '',
         categoria_nombre: catMap.get(a.categoria) || '',
       }))
+      accesorios.value = verTodosAlmacenes.value ? accesoriosRaw.value : filterByAlmacen(accesoriosRaw.value)
     }
   } catch (error) {
     console.error(error)
@@ -225,6 +245,11 @@ async function cargarAccesorios() {
     loading.value = false
   }
 }
+
+watch(verTodosAlmacenes, () => {
+  if (accesoriosRaw.value.length === 0) return
+  accesorios.value = verTodosAlmacenes.value ? accesoriosRaw.value : filterByAlmacen(accesoriosRaw.value)
+})
 
 function abrirCrear() {
   isEditing.value = false
@@ -269,13 +294,18 @@ function abrirAgregarStock(accesorio: any) {
   dialogAgregarStock.value = true
 }
 
+function actualizarStockCantidad(event: { value?: number | null }) {
+  stockCantidad.value = Number(event.value || 0)
+}
+
 async function aplicarAgregarStock() {
-  if (!accesorioStock.value || stockCantidad.value <= 0) return
-  const nueva = (accesorioStock.value.cantidad || 0) + stockCantidad.value
+  const cantidadAgregar = Number(stockCantidad.value || 0)
+  if (!accesorioStock.value || cantidadAgregar <= 0) return
+  const nueva = Number(accesorioStock.value.cantidad || 0) + cantidadAgregar
   await window.db.update('accesorios', accesorioStock.value.id, { cantidad: nueva })
   accesorioStock.value.cantidad = nueva
   dialogAgregarStock.value = false
-  toast.add({ severity: 'success', summary: 'Stock agregado', detail: `+${stockCantidad.value} unidades`, life: 2000 })
+  toast.add({ severity: 'success', summary: 'Stock agregado', detail: `+${cantidadAgregar} unidades`, life: 2000 })
   await cargarAccesorios()
 }
 
@@ -372,12 +402,13 @@ function aplicarVariablesProducto(valor: string, producto: any): string {
   const precio = Number(producto?.precio_venta || 0).toFixed(2)
   const codigo = generarCodigoProducto(producto)
   return String(valor || '')
-    .replace(/\{PRODUCTO\}/g, producto?.nombre || '')
-    .replace(/\{NOMBRE_PRODUCTO\}/g, producto?.nombre || '')
-    .replace(/\{PRECIO\}/g, `RD$ ${precio}`)
-    .replace(/\{CODIGO_BARRA\}/g, codigo)
-    .replace(/\{CODIGO\}/g, codigo)
-    .replace(/\{BARCODE\}/g, codigo)
+    .replace(/\{EMPRESA\}/gi, nombreEmpresa.value || 'MI EMPRESA')
+    .replace(/\{PRODUCTO\}/gi, producto?.nombre || '')
+    .replace(/\{NOMBRE_PRODUCTO\}/gi, producto?.nombre || '')
+    .replace(/\{PRECIO\}/gi, `RD$ ${precio}`)
+    .replace(/\{CODIGO_BARRA\}/gi, codigo)
+    .replace(/\{CODIGO\}/gi, codigo)
+    .replace(/\{BARCODE\}/gi, codigo)
 }
 
 async function imprimirEtiquetaProducto(plantilla: any) {
@@ -386,6 +417,8 @@ async function imprimirEtiquetaProducto(plantilla: any) {
     return
   }
   if (!productoEtiqueta.value || !plantilla?.elementos) return
+
+  await cargarEmpresa()
 
   localStorage.setItem('etiquetas_printer', printerSel.value)
   dialogEtiquetaProducto.value = false
@@ -423,7 +456,7 @@ async function imprimirEtiquetaProducto(plantilla: any) {
   }
 
   let html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiqueta Producto</title><style>'
-  html += 'body{margin:0;padding:0;font-family:Arial,sans-serif}'
+  html += `@page{size:${ancho}mm ${alto}mm;margin:0}html,body{margin:0;padding:0;width:${ancho}mm;height:${alto}mm;font-family:Arial,sans-serif}`
   html += `.label{width:${mmToPx(ancho)}px;height:${mmToPx(alto)}px;position:relative;overflow:hidden;background:white}`
   html += '.elem{position:absolute;overflow:hidden;word-wrap:break-word;display:flex;align-items:center;justify-content:center}'
   html += '</style></head><body><div class="label">'
@@ -449,7 +482,7 @@ async function imprimirEtiquetaProducto(plantilla: any) {
   let ultimoError = ''
   for (let i = 0; i < copias.value; i++) {
     try {
-      const res = await window.electron.invoke('print:ticket', html, printerSel.value || undefined) as any
+      const res = await window.electron.invoke('print:ticket', html, printerSel.value || undefined, { width: ancho, height: alto }) as any
       if (res.success) impresas++
       else ultimoError = res.error || 'No se pudo imprimir'
     } catch (error: any) {
@@ -487,12 +520,12 @@ async function guardar() {
     if (isEditing.value) {
       const res = await window.db.update('accesorios', selectedAccesorio.value.id, data)
       if (res.success) {
-        toast.add({ severity: 'success', summary: 'Exito', detail: 'Accesorio actualizado', life: 3000 })
+      toast.add({ severity: 'success', summary: 'Exito', detail: `${systemMode.isGeneralStore ? 'Producto' : 'Accesorio'} actualizado`, life: 3000 })
       }
     } else {
       const res = await window.db.insert('accesorios', addAlmacenId(data))
       if (res.success) {
-        toast.add({ severity: 'success', summary: 'Exito', detail: 'Accesorio creado', life: 3000 })
+      toast.add({ severity: 'success', summary: 'Exito', detail: `${systemMode.isGeneralStore ? 'Producto' : 'Accesorio'} creado`, life: 3000 })
       }
     }
     dialogVisible.value = false
@@ -513,7 +546,7 @@ async function borrarMultiple() {
   }
   selectedAccesorios.value = []
   deleteDialogVisible.value = false
-  toast.add({ severity: 'success', summary: 'Eliminados', detail: 'Accesorios eliminados', life: 2000 })
+    toast.add({ severity: 'success', summary: 'Eliminados', detail: `${systemMode.productLabel} eliminados`, life: 2000 })
   await cargarAccesorios()
 }
 
@@ -524,20 +557,57 @@ function abrirCambioProveedorMulti() {
 
 async function aplicarCambioProveedorMulti() {
   if (!proveedorMultiSel.value) return
+  const cantidad = selectedAccesorios.value.length
   for (const acc of selectedAccesorios.value) {
     await window.db.update('accesorios', acc.id, { proveedor_id: proveedorMultiSel.value.id })
   }
   selectedAccesorios.value = []
   dialogCambioProveedorMulti.value = false
-  toast.add({ severity: 'success', summary: 'Proveedor actualizado', detail: `${selectedAccesorios.value.length} accesorio(s)`, life: 2000 })
+  toast.add({ severity: 'success', summary: 'Proveedor actualizado', detail: `${cantidad} accesorio(s)`, life: 2000 })
   await cargarAccesorios()
+}
+
+async function abrirMoverAlmacenMulti() {
+  if (selectedAccesorios.value.length === 0) return
+  almacenDestinoMulti.value = null
+  try {
+    await almacenStore.load()
+    const origenUid = String(selectedAccesorios.value[0].almacen_uid || almacenStore.activeUid || '')
+    almacenesDestinoMulti.value = almacenStore.almacenes.filter((a: any) => String(a.uid || '') !== origenUid)
+    dialogMoverAlmacenMulti.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron cargar los almacenes', life: 4000 })
+  }
+}
+
+async function aplicarMoverAlmacenMulti() {
+  if (!almacenDestinoMulti.value || moviendoAlmacenMulti.value) return
+  const destinoId = Number(almacenDestinoMulti.value.id || almacenDestinoMulti.value)
+  const destinoUid = String(almacenDestinoMulti.value.uid || '')
+  const destinoNombre = almacenDestinoMulti.value.nombre || ''
+  const cantidad = selectedAccesorios.value.length
+  moviendoAlmacenMulti.value = true
+  try {
+    for (const acc of selectedAccesorios.value) {
+      const res = await window.db.update('accesorios', acc.id, { almacen_id: destinoId, almacen_uid: destinoUid })
+      if (!res.success) throw new Error(res.error || `No se pudo mover ${acc.nombre}`)
+    }
+    dialogMoverAlmacenMulti.value = false
+    selectedAccesorios.value = []
+    toast.add({ severity: 'success', summary: 'Almacen actualizado', detail: `${cantidad} ${systemMode.isGeneralStore ? 'producto(s)' : 'accesorio(s)'} movidos a ${destinoNombre}`, life: 3000 })
+    await cargarAccesorios()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo cambiar el almacen', life: 4000 })
+  } finally {
+    moviendoAlmacenMulti.value = false
+  }
 }
 
 async function borrar() {
   try {
     const res = await window.db.delete('accesorios', selectedAccesorio.value.id)
     if (res.success) {
-      toast.add({ severity: 'success', summary: 'Exito', detail: 'Accesorio eliminado', life: 3000 })
+      toast.add({ severity: 'success', summary: 'Exito', detail: `${systemMode.isGeneralStore ? 'Producto' : 'Accesorio'} eliminado`, life: 3000 })
     }
     deleteDialogVisible.value = false
     await cargarAccesorios()
@@ -575,7 +645,7 @@ async function crearProveedor() {
     telefono: nuevoProveedor.value.telefono.trim(),
     direccion: nuevoProveedor.value.direccion.trim().toUpperCase(),
   }
-  const res = await window.db.insert('proveedores', data)
+  const res = await window.db.insert('proveedores', addAlmacenId(data))
   if (res.success) {
     proveedores.value.push({ id: res.data.id, ...data })
     form.value.proveedor_id = res.data.id
@@ -600,6 +670,14 @@ async function subirImagen() {
   try {
     const uid = await uploadImage(file, 'accesorios')
     form.value.imagen = uid
+    if (isEditing.value && selectedAccesorio.value?.id) {
+      const actualizado = await window.db.update('accesorios', selectedAccesorio.value.id, { imagen: uid })
+      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
+      selectedAccesorio.value.imagen = uid
+      const local = accesorios.value.find((accesorio: any) => accesorio.id === selectedAccesorio.value.id)
+      if (local) local.imagen = uid
+      if (isOnline()) await pushLocalRowToCloud('accesorios', selectedAccesorio.value.id)
+    }
     toast.add({ severity: 'success', summary: 'Imagen subida', life: 2000 })
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo subir la imagen', life: 4000 })
@@ -615,6 +693,10 @@ async function eliminarImagen() {
     await deleteImage(form.value.imagen)
   } catch {}
   form.value.imagen = ''
+  if (isEditing.value && selectedAccesorio.value?.id) {
+    await window.db.update('accesorios', selectedAccesorio.value.id, { imagen: '' })
+    if (isOnline()) await pushLocalRowToCloud('accesorios', selectedAccesorio.value.id)
+  }
 }
 
 function imagenUrl(uid: string | null | undefined): string | null {
@@ -643,19 +725,25 @@ onMounted(async () => {
   const resProv = await window.db.getAll('proveedores')
   if (resProv.success) proveedores.value = resProv.data || []
 })
+
+useCloudRefresh(['accesorios'], cargarAccesorios)
 </script>
 
 <template>
   <div>
     <Toast />
 
-    <Fieldset legend="Accesorios">
+    <Fieldset :legend="systemMode.productLabel">
       <div class="toolbar-mobile">
         <IconField>
           <InputIcon class="pi pi-search" />
-          <InputText v-model="busqueda" placeholder="Buscar accesorio..." />
+          <InputText v-model="busqueda" :placeholder="systemMode.isGeneralStore ? 'Buscar producto...' : 'Buscar accesorio...'" />
         </IconField>
         <div class="flex items-center gap-2">
+          <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
             <button
               class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"
@@ -676,13 +764,14 @@ onMounted(async () => {
               <i class="pi pi-th-large"></i>
             </button>
           </div>
-          <Button label="Nuevo Accesorio" icon="pi pi-plus" @click="abrirCrear" />
+          <Button :label="systemMode.isGeneralStore ? 'Nuevo Producto' : 'Nuevo Accesorio'" icon="pi pi-plus" @click="abrirCrear" />
         </div>
       </div>
 
       <div v-if="selectedAccesorios.length > 0" class="flex items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
         <span class="text-sm font-medium">{{ selectedAccesorios.length }} seleccionado(s)</span>
         <Button label="Cambiar Proveedor" icon="pi pi-truck" severity="info" size="small" @click="abrirCambioProveedorMulti" />
+        <Button label="Cambiar Almacen" icon="pi pi-warehouse" severity="success" size="small" @click="abrirMoverAlmacenMulti" />
         <Button label="Eliminar" icon="pi pi-trash" severity="danger" size="small" @click="confirmarBorrarMultiple" />
         <Button icon="pi pi-times" severity="secondary" text rounded size="small" @click="selectedAccesorios = []" v-tooltip="'Limpiar seleccion'" />
       </div>
@@ -789,14 +878,14 @@ onMounted(async () => {
         </Column>
 
         <template #empty>
-          <div class="text-center py-6 text-surface-500">No hay accesorios registrados.</div>
+          <div class="text-center py-6 text-surface-500">No hay {{ systemMode.isGeneralStore ? 'productos' : 'accesorios' }} registrados.</div>
         </template>
       </DataTable>
 
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
-        <div v-else-if="accesoriosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay accesorios registrados.</div>
-        <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div v-else-if="accesoriosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay {{ systemMode.isGeneralStore ? 'productos' : 'accesorios' }} registrados.</div>
+        <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
           <div
             v-for="acc in accesoriosFiltrados"
             :key="acc.id"
@@ -881,14 +970,14 @@ onMounted(async () => {
 
     <Dialog
       v-model:visible="dialogVisible"
-      :header="isEditing ? 'Editar Accesorio' : 'Nuevo Accesorio'"
+      :header="`${isEditing ? 'Editar' : 'Nuevo'} ${systemMode.isGeneralStore ? 'Producto' : 'Accesorio'}`"
       modal
       :style="{ width: '32rem' }"
     >
       <div class="flex flex-col gap-4 pt-2">
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Nombre</label>
-          <InputText v-model="form.nombre" placeholder="Nombre del accesorio" fluid class="uppercase" style="text-transform: uppercase;" />
+          <InputText v-model="form.nombre" :placeholder="systemMode.isGeneralStore ? 'Nombre del producto' : 'Nombre del accesorio'" fluid class="uppercase" style="text-transform: uppercase;" />
         </div>
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Codigo de Barra</label>
@@ -900,19 +989,19 @@ onMounted(async () => {
         <div class="grid grid-cols-2 gap-3">
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Costo</label>
-            <InputNumber v-model="form.costo" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+            <InputNumber v-model="form.costo" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Precio Venta</label>
-            <InputNumber v-model="form.precio_venta" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+            <InputNumber v-model="form.precio_venta" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Precio Min</label>
-            <InputNumber v-model="form.precio_min" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+            <InputNumber v-model="form.precio_min" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Precio Mayor</label>
-            <InputNumber v-model="form.precio_xmayor" mode="currency" currency="USD" locale="en-US" fluid @focus="(e) => e.target.select()" />
+            <InputNumber v-model="form.precio_xmayor" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Cantidad</label>
@@ -959,7 +1048,7 @@ onMounted(async () => {
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="subiendoImagen" @click="guardar" />
       </template>
     </Dialog>
 
@@ -971,7 +1060,7 @@ onMounted(async () => {
     >
       <div class="flex items-center gap-3">
         <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span v-if="selectedAccesorios.length > 1">Seguro que deseas eliminar los <strong>{{ selectedAccesorios.length }}</strong> accesorios seleccionados?</span>
+          <span v-if="selectedAccesorios.length > 1">Seguro que deseas eliminar los <strong>{{ selectedAccesorios.length }}</strong> {{ systemMode.isGeneralStore ? 'productos' : 'accesorios' }} seleccionados?</span>
         <span v-else>Seguro que deseas eliminar <strong>{{ selectedAccesorio?.nombre }}</strong>?</span>
       </div>
       <template #footer>
@@ -1021,7 +1110,7 @@ onMounted(async () => {
             <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-surface-400 text-xs"></i>
             <InputText v-model="busquedaPlantilla" placeholder="Buscar plantilla..." fluid class="!pl-8 h-9 text-sm" />
           </div>
-          <p class="text-xs text-surface-400">Usa variables como <strong>{PRODUCTO}</strong>, <strong>{PRECIO}</strong> y <strong>{CODIGO_BARRA}</strong> en Inventario &gt; Etiquetas.</p>
+          <p class="text-xs text-surface-400">Usa variables como <strong>{producto}</strong>, <strong>{precio}</strong> y <strong>{codigo_barra}</strong> en Inventario &gt; Etiquetas.</p>
           <div v-if="plantillasFiltradas.length === 0" class="text-center py-4 text-surface-400 text-sm">{{ busquedaPlantilla ? 'Sin resultados' : 'No hay plantillas. Crea una en Inventario > Etiquetas.' }}</div>
           <div v-else class="flex flex-col gap-2 max-h-44 overflow-y-auto">
             <div
@@ -1068,7 +1157,7 @@ onMounted(async () => {
 
     <Dialog v-model:visible="dialogCambioProveedorMulti" header="Cambiar Proveedor" modal :style="{ width: '28rem' }">
       <div class="space-y-4 pt-2">
-        <p class="text-sm">Asignar proveedor a <strong>{{ selectedAccesorios.length }}</strong> accesorio(s):</p>
+        <p class="text-sm">Asignar proveedor a <strong>{{ selectedAccesorios.length }}</strong> {{ systemMode.isGeneralStore ? 'producto(s)' : 'accesorio(s)' }}:</p>
         <div class="flex gap-2">
           <Select v-model="proveedorMultiSel" :options="proveedores" optionLabel="nombre" placeholder="Seleccionar proveedor..." class="flex-1" fluid>
             <template #value="{ value }">
@@ -1082,6 +1171,18 @@ onMounted(async () => {
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogCambioProveedorMulti = false" />
         <Button label="Aplicar" icon="pi pi-check" :disabled="!proveedorMultiSel" @click="aplicarCambioProveedorMulti" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogMoverAlmacenMulti" header="Cambiar Almacen" modal :style="{ width: '28rem' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm">Mover <strong>{{ selectedAccesorios.length }}</strong> {{ systemMode.isGeneralStore ? 'producto(s)' : 'accesorio(s)' }} a otro almacen:</p>
+        <Select v-model="almacenDestinoMulti" :options="almacenesDestinoMulti" optionLabel="nombre" placeholder="Seleccionar almacen destino..." fluid />
+        <p v-if="almacenesDestinoMulti.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacen disponible para el traslado.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacenMulti" @click="dialogMoverAlmacenMulti = false" />
+        <Button label="Aplicar" icon="pi pi-warehouse" :loading="moviendoAlmacenMulti" :disabled="!almacenDestinoMulti" @click="aplicarMoverAlmacenMulti" />
       </template>
     </Dialog>
 
@@ -1117,7 +1218,7 @@ onMounted(async () => {
             <div class="text-xs text-surface-400">Stock actual: <strong>{{ accesorioStock?.cantidad || 0 }}</strong></div>
           </div>
         </div>
-        <InputNumber v-model="stockCantidad" :min="1" placeholder="Cantidad a agregar" class="w-full text-center text-2xl font-bold" fluid />
+        <InputNumber v-model="stockCantidad" :min="1" placeholder="Cantidad a agregar" class="w-full text-center text-2xl font-bold" fluid @input="actualizarStockCantidad" />
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogAgregarStock = false" />

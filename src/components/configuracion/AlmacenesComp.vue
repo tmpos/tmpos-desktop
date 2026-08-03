@@ -19,12 +19,12 @@
             {{ a.nombre?.charAt(0) || 'A' }}
           </div>
           <div>
-            <div class="font-semibold">{{ a.nombre }} <span v-if="a.id === almacenStore.activeId" class="text-xs text-primary-500 font-normal">(Activo)</span></div>
+            <div class="font-semibold">{{ a.nombre }} <span v-if="a.id === almacenStore.defaultId" class="text-xs text-primary-500 font-normal">(Predeterminada en este equipo)</span></div>
             <div class="text-xs text-surface-500">{{ a.codigo || 'Sin codigo' }}{{ a.direccion ? ' - ' + a.direccion : '' }}</div>
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <button v-if="a.id !== almacenStore.activeId" @click="almacenStore.select(a.id)" class="px-3 py-1.5 rounded-lg text-xs font-medium border border-surface-300 dark:border-surface-600 hover:bg-surface-100 dark:hover:bg-surface-700">Seleccionar</button>
+          <button v-if="auth.isAdmin && a.id !== almacenStore.defaultId" @click="establecerPredeterminado(a)" class="px-3 py-1.5 rounded-lg text-xs font-medium border border-surface-300 dark:border-surface-600 hover:bg-surface-100 dark:hover:bg-surface-700">Usar en este equipo</button>
           <button @click="editar(a)" class="w-8 h-8 flex items-center justify-center rounded-lg text-surface-400 hover:text-surface-700 dark:hover:text-surface-200 hover:bg-surface-100 dark:hover:bg-surface-700"><i class="pi pi-pencil text-xs"></i></button>
           <button v-if="a.id !== 1" @click="confirmarEliminar(a)" class="w-8 h-8 flex items-center justify-center rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"><i class="pi pi-trash text-xs"></i></button>
         </div>
@@ -83,10 +83,12 @@ import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import { useToast } from 'primevue/usetoast'
 import { useAlmacenStore } from '@/stores/almacen.store'
+import { useAuthStore } from '@/stores/auth.store'
 
 const toast = useToast()
 
 const almacenStore = useAlmacenStore()
+const auth = useAuthStore()
 
 const loading = ref(true)
 const almacenes = ref([])
@@ -111,6 +113,16 @@ function abrirNuevo() {
   form.value = { nombre: '', codigo: '', direccion: '', telefono: '', email: '', rnc: '' }
   error.value = ''
   dialogVisible.value = true
+}
+
+function establecerPredeterminado(almacen: any) {
+  if (!auth.isAdmin) {
+    toast.add({ severity: 'warn', summary: 'Acceso restringido', detail: 'Solo un administrador puede cambiar la tienda predeterminada', life: 3000 })
+    return
+  }
+  almacenStore.setDefault(almacen.id)
+  toast.add({ severity: 'success', summary: 'Tienda predeterminada', detail: `${almacen.nombre} quedó asignada a este equipo`, life: 2500 })
+  setTimeout(() => window.location.reload(), 500)
 }
 
 function editar(a) {
@@ -153,7 +165,6 @@ async function guardar() {
       const resGet = await (window as any).electron.invoke('db:getById', 'almacenes', res.data.id)
       console.log('[Almacenes] Get result:', JSON.stringify(resGet))
       if (resGet.success && resGet.data) {
-        await almacenStore.select(resGet.data.id)
         await almacenStore.load()
       }
     }

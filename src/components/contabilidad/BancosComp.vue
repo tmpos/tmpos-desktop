@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getSystemLocale } from '@/i18n/localeProfiles'
 import { ref, computed, onMounted } from 'vue'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
@@ -10,8 +11,10 @@ import Column from 'primevue/column'
 import Tag from 'primevue/tag'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
+const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
 const cuentas = ref<any[]>([])
 const loading = ref(false)
 
@@ -28,22 +31,36 @@ const monedas = [
 ]
 
 function formatCurrency(n: number): string {
-  return Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 async function ensureTable() {
-  try {
-    await window.electron.invoke('consultaservidor', 'executeSQL', `CREATE TABLE IF NOT EXISTS bancos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, numero_cuenta TEXT DEFAULT '', moneda TEXT DEFAULT 'PESOS', saldo REAL DEFAULT 0, fecha_transaccion TEXT DEFAULT '', created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')`)
-  } catch {
-    await window.electron.invoke('consultaservidor', 'rawQuery', `CREATE TABLE IF NOT EXISTS bancos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, numero_cuenta TEXT DEFAULT '', moneda TEXT DEFAULT 'PESOS', saldo REAL DEFAULT 0, fecha_transaccion TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)`)
+  const execSql = async (sql: string) => {
+    try {
+      const res = await window.electron.invoke('consultaservidor', 'executeSQL', sql)
+      if (res?.success === false) throw new Error(res.error || 'executeSQL fallo')
+    } catch {
+      try { await window.electron.invoke('consultaservidor', 'rawQuery', sql) } catch {}
+    }
   }
+
+  try {
+    await execSql(`CREATE TABLE IF NOT EXISTS bancos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, numero_cuenta TEXT DEFAULT '', moneda TEXT DEFAULT 'PESOS', saldo REAL DEFAULT 0, fecha_transaccion TEXT DEFAULT '', uid TEXT DEFAULT '', created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')`)
+    await execSql(`ALTER TABLE bancos ADD COLUMN uid TEXT DEFAULT ''`)
+    await execSql(`ALTER TABLE bancos ADD COLUMN created_at TEXT DEFAULT ''`)
+    await execSql(`ALTER TABLE bancos ADD COLUMN updated_at TEXT DEFAULT ''`)
+    await execSql(`ALTER TABLE bancos ADD COLUMN fecha_transaccion TEXT DEFAULT ''`)
+    await execSql(`ALTER TABLE bancos ADD COLUMN almacen_id INTEGER DEFAULT 0`)
+    await execSql(`ALTER TABLE bancos ADD COLUMN almacen_uid TEXT DEFAULT ''`)
+    await execSql(`UPDATE bancos SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL OR uid = ''`)
+  } catch (_) {}
 }
 
 async function cargarCuentas() {
   loading.value = true
   try {
     const res = await window.db.getAll('bancos')
-    if (res.success) cuentas.value = res.data || []
+    if (res.success) cuentas.value = filterByAlmacen(res.data || [])
   } catch (_) {}
   loading.value = false
 }
@@ -86,7 +103,7 @@ async function guardar() {
       res = await window.db.update('bancos', selectedId.value, data)
     } else {
       data.created_at = new Date().toISOString()
-      res = await window.db.insert('bancos', data)
+      res = await window.db.insert('bancos', addAlmacenId(data))
     }
     if (res.success) {
       toast.add({ severity: 'success', summary: isEditing.value ? 'Actualizada' : 'Creada', detail: 'Cuenta bancaria guardada', life: 3000 })
@@ -150,7 +167,7 @@ onMounted(async () => {
         </Column>
         <Column field="saldo" header="Saldo" sortable style="width: 10rem">
           <template #body="{ data }">
-            <span :class="data.saldo >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'">${{ formatCurrency(data.saldo) }}</span>
+            <span :class="data.saldo >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'">{{ $formatMoney(data.saldo) }}</span>
           </template>
         </Column>
         <template #empty>
@@ -161,12 +178,12 @@ onMounted(async () => {
       <div v-if="cuentas.length" class="flex justify-end mt-4 pt-4 border-t border-surface-200 dark:border-surface-700">
         <div class="text-right">
           <div class="text-xs text-surface-500 uppercase tracking-wider">Saldo Total</div>
-          <div class="text-2xl font-bold text-primary-600">${{ formatCurrency(cuentas.reduce((s, c) => s + Number(c.saldo || 0), 0)) }}</div>
+          <div class="text-2xl font-bold text-primary-600">{{ $formatMoney(cuentas.reduce((s, c) => s + Number(c.saldo || 0), 0)) }}</div>
         </div>
       </div>
     </div>
 
-    <Dialog v-model:visible="dialogVisible" :header="isEditing ? 'Editar Cuenta Bancaria' : 'Nueva Cuenta Bancaria'" modal :style="{ width: '90%', maxWidth: '450px' }">
+    <Dialog v-model:visible="dialogVisible" :header="isEditing ? 'Editar Cuenta Bancaria' : 'Nueva Cuenta Bancaria'" modal :style="{ width: 'min(22rem, calc(100vw - 2rem))' }" :draggable="false">
       <div class="space-y-4 pt-2">
         <div class="flex flex-col gap-1">
           <label class="text-sm font-semibold">Nombre <span class="text-red-500">*</span></label>

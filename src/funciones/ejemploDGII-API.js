@@ -5,8 +5,8 @@ const makeApiRequest = async () => {
   const apiUrl = `${host}/documentos-ecf`;
 
   const loginData = {
-    email: 'tmposystem@gmail.com',
-    password: 'T@veras291286'
+    email: process.env.DGII_EMAIL || '',
+    password: process.env.DGII_PASSWORD || ''
   };
 
   try {

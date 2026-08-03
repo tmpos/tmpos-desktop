@@ -13,6 +13,14 @@ export function useAlertas() {
   const alertas = ref<Alerta[]>([])
   const loadingAlertas = ref(false)
 
+  const claveAlerta = (alerta: Alerta) => `${alerta.tipo}|${alerta.mensaje}`
+  const obtenerDescartadas = (): string[] => {
+    try { return JSON.parse(localStorage.getItem('alertas_descartadas') || '[]') } catch { return [] }
+  }
+  const guardarDescartadas = (claves: string[]) => {
+    localStorage.setItem('alertas_descartadas', JSON.stringify([...new Set(claves)].slice(-100)))
+  }
+
   async function verificarAlertas() {
     loadingAlertas.value = true
     const result: Alerta[] = []
@@ -55,9 +63,20 @@ export function useAlertas() {
       }
     } catch {}
 
-    alertas.value = result.slice(0, 20)
+    const descartadas = new Set(obtenerDescartadas())
+    alertas.value = result.filter(alerta => !descartadas.has(claveAlerta(alerta))).slice(0, 20)
     loadingAlertas.value = false
   }
 
-  return { alertas, loadingAlertas, verificarAlertas }
+  function descartarAlerta(alerta: Alerta) {
+    guardarDescartadas([...obtenerDescartadas(), claveAlerta(alerta)])
+    alertas.value = alertas.value.filter(item => claveAlerta(item) !== claveAlerta(alerta))
+  }
+
+  function descartarTodas() {
+    guardarDescartadas([...obtenerDescartadas(), ...alertas.value.map(claveAlerta)])
+    alertas.value = []
+  }
+
+  return { alertas, loadingAlertas, verificarAlertas, descartarAlerta, descartarTodas }
 }

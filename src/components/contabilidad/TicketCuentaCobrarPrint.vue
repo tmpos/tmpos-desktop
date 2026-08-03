@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { getLocaleProfile, getSystemCurrencyCode } from '@/i18n/localeProfiles'
+import { useAlmacenStore } from '@/stores/almacen.store'
+import { resolvePrintableImage } from '@/services/printImageService'
 
 const toast = useToast()
+const almacenStore = useAlmacenStore()
 
 const DEFAULT_TICKET_CONFIG = {
   printer_name: '',
@@ -65,7 +69,7 @@ function buildTicketHtml({
   productos: any[]
   factura: any
 }) {
-  const simbolo = 'RD$'
+  const simbolo = getSystemCurrencyCode()
   const logoEmpresa = resolveLogo(empresa)
   const paperWidth = toNumber(ticketConfig.paper_width, 80)
   const pageWidth = paperWidth === 58 ? 230 : 300
@@ -73,7 +77,7 @@ function buildTicketHtml({
   const ticketWidth = paperWidth === 58 ? 200 : 240
   const tipoDoc = monto > 0 ? 'RECIBO DE ABONO' : 'ESTADO DE CUENTA'
   const ahora = new Date()
-  const fechaHora = `${ahora.toLocaleDateString('es-DO')} ${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`
+  const fechaHora = `${ahora.toLocaleDateString(getLocaleProfile().locale)} ${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`
   const fechaVenta = cuenta.fecha_venta ? formatFecha(cuenta.fecha_venta) : ''
   const fechaVencimiento = cuenta.fecha_vencimiento ? formatFecha(cuenta.fecha_vencimiento) : ''
 
@@ -274,8 +278,15 @@ async function printTicket(cuenta: any, monto = 0, abonadoTotal = 0, saldoRestan
 
   let empresa: any = {}
   try {
+    await almacenStore.load()
     const res = await window.db.getAll('empresa')
-    if (res.success && res.data?.length > 0) empresa = res.data[0]
+    if (res.success && res.data?.length > 0) {
+      empresa = (almacenStore.activeUid && res.data.find((item: any) => String(item.uid || item.almacen_uid || '') === String(almacenStore.activeUid)))
+        || res.data.find((item: any) => Number(item.almacen_id || item.id) === Number(almacenStore.activeId))
+        || res.data[0]
+      const logo = await resolvePrintableImage(empresa.logoprinter || empresa.logo)
+      if (logo) empresa = { ...empresa, logo, logoprinter: logo }
+    }
   } catch (_) {}
 
   // Cargar factura relacionada y sus productos

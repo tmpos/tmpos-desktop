@@ -17,25 +17,28 @@
         <Column field="fecha" header="Fecha" sortable style="width:7rem" />
         <Column field="turno_usuario" header="Cajero" sortable />
         <Column header="Ventas" style="width:7rem">
-          <template #body="{ data }">${{ formatCurrency(data.total_ventas) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.total_ventas) }}</template>
         </Column>
         <Column header="Efectivo" style="width:7rem">
-          <template #body="{ data }">${{ formatCurrency(data.efectivo) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.efectivo) }}</template>
+        </Column>
+        <Column header="Abonos CxC" style="width:7rem">
+          <template #body="{ data }"><span class="font-semibold text-cyan-600">{{ $formatMoney(data.abonos_cxc) }}</span></template>
         </Column>
         <Column header="Tarjeta" style="width:7rem">
-          <template #body="{ data }">${{ formatCurrency(data.tarjeta) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.tarjeta) }}</template>
         </Column>
         <Column header="Transferencia" style="width:7rem">
-          <template #body="{ data }">${{ formatCurrency(data.transferencia) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.transferencia) }}</template>
         </Column>
         <Column header="Gastos" style="width:7rem">
-          <template #body="{ data }">${{ formatCurrency(data.total_gastos) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.total_gastos) }}</template>
         </Column>
         <Column header="Saldo Final" style="width:7rem">
-          <template #body="{ data }"><span class="font-bold text-green-600">${{ formatCurrency(data.saldo_final || data.total_ventas - data.total_gastos) }}</span></template>
+          <template #body="{ data }"><span class="font-bold text-green-600">{{ $formatMoney(data.saldo_final || data.total_ventas - data.total_gastos) }}</span></template>
         </Column>
         <Column field="monto_inicial" header="Monto Inicial" style="width:6rem">
-          <template #body="{ data }">${{ formatCurrency(data.monto_inicial) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.monto_inicial) }}</template>
         </Column>
         <Column field="observacion" header="Nota" style="width:10rem" />
         <Column header="Acciones" style="width:10rem">
@@ -61,25 +64,27 @@
         <div class="grid grid-cols-2 gap-3 text-sm p-3 rounded-lg bg-surface-50 dark:bg-surface-800">
           <div><span class="text-surface-400">Turno:</span> #{{ turnoActivo.id }}</div>
           <div><span class="text-surface-400">Cajero:</span> {{ turnoActivo.usuario_nombre }}</div>
-          <div><span class="text-surface-400">Inicio:</span> {{ new Date(turnoActivo.created_at).toLocaleString('es-DO') }}</div>
-          <div><span class="text-surface-400">Monto inicial:</span> <strong>${{ formatCurrency(turnoActivo.monto_inicial || 0) }}</strong></div>
+          <div><span class="text-surface-400">Inicio:</span> {{ $formatDateTime(turnoActivo.created_at) }}</div>
+          <div><span class="text-surface-400">Monto inicial:</span> <strong>{{ $formatMoney(turnoActivo.monto_inicial || 0) }}</strong></div>
         </div>
         <div v-if="resumenCargando" class="text-center text-sm text-surface-400 py-4"><i class="pi pi-spin pi-spinner mr-2"></i>Calculando resumen...</div>
         <div v-else class="grid grid-cols-2 gap-3 text-sm">
           <div class="p-3 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
-            <p class="text-xs text-green-600">Ventas del turno</p>
-            <p class="text-lg font-bold text-green-700">${{ formatCurrency(resumenVentas.total) }}</p>
-            <p class="text-xs text-green-500">Efectivo: ${{ formatCurrency(resumenVentas.efectivo) }} | Tarjeta: ${{ formatCurrency(resumenVentas.tarjeta) }} | Transf: ${{ formatCurrency(resumenVentas.transferencia) }}</p>
+            <p class="text-xs text-green-600">Total cobrado en el turno</p>
+            <p class="text-lg font-bold text-green-700">{{ $formatMoney(resumenVentas.total) }}</p>
+            <p class="text-xs text-green-500">Efectivo: {{ $formatMoney(resumenVentas.efectivo) }} | Tarjeta: {{ $formatMoney(resumenVentas.tarjeta) }} | Transf: {{ $formatMoney(resumenVentas.transferencia) }}</p>
+            <p class="text-xs font-semibold text-cyan-600 mt-1">Incluye {{ resumenVentas.cantidad_abonos_cxc }} abono(s) CxC: {{ $formatMoney(resumenVentas.abonos_cxc) }}</p>
+            <p class="text-xs font-semibold text-violet-600 mt-1">Incluye {{ resumenVentas.cantidad_cobros_taller }} cobro(s) de taller: {{ $formatMoney(resumenVentas.cobros_taller) }}</p>
           </div>
           <div class="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
             <p class="text-xs text-red-600">Gastos del turno</p>
-            <p class="text-lg font-bold text-red-700">${{ formatCurrency(resumenGastos) }}</p>
+            <p class="text-lg font-bold text-red-700">{{ $formatMoney(resumenGastos) }}</p>
           </div>
         </div>
         <div class="border-t border-surface-200 dark:border-surface-700 pt-3">
           <div class="flex justify-between text-base font-bold">
             <span>Saldo final estimado</span>
-            <span class="text-green-600">${{ formatCurrency(resumenVentas.total - resumenGastos + (turnoActivo.monto_inicial || 0)) }}</span>
+            <span class="text-green-600">{{ $formatMoney(resumenVentas.total - resumenGastos + (turnoActivo.monto_inicial || 0)) }}</span>
           </div>
         </div>
         <div>
@@ -97,6 +102,7 @@
 </template>
 
 <script setup lang="ts">
+import { getSystemLocale } from '@/i18n/localeProfiles'
 import { ref, onMounted } from 'vue'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
@@ -115,12 +121,12 @@ const error = ref('')
 const observacion = ref('')
 const turnoActivo = ref<any>(null)
 const resumenCargando = ref(false)
-const resumenVentas = ref({ total: 0, efectivo: 0, tarjeta: 0, transferencia: 0 })
+const resumenVentas = ref({ total: 0, efectivo: 0, tarjeta: 0, transferencia: 0, abonos_cxc: 0, cantidad_abonos_cxc: 0, cobros_taller: 0, cantidad_cobros_taller: 0 })
 const resumenGastos = ref(0)
 const accionandoId = ref<number | null>(null)
 
 function formatCurrency(n: number): string {
-  return Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 async function cargar() {
@@ -134,7 +140,7 @@ async function cargar() {
 async function abrirNuevoCuadre() {
   error.value = ''
   observacion.value = ''
-  resumenVentas.value = { total: 0, efectivo: 0, tarjeta: 0, transferencia: 0 }
+  resumenVentas.value = { total: 0, efectivo: 0, tarjeta: 0, transferencia: 0, abonos_cxc: 0, cantidad_abonos_cxc: 0, cobros_taller: 0, cantidad_cobros_taller: 0 }
   resumenGastos.value = 0
   resumenCargando.value = true
   dialogVisible.value = true
@@ -164,6 +170,8 @@ async function realizarCuadre() {
       efectivo: resumenVentas.value.efectivo,
       tarjeta: resumenVentas.value.tarjeta,
       transferencia: resumenVentas.value.transferencia,
+      abonos_cxc: resumenVentas.value.abonos_cxc,
+      cantidad_abonos_cxc: resumenVentas.value.cantidad_abonos_cxc,
       total_gastos: resumenGastos.value,
       saldo_final: resumenVentas.value.total - resumenGastos.value + (turnoActivo.value.monto_inicial || 0),
       observacion: observacion.value,
@@ -187,7 +195,7 @@ function moneyHtml(n: number): string {
 function dateHtml(d: any): string {
   if (!d) return '-'
   const date = new Date(String(d).replace(' ', 'T'))
-  return date.toLocaleDateString('es-DO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleDateString(getSystemLocale(), { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 async function reimprimirCuadre(cuadre: any) {
@@ -201,11 +209,11 @@ async function reimprimirCuadre(cuadre: any) {
     const impresora = impresoraRes.success ? impresoraRes.data?.[0] || {} : {}
 
     const ticket = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-    @page{size:80mm auto;margin:0}*{box-sizing:border-box}body{font-family:Arial,sans-serif;width:76mm;margin:0;padding:3mm;color:#111;font-size:10px}
-    h1{font-size:17px;margin:0;text-align:center}h2{font-size:12px;margin:10px 0 4px;padding-bottom:3px;border-bottom:1px dashed #555}
-    .center{text-align:center}.muted{color:#555}.row{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+    @page{size:72mm auto;margin:0}*{box-sizing:border-box}html,body{width:72mm;margin:0;padding:0}body{font-family:Arial,Helvetica,sans-serif;padding:2.5mm;color:#000;font-size:10.5px;font-weight:500;line-height:1.4;-webkit-font-smoothing:none;text-rendering:geometricPrecision;overflow:hidden}
+    h1{font-size:17px;margin:0;text-align:center;font-weight:800}h2{font-size:12px;margin:10px 0 4px;padding-bottom:3px;border-bottom:1.5px dashed #222;font-weight:800}
+    .center{text-align:center}.muted{color:#222}.row{display:flex;justify-content:space-between;gap:8px;padding:2.5px 0}.row span:last-child,.row strong:last-child{text-align:right}
     .total{font-size:14px;font-weight:700;border-top:2px solid #111;border-bottom:2px solid #111;margin-top:4px;padding:6px 0}
-    .footer{text-align:center;margin-top:12px;border-top:1px dashed #555;padding-top:8px;font-size:9px}
+    .footer{text-align:center;margin-top:12px;border-top:1px dashed #222;padding-top:8px;font-size:9px}
   </style></head><body>
     <h1>${escapeHtml(empresa.nombre || empresa.legal || 'TMPOS SRL')}</h1>
     <div class="center muted">${escapeHtml(empresa.legal || '')}</div>
@@ -216,6 +224,7 @@ async function reimprimirCuadre(cuadre: any) {
     <h2>RESUMEN</h2>
     <div class="row"><span>Fondo inicial</span><span>${moneyHtml(cuadre.monto_inicial)}</span></div>
     <div class="row"><span>Ventas</span><span>${moneyHtml(cuadre.total_ventas)}</span></div>
+    <div class="row"><span>Abonos CxC (${Number(cuadre.cantidad_abonos_cxc || 0)})</span><span>${moneyHtml(cuadre.abonos_cxc)}</span></div>
     <div class="row"><span>Efectivo</span><span>${moneyHtml(cuadre.efectivo)}</span></div>
     <div class="row"><span>Tarjeta</span><span>${moneyHtml(cuadre.tarjeta)}</span></div>
     <div class="row"><span>Transferencia</span><span>${moneyHtml(cuadre.transferencia)}</span></div>
@@ -263,7 +272,8 @@ async function enviarCuadreCorreo(cuadre: any) {
         </tr></table>
         <table style="width:100%;border-collapse:collapse">
           <tr><td style="padding:7px">Fondo inicial</td><td style="text-align:right">${moneyHtml(cuadre.monto_inicial)}</td></tr>
-          <tr><td style="padding:7px">Ventas efectivo</td><td style="text-align:right">${moneyHtml(cuadre.efectivo)}</td></tr>
+          <tr><td style="padding:7px">Ingresos en efectivo</td><td style="text-align:right">${moneyHtml(cuadre.efectivo)}</td></tr>
+          <tr><td style="padding:7px">Abonos CxC (${Number(cuadre.cantidad_abonos_cxc || 0)})</td><td style="text-align:right">${moneyHtml(cuadre.abonos_cxc)}</td></tr>
           <tr><td style="padding:7px">Tarjeta</td><td style="text-align:right">${moneyHtml(cuadre.tarjeta)}</td></tr>
           <tr><td style="padding:7px">Transferencia</td><td style="text-align:right">${moneyHtml(cuadre.transferencia)}</td></tr>
           <tr><td style="padding:7px">Gastos</td><td style="text-align:right;color:#b91c1c">-${moneyHtml(cuadre.total_gastos)}</td></tr>

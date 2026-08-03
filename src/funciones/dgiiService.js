@@ -41,14 +41,17 @@
  * @param {string} environment - Entorno (TesteCF, CerteCF o eCF)
  * @returns {Promise<string>} Token de autenticación
  */
-const authenticate = async (environment = 'TesteCF') => {
+const authenticate = async (environment = 'TesteCF', credentials = {}) => {
   const host = `https://ecf.api.mseller.app/${environment}`;
   const loginUrl = `${host}/customer/authentication`;
 
   const loginData = {
-    email: 'tmposystem@gmail.com',
-    password: 'T@veras291286'
+    email: String(credentials.email || '').trim(),
+    password: String(credentials.password || '')
   };
+  if (!loginData.email || !loginData.password) {
+    throw new Error('Configura las credenciales de DGII antes de utilizar el servicio')
+  }
 
   try {
     const loginResponse = await fetch(loginUrl, {

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { getLocaleProfile, getSystemCurrencyCode } from '@/i18n/localeProfiles'
+import { ensureConfigLoaded, getConfig, getImageUrl } from '@/services/tmCloudClient'
 
 const toast = useToast()
 
@@ -34,6 +36,33 @@ function resolveLogo(empresa: any): string {
   return String(empresa?.logoprinter || empresa?.logo || '').trim()
 }
 
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
+async function resolverLogoTicket(ruta: any): Promise<string> {
+  const valor = String(ruta || '').trim()
+  if (!valor || /^data:/i.test(valor)) return valor
+  try {
+    await ensureConfigLoaded()
+    const url = /^(https?:\/\/|blob:|file:|\/)/i.test(valor) ? valor : getImageUrl(valor)
+    if (!url) return valor
+    const key = getConfig()?.key || ''
+    const response = await fetch(url, { headers: key ? { Authorization: `Bearer ${key}` } : {} })
+    if (!response.ok) return valor
+    const type = response.headers.get('content-type') || 'image/png'
+    return `data:${type};base64,${arrayBufferToBase64(await response.arrayBuffer())}`
+  } catch (_) {
+    return valor
+  }
+}
+
 function formatFecha(fechaStr: string): string {
   if (!fechaStr) return ''
   const d = new Date(fechaStr)
@@ -42,14 +71,14 @@ function formatFecha(fechaStr: string): string {
 }
 
 function buildTicketHtml({ gasto, empresa, ticketConfig }: { gasto: any; empresa: any; ticketConfig: any }) {
-  const simbolo = 'RD$'
+  const simbolo = getSystemCurrencyCode()
   const logoEmpresa = resolveLogo(empresa)
   const paperWidth = toNumber(ticketConfig.paper_width, 80)
   const pageWidth = paperWidth === 58 ? 230 : 300
   const bodyWidth = paperWidth === 58 ? 210 : 250
   const ticketWidth = paperWidth === 58 ? 200 : 240
   const ahora = new Date()
-  const fechaHora = `${ahora.toLocaleDateString('es-DO')} ${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`
+  const fechaHora = `${ahora.toLocaleDateString(getLocaleProfile().locale)} ${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`
 
   const infoParts: string[] = []
   if (isOn(ticketConfig.show_address) && empresa.direccion) infoParts.push(empresa.direccion)
@@ -131,6 +160,8 @@ async function printTicket(gasto: any) {
     const res = await window.db.getAll('empresa')
     if (res.success && res.data?.length > 0) empresa = res.data[0]
   } catch (_) {}
+  const logo = await resolverLogoTicket(empresa?.logoprinter || empresa?.logo)
+  if (logo) empresa = { ...empresa, logo, logoprinter: logo }
 
   const html = buildTicketHtml({ gasto, empresa, ticketConfig })
 

@@ -1,4 +1,19 @@
 import { uuidv4 } from './util'
+import { dbExecuteSQL } from './capacitorDb'
+
+function getOpenAIError(data: any, status: number): string {
+  const code = String(data?.error?.code || data?.error?.type || '')
+  const message = String(data?.error?.message || '')
+  if (code === 'insufficient_quota' || /exceeded your current quota/i.test(message)) {
+    return 'La cuenta de API de OpenAI no tiene crédito o cuota disponible. ChatGPT y la API se facturan por separado; revisa Billing en platform.openai.com.'
+  }
+  if (code === 'model_not_found' || /model.*does not exist|access to it/i.test(message)) {
+    return 'La API key no tiene acceso al modelo seleccionado. Elige otro modelo en Configuración > OpenAI / Jarvis.'
+  }
+  if (status === 401) return 'La API key de OpenAI no es válida o fue revocada.'
+  if (status === 429) return 'OpenAI rechazó la solicitud por límite de uso. Revisa la cuota y los límites del proyecto de API.'
+  return message || `OpenAI respondió con HTTP ${status}`
+}
 
 function obtenerMacAddress(): string {
   return uuidv4().replace(/-/g, '').toUpperCase().slice(0, 12)
@@ -33,6 +48,192 @@ export async function initLicencia() {
 
 export async function handleElectronInvoke(channel: string, ...args: any[]): Promise<any> {
   switch (channel) {
+    case 'db:getAll':
+      return (window as any).db.getAll(args[0])
+
+    case 'db:getWhere':
+      return (window as any).db.getWhere(args[0], args[1], args[2] || [])
+
+    case 'db:getModified':
+      return (window as any).db.getModified(args[0], args[1] || '')
+
+    case 'db:getById':
+      return (window as any).db.getById(args[0], args[1])
+
+    case 'db:insert':
+      return (window as any).db.insert(args[0], args[1] || {})
+
+    case 'db:update':
+      return (window as any).db.update(args[0], args[1], args[2] || {})
+
+    case 'db:delete':
+      return (window as any).db.delete(args[0], args[1])
+
+    case 'db:exec':
+      return dbExecuteSQL(String(args[0] || ''))
+
+    case 'config:get':
+      return (window as any).config.get(args[0])
+
+    case 'config:set':
+      return (window as any).config.set(args[0], args[1])
+
+    case 'openai:getConfig': {
+      const keys = await Promise.all([
+        (window as any).config.get('openai_api_key'),
+        (window as any).config.get('openai_enabled'),
+        (window as any).config.get('openai_model'),
+        (window as any).config.get('openai_voice_enabled'),
+        (window as any).config.get('openai_voice'),
+      ])
+      const apiKey = String(keys[0]?.data || '')
+      return {
+        success: true,
+        data: {
+          enabled: String(keys[1]?.data || '') !== '0',
+          model: String(keys[2]?.data || '') || 'gpt-5.6-sol',
+          voice_enabled: String(keys[3]?.data || '') !== '0',
+          voice: String(keys[4]?.data || '') || 'es-DO',
+          has_api_key: Boolean(apiKey),
+          masked_api_key: apiKey ? `${apiKey.slice(0, 7)}••••••••${apiKey.slice(-4)}` : '',
+        },
+      }
+    }
+
+    case 'openai:saveConfig': {
+      const payload = args[0] || {}
+      const apiKey = String(payload.api_key || '').trim()
+      if (apiKey && !apiKey.startsWith('sk-')) return { success: false, error: 'La API key debe comenzar con sk-' }
+      if (apiKey) await (window as any).config.set('openai_api_key', apiKey)
+      if (payload.clear_api_key) await (window as any).config.set('openai_api_key', '')
+      await Promise.all([
+        (window as any).config.set('openai_enabled', payload.enabled === false ? '0' : '1'),
+        (window as any).config.set('openai_model', String(payload.model || 'gpt-5.6-sol')),
+        (window as any).config.set('openai_voice_enabled', payload.voice_enabled === false ? '0' : '1'),
+        (window as any).config.set('openai_voice', String(payload.voice || 'es-DO')),
+      ])
+      const actual = await (window as any).config.get('openai_api_key')
+      const configured = Boolean(actual?.data)
+      await (window as any).config.set('openai_api_key_configured', configured ? '1' : '0')
+      return { success: true, data: { has_api_key: configured } }
+    }
+
+    case 'openai:request': {
+      const keyRes = await (window as any).config.get('openai_api_key')
+      const apiKey = String(keyRes?.data || '').trim()
+      if (!apiKey) return { success: false, error: 'OpenAI no está configurado. Agrega la API key en Configuración.' }
+      try {
+        const response = await fetch('https://api.openai.com/v1/responses', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(args[0] || {}),
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) return { success: false, error: getOpenAIError(data, response.status) }
+        return { success: true, data }
+      } catch (error: any) {
+        return { success: false, error: error?.message || 'No se pudo conectar con OpenAI' }
+      }
+    }
+
+    case 'openai:transcribe': {
+      const keyRes = await (window as any).config.get('openai_api_key')
+      const apiKey = String(keyRes?.data || '').trim()
+      if (!apiKey) return { success: false, error: 'OpenAI no está configurado. Agrega la API key en Configuración.' }
+      try {
+        const payload = args[0] || {}
+        const binary = atob(String(payload.audio_base64 || ''))
+        if (!binary.length) return { success: false, error: 'La grabación de audio está vacía' }
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+        const rawMimeType = String(payload.mime_type || 'audio/webm').split(';')[0].toLowerCase()
+        const mimeType = ['audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/wav', 'audio/ogg'].includes(rawMimeType)
+          ? rawMimeType
+          : 'audio/webm'
+        const extension: Record<string, string> = {
+          'audio/webm': 'webm',
+          'audio/mp4': 'm4a',
+          'audio/mpeg': 'mp3',
+          'audio/wav': 'wav',
+          'audio/ogg': 'ogg',
+        }
+        const form = new FormData()
+        form.append('file', new Blob([bytes], { type: mimeType }), `jarvis.${extension[mimeType] || 'webm'}`)
+        form.append('model', 'gpt-4o-mini-transcribe')
+        form.append('language', String(payload.language || 'es').slice(0, 2))
+        form.append('response_format', 'json')
+        form.append('prompt', 'Conversación en español sobre ventas, clientes, facturas, inventario, teléfonos e IMEI en el sistema TMPOS.')
+        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}` },
+          body: form,
+        })
+        const data = await response.json().catch(() => ({})) as any
+        if (!response.ok) return { success: false, error: getOpenAIError(data, response.status) }
+        return { success: true, data: { text: String(data?.text || '').trim() } }
+      } catch (error: any) {
+        return { success: false, error: error?.message || 'No se pudo transcribir el audio' }
+      }
+    }
+
+    case 'tmcloud:getConfig': {
+      const res = await (window as any).db.getById('tmcloud_config', 1)
+      return { success: true, data: res?.data || { url: '', public_key: '', secret_key: '' } }
+    }
+
+    case 'tmcloud:saveConfig': {
+      const payload = args[0] || {}
+      const actual = await (window as any).db.getById('tmcloud_config', 1)
+      const data = {
+        url: String(payload.url || '').trim().replace(/\/+$/, ''),
+        public_key: String(payload.public_key || '').trim(),
+        secret_key: String(payload.secret_key || '').trim(),
+      }
+      const res = actual?.success && actual.data
+        ? await (window as any).db.update('tmcloud_config', 1, data)
+        : await (window as any).db.insert('tmcloud_config', { id: 1, ...data })
+      return res.success ? { success: true, data } : res
+    }
+
+    case 'caja:getTurnoActivo':
+    case 'caja:getTurnoAbierto': {
+      const res = await (window as any).db.getAll('caja_turnos')
+      const almacenUid = String(args[0] || localStorage.getItem('almacen_uid') || localStorage.getItem('almacen_default_uid') || '')
+      const almacenId = Number(localStorage.getItem('almacen_id') || localStorage.getItem('almacen_default_id') || 0)
+      const turno = (res.data || []).find((item: any) => {
+        if (String(item.estado || '').toLowerCase() !== 'abierto') return false
+        if (almacenUid && item.almacen_uid) return String(item.almacen_uid) === almacenUid
+        return !almacenId || !Number(item.almacen_id) || Number(item.almacen_id) === almacenId
+      }) || null
+      return { success: true, data: turno }
+    }
+
+    case 'caja:abrirTurno': {
+      const data = args[0] || {}
+      return (window as any).db.insert('caja_turnos', {
+        monto_inicial: Number(data.monto_inicial || 0),
+        entradas: 0,
+        retiros: 0,
+        estado: 'abierto',
+        observacion: data.observacion || '',
+        usuario_id: Number(data.usuario_id || 0),
+        usuario_nombre: data.usuario_nombre || '',
+        almacen_id: Number(data.almacen_id || localStorage.getItem('almacen_id') || 0),
+        almacen_uid: String(data.almacen_uid || localStorage.getItem('almacen_uid') || ''),
+      })
+    }
+
+    case 'caja:cerrarTurno': {
+      const cierre = args[1] || {}
+      return (window as any).db.update('caja_turnos', args[0], {
+        estado: 'cerrado',
+        monto_final: Number(cierre.monto_final || 0),
+        efectivo_esperado: Number(cierre.efectivo_esperado || 0),
+        diferencia: Number(cierre.diferencia || 0),
+        cierre_ciego: cierre.cierre_ciego ? 1 : 0,
+      })
+    }
+
     case 'getServerUrl':
       return { success: true, url: window.location.origin }
 
@@ -122,8 +323,59 @@ export async function handleElectronInvoke(channel: string, ...args: any[]): Pro
     case 'enviar:testEmail':
       return { success: true, message: 'Correo de prueba enviado (simulado)' }
 
-    case 'enviar:cierreCaja':
-      return { success: false, error: 'El envio SMTP del cierre esta disponible en la aplicacion de escritorio' }
+    case 'enviar:cierreCaja': {
+      try {
+        const payload = args[0] || {}
+        const configResult = await (window as any).db.getAll('tmcloud_config')
+        const config = configResult?.data?.[0] || {}
+        const baseUrl = String(config.url || '').replace(/\/+$/, '')
+        const secretKey = String(config.secret_key || '').trim()
+        const toEmail = String(payload.toEmail || '').trim()
+        if (!baseUrl || !secretKey) {
+          return { success: false, error: 'Configura la URL y Secret Key de TM Cloud para enviar el cierre' }
+        }
+        if (!toEmail.includes('@')) {
+          return { success: false, error: 'Configura un correo valido en los datos de la empresa' }
+        }
+        const bodies = payload.html ? [
+          { to: toEmail, subject: String(payload.subject || 'Cierre de caja'), html: String(payload.html), content: String(payload.html), content_type: 'text/html', data: payload.data || {}, send_now: true },
+          { template: 'cash_closing', to: toEmail, data: payload.data || {}, send_now: true },
+        ] : [{ template: 'cash_closing', to: toEmail, data: payload.data || {}, send_now: true }]
+        let response: Response | null = null
+        let responseData: any = {}
+        for (const body of bodies) {
+          response = await fetch(`${baseUrl}/mail/send`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify(body),
+          })
+          responseData = await response.json().catch(() => ({}))
+          if (response.ok) break
+        }
+        if (!response) return { success: false, error: 'La API no produjo una respuesta' }
+        if (!response.ok) {
+          return {
+            success: false,
+            error: responseData?.error?.message || responseData?.message || `HTTP ${response.status}`,
+          }
+        }
+        const mail = responseData?.data?.mail || responseData?.data || {}
+        const sent = String(mail.status || '').toLowerCase() === 'sent'
+        return {
+          success: true,
+          queued: !sent,
+          provider: 'TMPBASE API',
+          mailUid: mail.uid || '',
+          status: mail.status || 'pending',
+          message: sent
+            ? `Cierre enviado por TMPBASE a ${toEmail}`
+            : `Cierre encolado por TMPBASE para ${toEmail}`,
+          toEmail,
+        }
+      } catch (error: any) {
+        return { success: false, error: error?.message || 'No se pudo enviar el cierre mediante TMPBASE' }
+      }
+    }
 
     case 'consultaservidor':
       return handleConsultaservidor(args[0], args.slice(1))
@@ -133,7 +385,7 @@ export async function handleElectronInvoke(channel: string, ...args: any[]): Pro
       try {
         const printWindow = window.open('', '_blank', 'width=480,height=800')
         if (printWindow) {
-          printWindow.document.write(html)
+          printWindow.document.write(sanitizePrintableHtml(html))
           printWindow.document.close()
           printWindow.focus()
           setTimeout(() => {
@@ -281,3 +533,4 @@ async function handleConsultaservidor(action: string, args: any[]): Promise<any>
       return null
   }
 }
+import { sanitizePrintableHtml } from '@/utils/htmlSecurity'

@@ -78,7 +78,7 @@ const formDefault = () => ({
   prefijo: 'E32',
   secuencia_actual: 1,
   secuencia_desde: 1,
-  secuencia_hasta: 99999999,
+  secuencia_hasta: 9999999999,
   fecha_vencimiento: null as Date | null,
   activo: true,
   es_default: false,
@@ -98,8 +98,13 @@ const comprobantesFiltrados = computed(() => {
 
 function formatNCF(comp: any): string {
   if (comp.tipo === 'SIN') return 'Sin NCF'
-  const sec = String(comp.secuencia_actual || 1).padStart(8, '0')
+  const esElectronico = String(comp.tipo || '').toUpperCase().startsWith('E')
+  const sec = String(comp.secuencia_actual || 1).padStart(esElectronico ? 10 : 8, '0')
   return `${comp.prefijo || comp.tipo}${sec}`
+}
+
+function secuenciaMax(comp: any = form.value): number {
+  return String(comp?.tipo || '').toUpperCase().startsWith('E') ? 9999999999 : 99999999
 }
 
 function getSecuenciaRestante(comp: any): number {
@@ -166,7 +171,7 @@ function abrirEditar(comp: any) {
     prefijo: comp.prefijo || comp.tipo || '',
     secuencia_actual: comp.secuencia_actual || 1,
     secuencia_desde: comp.secuencia_desde || 1,
-    secuencia_hasta: comp.secuencia_hasta || 99999999,
+    secuencia_hasta: comp.secuencia_hasta || secuenciaMax(comp),
     fecha_vencimiento: comp.fecha_vencimiento ? new Date(comp.fecha_vencimiento) : null,
     activo: comp.activo === 1,
     es_default: comp.es_default === 1,
@@ -387,7 +392,7 @@ onMounted(async () => {
           <div class="space-y-0.5">
             <div class="flex items-center justify-between text-[10px]">
               <span class="text-surface-500">Secuencia</span>
-              <span class="font-mono font-semibold text-[10px]">{{ comp.secuencia_actual || 1 }}/{{ comp.secuencia_hasta || 99999999 }}</span>
+              <span class="font-mono font-semibold text-[10px]">{{ comp.secuencia_actual || 1 }}/{{ comp.secuencia_hasta || secuenciaMax(comp) }}</span>
             </div>
             <div class="w-full h-1.5 rounded-full bg-surface-200 dark:bg-surface-600 overflow-hidden">
               <div
@@ -446,15 +451,15 @@ onMounted(async () => {
         <div class="grid grid-cols-3 gap-3">
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Sec. Desde</label>
-            <InputNumber v-model="form.secuencia_desde" :min="1" :max="99999999" fluid @focus="(e) => e.target.select()" />
+            <InputNumber v-model="form.secuencia_desde" :min="1" :max="secuenciaMax()" fluid @focus="(e) => e.target.select()" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Sec. Actual</label>
-            <InputNumber v-model="form.secuencia_actual" :min="1" :max="99999999" fluid @focus="(e) => e.target.select()" />
+            <InputNumber v-model="form.secuencia_actual" :min="1" :max="secuenciaMax()" fluid @focus="(e) => e.target.select()" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Sec. Hasta</label>
-            <InputNumber v-model="form.secuencia_hasta" :min="1" :max="99999999" fluid @focus="(e) => e.target.select()" />
+            <InputNumber v-model="form.secuencia_hasta" :min="1" :max="secuenciaMax()" fluid @focus="(e) => e.target.select()" />
           </div>
         </div>
 

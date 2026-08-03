@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useLocaleProfile } from '@/composables/useLocaleProfile'
+
+const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import IconField from 'primevue/iconfield'
@@ -14,15 +17,18 @@ import Select from 'primevue/select'
 import Calendar from 'primevue/calendar'
 import Textarea from 'primevue/textarea'
 import Fieldset from 'primevue/fieldset'
+import Menu from 'primevue/menu'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import TicketFacturaPrint from './TicketFacturaPrint.vue'
 import FacturaPdfPrint from './FacturaPdfPrint.vue'
 
 import { envioElectron } from '@/funciones/funciones.js'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 
 const toast = useToast()
 const router = useRouter()
+const { addAlmacenId } = useAlmacenFilter()
 const notasCredito = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('table')
@@ -37,11 +43,26 @@ const deleteOtpError = ref('')
 const isEditing = ref(false)
 const selectedNota = ref<any>(null)
 const selectedNotas = ref<any[]>([])
+const notaActionMenu = ref()
+const notaAccion = ref<any>(null)
 const busqueda = ref('')
 const rangoActivo = ref<string>('todo')
 const rangoPersonalizado = ref<Date[]>([])
 const comprobanteFiltro = ref('')
 const facturasOrigen = ref<any[]>([])
+
+const notaActionItems = computed(() => [
+  { label: 'Imprimir', icon: 'pi pi-print', command: () => notaAccion.value && imprimirNota(notaAccion.value) },
+  { label: 'Ver PDF', icon: 'pi pi-file-pdf', command: () => notaAccion.value && verNotaPdf(notaAccion.value) },
+  { label: 'Editar', icon: 'pi pi-pencil', command: () => notaAccion.value && abrirEditar(notaAccion.value) },
+  { separator: true },
+  { label: 'Eliminar', icon: 'pi pi-trash', class: 'text-red-500', command: () => notaAccion.value && confirmarBorrar(notaAccion.value) },
+])
+
+function abrirMenuAccionesNota(event: Event, nota: any) {
+  notaAccion.value = nota
+  notaActionMenu.value?.toggle(event)
+}
 
 function getRango(key: string): { inicio: string; fin: string } | null {
   if (key === 'todo') return null
@@ -146,7 +167,7 @@ const totalSeleccionadoEliminar = computed(() =>
 
 function formatCurrency(n: number): string {
   if (n == null) return '0.00'
-  return Number(n).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return Number(n).toLocaleString(systemLocale.value, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 function formatFecha(fechaStr: string): string {
@@ -244,7 +265,7 @@ async function solicitarOtpEliminarNota() {
       total: totalSeleccionadoEliminar.value,
     }) as any
     if (res.success) {
-      deleteOtpEmail.value = res.data?.email || ''
+    deleteOtpEmail.value = res.data?.networkUrl || ''
       deleteOtpEnviado.value = true
       toast.add({ severity: 'success', summary: 'Codigo enviado', detail: 'Revisa el correo de la empresa', life: 3000 })
     } else {
@@ -303,7 +324,7 @@ async function guardar() {
 
     const res = isEditing.value
       ? await window.db.update('facturas', selectedNota.value.id, data)
-      : await window.db.insert('facturas', data)
+      : await window.db.insert('facturas', addAlmacenId(data))
 
     if (res.success) {
       toast.add({ severity: 'success', summary: 'Exito', detail: isEditing.value ? 'Nota de credito actualizada' : 'Nota de credito creada', life: 3000 })
@@ -482,14 +503,9 @@ onMounted(async () => {
         responsiveLayout="scroll"
       >
         <Column selectionMode="multiple" headerStyle="width: 3rem" />
-        <Column header="Acciones" style="width: 12rem">
+        <Column header="Acciones" style="width: 5rem">
           <template #body="{ data }">
-            <div class="flex gap-1">
-              <Button icon="pi pi-print" severity="info" text rounded @click.stop="imprimirNota(data)" v-tooltip="'Imprimir'" />
-              <Button icon="pi pi-file-pdf" severity="danger" text rounded @click.stop="verNotaPdf(data)" v-tooltip="'Ver PDF'" />
-              <Button icon="pi pi-pencil" severity="info" text rounded @click.stop="abrirEditar(data)" v-tooltip="'Editar'" />
-              <Button icon="pi pi-trash" severity="danger" text rounded @click.stop="confirmarBorrar(data)" v-tooltip="'Eliminar'" />
-            </div>
+            <Button icon="pi pi-ellipsis-v" severity="secondary" text rounded @click.stop="abrirMenuAccionesNota($event, data)" v-tooltip="'Acciones'" />
           </template>
         </Column>
         <Column field="id" header="ID" style="width: 5rem" />
@@ -500,7 +516,7 @@ onMounted(async () => {
           <template #body="{ data }">{{ formatFecha(data.fecha_emision) }}</template>
         </Column>
         <Column field="total" header="Total" sortable style="width: 10rem">
-          <template #body="{ data }">${{ formatCurrency(data.total) }}</template>
+          <template #body="{ data }">{{ $formatMoney(data.total) }}</template>
         </Column>
         <Column field="estado_factura" header="Estado" sortable style="width: 9rem">
           <template #body="{ data }">
@@ -544,20 +560,18 @@ onMounted(async () => {
               </div>
               <div class="flex items-center gap-2 min-w-0">
                 <i class="pi pi-dollar text-surface-400"></i>
-                <span class="truncate font-semibold">${{ formatCurrency(nota.total) }}</span>
+                <span class="truncate font-semibold">{{ $formatMoney(nota.total) }}</span>
               </div>
             </div>
 
-            <div class="flex gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
-              <Button icon="pi pi-print" severity="info" text rounded size="small" @click.stop="imprimirNota(nota)" v-tooltip="'Imprimir'" />
-              <Button icon="pi pi-file-pdf" severity="danger" text rounded size="small" @click.stop="verNotaPdf(nota)" v-tooltip="'Ver PDF'" />
-              <Button icon="pi pi-pencil" severity="info" text rounded size="small" @click.stop="abrirEditar(nota)" v-tooltip="'Editar'" />
-              <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click.stop="confirmarBorrar(nota)" v-tooltip="'Eliminar'" />
+            <div class="flex justify-end mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
+              <Button icon="pi pi-ellipsis-v" severity="secondary" text rounded size="small" @click.stop="abrirMenuAccionesNota($event, nota)" v-tooltip="'Acciones'" />
             </div>
           </div>
         </div>
       </div>
     </Fieldset>
+    <Menu ref="notaActionMenu" :model="notaActionItems" popup appendTo="body" />
 
     <Dialog
       v-model:visible="dialogVisible"
@@ -658,19 +672,19 @@ onMounted(async () => {
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm font-semibold">Subtotal</label>
-          <InputNumber v-model="form.subtotal" mode="currency" currency="DOP" locale="es-DO" fluid />
+          <InputNumber v-model="form.subtotal" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid />
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm font-semibold">Impuesto</label>
-          <InputNumber v-model="form.impuesto" mode="currency" currency="DOP" locale="es-DO" fluid />
+          <InputNumber v-model="form.impuesto" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid />
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm font-semibold">Descuento</label>
-          <InputNumber v-model="form.descuento" mode="currency" currency="DOP" locale="es-DO" fluid />
+          <InputNumber v-model="form.descuento" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid />
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm font-semibold">Total</label>
-          <InputNumber v-model="form.total" mode="currency" currency="DOP" locale="es-DO" fluid />
+          <InputNumber v-model="form.total" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid />
         </div>
         <div class="flex flex-col gap-1 md:col-span-2">
           <label class="text-sm font-semibold">Nota / Motivo</label>
@@ -696,11 +710,11 @@ onMounted(async () => {
           <span v-else>Seguro que deseas eliminar <strong>{{ notasParaEliminar.length }}</strong> notas de credito seleccionadas?</span>
         </div>
         <div v-if="notasParaEliminar.length > 1" class="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-xs text-red-700 dark:text-red-300">
-          Total combinado: <strong>RD$ {{ formatCurrency(totalSeleccionadoEliminar) }}</strong>
+          Total combinado: <strong>{{ $formatMoney(totalSeleccionadoEliminar) }}</strong>
         </div>
         <div v-if="deleteOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
           <p class="text-xs text-surface-500 text-center">
-            Enviamos un codigo de 4 digitos al correo {{ deleteOtpEmail || 'de la licencia' }}.
+            Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.
           </p>
           <InputOtp v-model="deleteOtp" :length="4" integerOnly />
         </div>

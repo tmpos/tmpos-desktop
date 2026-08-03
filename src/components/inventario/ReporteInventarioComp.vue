@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getSystemCurrencyCode, getSystemLocale } from '@/i18n/localeProfiles'
 import { ref, computed, onMounted } from 'vue'
 import Button from 'primevue/button'
 import DataTable from 'primevue/datatable'
@@ -8,8 +9,10 @@ import Select from 'primevue/select'
 import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { useSystemModeStore } from '@/stores/systemMode'
 
 const toast = useToast()
+const systemMode = useSystemModeStore()
 const loading = ref(false)
 const generandoPdf = ref(false)
 const dialogPdf = ref(false)
@@ -21,15 +24,15 @@ const imeis = ref<any[]>([])
 const accesorios = ref<any[]>([])
 const piezas = ref<any[]>([])
 
-const vistas = [
+const vistas = computed(() => [
   { label: 'Todos', value: 'todos' },
-  { label: 'IMEI', value: 'imei' },
-  { label: 'Accesorios', value: 'accesorios' },
+  ...(systemMode.isCellphoneStore ? [{ label: 'IMEI', value: 'imei' }] : []),
+  { label: systemMode.productLabel, value: 'accesorios' },
   { label: 'Piezas', value: 'piezas' },
-]
+])
 
 function money(n: number): string {
-  return Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 function escapeHtml(value: unknown): string {
@@ -47,15 +50,15 @@ const accesoriosBajoStock = computed(() => accesorios.value.filter(a => Number(a
 const piezasBajoStock = computed(() => piezas.value.filter(p => Number(p.cantidad || 0) <= Number(p.alerta || 0)))
 
 const resumen = computed(() => {
-  const costoImeis = imeisDisponibles.value.reduce((s, i) => s + Number(i.costo || 0), 0)
-  const valorImeis = imeisDisponibles.value.reduce((s, i) => s + Number(i.precio_venta || 0), 0)
+  const costoImeis = systemMode.isCellphoneStore ? imeisDisponibles.value.reduce((s, i) => s + Number(i.costo || 0), 0) : 0
+  const valorImeis = systemMode.isCellphoneStore ? imeisDisponibles.value.reduce((s, i) => s + Number(i.precio_venta || 0), 0) : 0
   const costoAccesorios = accesorios.value.reduce((s, a) => s + (Number(a.costo || 0) * Number(a.cantidad || 0)), 0)
   const valorAccesorios = accesorios.value.reduce((s, a) => s + (Number(a.precio_venta || 0) * Number(a.cantidad || 0)), 0)
   const costoPiezas = piezas.value.reduce((s, p) => s + (Number(p.costo || 0) * Number(p.cantidad || 0)), 0)
   const valorPiezas = piezas.value.reduce((s, p) => s + (Number(p.precio_venta || 0) * Number(p.cantidad || 0)), 0)
 
   return {
-    totalItems: imeisDisponibles.value.length + accesorios.value.reduce((s, a) => s + Number(a.cantidad || 0), 0) + piezas.value.reduce((s, p) => s + Number(p.cantidad || 0), 0),
+    totalItems: (systemMode.isCellphoneStore ? imeisDisponibles.value.length : 0) + accesorios.value.reduce((s, a) => s + Number(a.cantidad || 0), 0) + piezas.value.reduce((s, p) => s + Number(p.cantidad || 0), 0),
     costoTotal: costoImeis + costoAccesorios + costoPiezas,
     valorTotal: valorImeis + valorAccesorios + valorPiezas,
     gananciaPotencial: (valorImeis + valorAccesorios + valorPiezas) - (costoImeis + costoAccesorios + costoPiezas),
@@ -96,16 +99,21 @@ function estadoSeverity(estado: string) {
 
 function buildPdfHtml(fecha: string): string {
   const rowsImeis = imeisDisponibles.value.map(i => `
-    <tr><td>${escapeHtml(i.nombre)}</td><td>${escapeHtml(i.telefono_nombre || '-')}</td><td>${escapeHtml(i.color || '-')}</td><td>${escapeHtml(i.capacidad || '-')}</td><td class="money">RD$ ${money(i.costo)}</td><td class="money">RD$ ${money(i.precio_venta)}</td></tr>
+    <tr><td>${escapeHtml(i.nombre)}</td><td>${escapeHtml(i.telefono_nombre || '-')}</td><td>${escapeHtml(i.color || '-')}</td><td>${escapeHtml(i.capacidad || '-')}</td><td class="money">${getSystemCurrencyCode()} ${money(i.costo)}</td><td class="money">${getSystemCurrencyCode()} ${money(i.precio_venta)}</td></tr>
   `).join('')
 
   const rowsAcc = accesorios.value.map(a => `
-    <tr><td>${escapeHtml(a.nombre)}</td><td>${escapeHtml(a.marca_nombre || '-')}</td><td class="right">${a.cantidad || 0}</td><td class="money">RD$ ${money(a.costo)}</td><td class="money">RD$ ${money(a.precio_venta)}</td></tr>
+    <tr><td>${escapeHtml(a.nombre)}</td><td>${escapeHtml(a.marca_nombre || '-')}</td><td class="right">${a.cantidad || 0}</td><td class="money">${getSystemCurrencyCode()} ${money(a.costo)}</td><td class="money">${getSystemCurrencyCode()} ${money(a.precio_venta)}</td></tr>
   `).join('')
 
   const rowsPiezas = piezas.value.map(p => `
-    <tr><td>${escapeHtml(p.nombre)}</td><td>${escapeHtml(p.proveedor || '-')}</td><td class="right">${p.cantidad || 0}</td><td class="money">RD$ ${money(p.costo)}</td><td class="money">RD$ ${money(p.precio_venta)}</td></tr>
+    <tr><td>${escapeHtml(p.nombre)}</td><td>${escapeHtml(p.proveedor || '-')}</td><td class="right">${p.cantidad || 0}</td><td class="money">${getSystemCurrencyCode()} ${money(p.costo)}</td><td class="money">${getSystemCurrencyCode()} ${money(p.precio_venta)}</td></tr>
   `).join('')
+
+  const imeiSection = systemMode.isCellphoneStore
+    ? `<div class="sec">IMEI disponibles</div><table class="data"><thead><tr><th>IMEI</th><th>Telefono</th><th>Color</th><th>Capacidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsImeis || '<tr><td colspan="6">Sin IMEI disponibles</td></tr>'}</tbody></table>`
+    : ''
+  const productTitle = systemMode.productLabel
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Reporte Inventario</title>
   <style>
@@ -114,9 +122,9 @@ function buildPdfHtml(fecha: string): string {
     <div class="bar"></div>
     <div class="head"><div><h1>Reporte de Inventario</h1><p>Resumen de productos, costos y valor disponible.</p></div><div class="box"><div>Inventario</div><div>Fecha: <strong>${fecha}</strong></div><div>Filtro: <strong>${escapeHtml(vista.value)}</strong></div></div></div>
     <div class="sec">Resumen</div>
-    <table class="cards"><tr><td class="card"><div class="label">Items</div><div class="value">${resumen.value.totalItems}</div></td><td class="card"><div class="label">Costo</div><div class="value">RD$ ${money(resumen.value.costoTotal)}</div></td><td class="card green"><div class="label">Valor</div><div class="value">RD$ ${money(resumen.value.valorTotal)}</div></td><td class="card amber"><div class="label">Alertas</div><div class="value">${resumen.value.alertas}</div></td></tr></table>
-    <div class="sec">IMEI disponibles</div><table class="data"><thead><tr><th>IMEI</th><th>Telefono</th><th>Color</th><th>Capacidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsImeis || '<tr><td colspan="6">Sin IMEI disponibles</td></tr>'}</tbody></table>
-    <div class="sec">Accesorios</div><table class="data"><thead><tr><th>Nombre</th><th>Marca</th><th class="right">Cantidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsAcc || '<tr><td colspan="5">Sin accesorios</td></tr>'}</tbody></table>
+    <table class="cards"><tr><td class="card"><div class="label">Items</div><div class="value">${resumen.value.totalItems}</div></td><td class="card"><div class="label">Costo</div><div class="value">${getSystemCurrencyCode()} ${money(resumen.value.costoTotal)}</div></td><td class="card green"><div class="label">Valor</div><div class="value">${getSystemCurrencyCode()} ${money(resumen.value.valorTotal)}</div></td><td class="card amber"><div class="label">Alertas</div><div class="value">${resumen.value.alertas}</div></td></tr></table>
+    ${imeiSection}
+    <div class="sec">${productTitle}</div><table class="data"><thead><tr><th>Nombre</th><th>Marca</th><th class="right">Cantidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsAcc || `<tr><td colspan="5">Sin ${productTitle.toLowerCase()}</td></tr>`}</tbody></table>
     <div class="sec">Piezas</div><table class="data"><thead><tr><th>Nombre</th><th>Proveedor</th><th class="right">Cantidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsPiezas || '<tr><td colspan="5">Sin piezas</td></tr>'}</tbody></table>
     <div class="footer"><span>MrCuttiTechnology</span><span>Generado el ${fecha}</span></div>
   </body></html>`
@@ -145,7 +153,7 @@ async function abrirPdf(url: string, nombre: string) {
 async function generarPDF() {
   generandoPdf.value = true
   try {
-    const fecha = new Date().toLocaleDateString('es-DO', { year: 'numeric', month: 'long', day: 'numeric' })
+    const fecha = new Date().toLocaleDateString(getSystemLocale(), { year: 'numeric', month: 'long', day: 'numeric' })
     const nombre = `Reporte_Inventario_${new Date().toISOString().split('T')[0]}.pdf`
     const res = await window.electron.invoke('generate:pdf', buildPdfHtml(fecha), nombre) as { success: boolean; dataUrl?: string; error?: string }
     if (res.success && res.dataUrl) {
@@ -215,18 +223,18 @@ onMounted(cargarDatos)
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-surface-400">Costo</span>
-            <p class="text-2xl font-bold mt-1">${{ money(resumen.costoTotal) }}</p>
+            <p class="text-2xl font-bold mt-1">{{ $formatMoney(resumen.costoTotal) }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-green-600 font-semibold">Valor</span>
-            <p class="text-2xl font-bold mt-1 text-green-600">${{ money(resumen.valorTotal) }}</p>
+            <p class="text-2xl font-bold mt-1 text-green-600">{{ $formatMoney(resumen.valorTotal) }}</p>
           </div>
-          <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+          <div v-if="systemMode.isCellphoneStore" class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-primary font-semibold">IMEI Disp.</span>
             <p class="text-2xl font-bold mt-1">{{ resumen.imeisDisponibles }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
-            <span class="text-xs text-surface-400">Accesorios</span>
+            <span class="text-xs text-surface-400">{{ systemMode.productLabel }}</span>
             <p class="text-2xl font-bold mt-1">{{ resumen.accesorios }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
@@ -235,25 +243,25 @@ onMounted(cargarDatos)
           </div>
         </div>
 
-        <div v-if="vista === 'todos' || vista === 'imei'" class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+        <div v-if="systemMode.isCellphoneStore && (vista === 'todos' || vista === 'imei')" class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
           <h3 class="font-semibold text-sm mb-3">IMEI Disponibles</h3>
           <DataTable :value="imeisDisponibles" paginator :rows="10" responsiveLayout="scroll">
             <Column field="nombre" header="IMEI" sortable />
             <Column field="telefono_nombre" header="Telefono" sortable />
             <Column field="color" header="Color" sortable />
             <Column field="capacidad" header="Capacidad" sortable />
-            <Column field="precio_venta" header="Venta" sortable><template #body="{ data }">${{ money(data.precio_venta) }}</template></Column>
+            <Column field="precio_venta" header="Venta" sortable><template #body="{ data }">{{ $formatMoney(data.precio_venta) }}</template></Column>
             <Column field="estado" header="Estado"><template #body="{ data }"><Tag :value="data.estado" :severity="estadoSeverity(data.estado)" /></template></Column>
           </DataTable>
         </div>
 
         <div v-if="vista === 'todos' || vista === 'accesorios'" class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
-          <h3 class="font-semibold text-sm mb-3">Accesorios</h3>
+          <h3 class="font-semibold text-sm mb-3">{{ systemMode.productLabel }}</h3>
           <DataTable :value="accesorios" paginator :rows="10" responsiveLayout="scroll">
             <Column field="nombre" header="Nombre" sortable />
             <Column field="marca_nombre" header="Marca" sortable />
             <Column field="cantidad" header="Cant." sortable />
-            <Column field="precio_venta" header="Venta" sortable><template #body="{ data }">${{ money(data.precio_venta) }}</template></Column>
+            <Column field="precio_venta" header="Venta" sortable><template #body="{ data }">{{ $formatMoney(data.precio_venta) }}</template></Column>
             <Column header="Stock"><template #body="{ data }"><Tag :value="data.cantidad <= data.alerta ? 'BAJO' : 'OK'" :severity="data.cantidad <= data.alerta ? 'warn' : 'success'" /></template></Column>
           </DataTable>
         </div>
@@ -264,7 +272,7 @@ onMounted(cargarDatos)
             <Column field="nombre" header="Nombre" sortable />
             <Column field="proveedor" header="Proveedor" sortable />
             <Column field="cantidad" header="Cant." sortable />
-            <Column field="precio_venta" header="Venta" sortable><template #body="{ data }">${{ money(data.precio_venta) }}</template></Column>
+            <Column field="precio_venta" header="Venta" sortable><template #body="{ data }">{{ $formatMoney(data.precio_venta) }}</template></Column>
             <Column header="Stock"><template #body="{ data }"><Tag :value="data.cantidad <= data.alerta ? 'BAJO' : 'OK'" :severity="data.cantidad <= data.alerta ? 'warn' : 'success'" /></template></Column>
           </DataTable>
         </div>

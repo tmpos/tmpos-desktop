@@ -7,6 +7,7 @@ import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
 import Textarea from 'primevue/textarea'
 import Fieldset from 'primevue/fieldset'
 import Tooltip from 'primevue/tooltip'
@@ -15,7 +16,9 @@ import Toast from 'primevue/toast'
 
 import { envioElectron } from '@/funciones/funciones.js';
 import { useDatosEmpresa } from '@/stores'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 const datosEmpresa = useDatosEmpresa();
+const { store: almacenStore } = useAlmacenFilter()
 
 const toast = useToast()
 const categorias = ref<any[]>([])
@@ -25,6 +28,12 @@ const dialogVisible = ref(false)
 const deleteDialogVisible = ref(false)
 const isEditing = ref(false)
 const selectedCategoria = ref<any>(null)
+const selectedCategorias = ref<any[]>([])
+const deletingMultiple = ref(false)
+const dialogMoverAlmacenMulti = ref(false)
+const almacenDestinoMulti = ref<any>(null)
+const almacenesDestinoMulti = ref<any[]>([])
+const moviendoAlmacenMulti = ref(false)
 const busqueda = ref('')
 
 const categoriasFiltradas = computed(() => {
@@ -85,8 +94,68 @@ function abrirEditar(categoria: any) {
 }
 
 function confirmarBorrar(categoria: any) {
+  deletingMultiple.value = false
   selectedCategoria.value = categoria
   deleteDialogVisible.value = true
+}
+
+function confirmarBorrarMultiple() {
+  if (selectedCategorias.value.length === 0) return
+  deletingMultiple.value = true
+  deleteDialogVisible.value = true
+}
+
+async function borrarMultiple() {
+  const seleccionadas = [...selectedCategorias.value]
+  try {
+    for (const categoria of seleccionadas) {
+      const res = await window.db.delete('categorias', categoria.id)
+      if (!res.success) throw new Error(res.error || `No se pudo eliminar ${categoria.nombre}`)
+    }
+    selectedCategorias.value = []
+    deleteDialogVisible.value = false
+    deletingMultiple.value = false
+    toast.add({ severity: 'success', summary: 'Eliminadas', detail: `${seleccionadas.length} categoria(s) eliminadas`, life: 2500 })
+    await cargarCategorias()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron eliminar las categorias', life: 4000 })
+  }
+}
+
+async function abrirMoverAlmacenMulti() {
+  if (selectedCategorias.value.length === 0) return
+  almacenDestinoMulti.value = null
+  try {
+    await almacenStore.load()
+    const origenUid = String(selectedCategorias.value[0].almacen_uid || almacenStore.activeUid || '')
+    almacenesDestinoMulti.value = almacenStore.almacenes.filter((almacen: any) => String(almacen.uid || '') !== origenUid)
+    dialogMoverAlmacenMulti.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron cargar los almacenes', life: 4000 })
+  }
+}
+
+async function aplicarMoverAlmacenMulti() {
+  if (!almacenDestinoMulti.value || moviendoAlmacenMulti.value) return
+  const destinoId = Number(almacenDestinoMulti.value.id || almacenDestinoMulti.value)
+  const destinoUid = String(almacenDestinoMulti.value.uid || '')
+  const destinoNombre = String(almacenDestinoMulti.value.nombre || '')
+  const seleccionadas = [...selectedCategorias.value]
+  moviendoAlmacenMulti.value = true
+  try {
+    for (const categoria of seleccionadas) {
+      const res = await window.db.update('categorias', categoria.id, { almacen_id: destinoId, almacen_uid: destinoUid })
+      if (!res.success) throw new Error(res.error || `No se pudo mover ${categoria.nombre}`)
+    }
+    selectedCategorias.value = []
+    dialogMoverAlmacenMulti.value = false
+    toast.add({ severity: 'success', summary: 'Almacen actualizado', detail: `${seleccionadas.length} categoria(s) movidas a ${destinoNombre}`, life: 3000 })
+    await cargarCategorias()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo cambiar el almacen', life: 4000 })
+  } finally {
+    moviendoAlmacenMulti.value = false
+  }
 }
 
 async function guardar() {
@@ -193,6 +262,13 @@ onMounted(async () => {
       </div>
 
     <!-- Vista Tabla -->
+    <div v-if="viewMode === 'table' && selectedCategorias.length > 0" class="flex flex-wrap items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
+      <span class="text-sm font-medium">{{ selectedCategorias.length }} seleccionada(s)</span>
+      <Button label="Cambiar Almacen" icon="pi pi-warehouse" severity="success" size="small" @click="abrirMoverAlmacenMulti" />
+      <Button label="Eliminar" icon="pi pi-trash" severity="danger" size="small" @click="confirmarBorrarMultiple" />
+      <Button icon="pi pi-times" severity="secondary" text rounded size="small" @click="selectedCategorias = []" v-tooltip="'Limpiar seleccion'" />
+    </div>
+
     <DataTable
       v-if="viewMode === 'table'"
       :value="categoriasFiltradas"
@@ -203,7 +279,9 @@ onMounted(async () => {
       :rowsPerPageOptions="[10, 25, 50]"
       dataKey="id"
       responsiveLayout="scroll"
+      v-model:selection="selectedCategorias"
     >
+      <Column selectionMode="multiple" headerStyle="width: 3rem" />
       <Column field="id" header="ID" style="width: 5rem" />
       <Column field="nombre" header="Nombre" sortable />
       <Column field="descripcion" header="Descripcion" sortable />
@@ -319,11 +397,24 @@ onMounted(async () => {
     >
       <div class="flex items-center gap-3">
         <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span>Seguro que deseas eliminar <strong>{{ selectedCategoria?.nombre }}</strong>?</span>
+        <span v-if="deletingMultiple">Seguro que deseas eliminar las <strong>{{ selectedCategorias.length }}</strong> categorias seleccionadas?</span>
+        <span v-else>Seguro que deseas eliminar <strong>{{ selectedCategoria?.nombre }}</strong>?</span>
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
-        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="borrar" />
+        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="deletingMultiple ? borrarMultiple() : borrar()" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogMoverAlmacenMulti" header="Cambiar Almacen" modal :style="{ width: 'min(28rem, 95vw)' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm">Mover <strong>{{ selectedCategorias.length }}</strong> categoria(s) a otro almacen:</p>
+        <Select v-model="almacenDestinoMulti" :options="almacenesDestinoMulti" optionLabel="nombre" placeholder="Seleccionar almacen destino..." fluid />
+        <p v-if="almacenesDestinoMulti.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacen disponible para el traslado.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacenMulti" @click="dialogMoverAlmacenMulti = false" />
+        <Button label="Aplicar" icon="pi pi-warehouse" :loading="moviendoAlmacenMulti" :disabled="!almacenDestinoMulti" @click="aplicarMoverAlmacenMulti" />
       </template>
     </Dialog>
   </div>

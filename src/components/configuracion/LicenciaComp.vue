@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, nextTick } from 'vue'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputOtp from 'primevue/inputotp'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import QRCode from 'qrcode'
+import * as tmc from '@/services/tmCloudClient'
+import * as tmSync from '@/services/tmCloudSyncService'
 
 const toast = useToast()
 const loading = ref(true)
@@ -26,6 +28,125 @@ const mostrarApiKey = ref(false)
 const apiKeyGuardando = ref(false)
 const apiKeyMsg = ref('')
 const apiKeyError = ref(false)
+
+const dialogoCambiarLicencia = ref(false)
+const nuevaLicencia = ref('')
+const nuevaLicenciaInput = ref<HTMLInputElement | null>(null)
+const nuevaLicenciaError = ref('')
+const nuevaLicenciaLoading = ref(false)
+
+function formatLicenciaCode(val: string) {
+  const clean = String(val || '').replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 15)
+  const parts = []
+  for (let i = 0; i < clean.length; i += 5) parts.push(clean.slice(i, i + 5))
+  return parts.join('-')
+}
+
+function onLicenciaInput(e: Event) {
+  const input = e.target as HTMLInputElement
+  const formatted = formatLicenciaCode(input.value)
+  nuevaLicencia.value = formatted
+  if (input.value !== formatted) input.value = formatted
+}
+
+function onLicenciaPaste(e: ClipboardEvent) {
+  const text = e.clipboardData?.getData('text') || ''
+  nuevaLicencia.value = formatLicenciaCode(text)
+  e.preventDefault()
+}
+
+function onLicenciaKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && nuevaLicencia.value.length === 17) cambiarLicencia()
+}
+
+async function cambiarLicencia() {
+  const codigo = nuevaLicencia.value
+  if (!/^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$/.test(codigo)) {
+    nuevaLicenciaError.value = 'Introduce un codigo valido de 15 caracteres'
+    return
+  }
+  nuevaLicenciaLoading.value = true
+  nuevaLicenciaError.value = ''
+  try {
+    await window.electron.invoke('db:clearCloudData')
+    await window.electron.invoke('db:clearProductos')
+    const val = await window.electron.invoke('licencia:validarCloud', codigo) as any
+    if (!val.success) {
+      nuevaLicenciaError.value = val.error || 'No se pudo validar la licencia'
+      return
+    }
+    toast.add({ severity: 'success', summary: 'TM Cloud configurado', detail: 'Registrando equipo...', life: 3000 })
+    const reg = await window.electron.invoke('licencia:solicitarRegistroEquipo', { licencia: codigo }) as any
+    if (!reg.success) {
+      nuevaLicenciaError.value = reg.error || 'No se pudo registrar el equipo'
+      return
+    }
+    toast.add({ severity: 'success', summary: 'Equipo registrado', detail: reg.mensaje || 'Licencia actualizada', life: 4000 })
+    tmc.resetConfig()
+    const config = await tmc.ensureConfigLoaded(true)
+    if (config) {
+      try {
+        await window.electron.invoke('db:clearEmpresaOnly')
+        const empresaRows = await tmc.fetchTable('empresa')
+        console.log('[CambiarLicencia] Empresa desde TM Cloud:', { cantidad: empresaRows.length })
+        for (const row of empresaRows) {
+          const clean = { ...row }
+          delete clean.id
+          await window.db.insert('empresa', clean)
+        }
+        if (empresaRows.length > 0) {
+          toast.add({ severity: 'success', summary: 'Empresa sincronizada', detail: `${empresaRows.length} registro(s) descargados`, life: 4000 })
+        }
+      } catch (e: any) {
+        console.log('[CambiarLicencia] Error descargando empresa desde TM Cloud:', e.message)
+      }
+      try {
+        const usuariosRows = await tmc.fetchTable('usuarios')
+        console.log('[CambiarLicencia] Usuarios desde TM Cloud:', { cantidad: usuariosRows.length })
+        if (usuariosRows.length > 0) {
+          const localUsers = await window.db.getAll('usuarios')
+          if (localUsers.success && localUsers.data?.length > 0) {
+            for (const row of localUsers.data) {
+              if (row.id) await window.db.delete('usuarios', row.id)
+            }
+          }
+          for (const row of usuariosRows) {
+            const clean = { ...row }
+            delete clean.id
+            await window.db.insert('usuarios', clean)
+          }
+          toast.add({ severity: 'success', summary: 'Usuarios sincronizados', detail: `${usuariosRows.length} usuario(s) descargados`, life: 4000 })
+        }
+      } catch (e: any) {
+        console.log('[CambiarLicencia] Error descargando usuarios desde TM Cloud:', e.message)
+      }
+      try {
+        toast.add({ severity: 'info', summary: 'Descargando datos', detail: 'Descargando productos y demas datos desde la nube...', life: 5000 })
+        const res = await tmSync.downloadAllTables()
+        if (res.success) {
+          toast.add({ severity: 'success', summary: 'Datos descargados', detail: res.message || 'Todos los datos se descargaron correctamente', life: 4000 })
+        } else {
+          toast.add({ severity: 'warn', summary: 'Descarga parcial', detail: res.message || 'Algunos datos no se pudieron descargar', life: 5000 })
+        }
+      } catch (e: any) {
+        console.log('[CambiarLicencia] Error en descarga completa:', e.message)
+      }
+    }
+    dialogoCambiarLicencia.value = false
+    await cargarLicencia()
+  } catch (e: any) {
+    nuevaLicenciaError.value = e.message || 'Error al cambiar licencia'
+  } finally {
+    nuevaLicenciaLoading.value = false
+  }
+}
+
+function abrirCambiarLicencia() {
+  nuevaLicencia.value = ''
+  nuevaLicenciaError.value = ''
+  dialogoCambiarLicencia.value = true
+  nextTick(() => nuevaLicenciaInput.value?.focus())
+}
 
 const licInfo = reactive({
   estado: '',
@@ -112,7 +233,7 @@ async function verificarLicenciaAhora() {
   licError.value = false
   try {
     console.log('[LicenciaComp] Verificando licencia...')
-    const res = await window.electron.invoke('licencia:verificar', { forceOnline: true }) as any
+    const res = await window.electron.invoke('licencia:verificar') as any
     console.log('[LicenciaComp] Resultado:', res)
     if (res.success) {
       licMsg.value = res.data?.mensaje || 'Licencia verificada correctamente'
@@ -356,6 +477,12 @@ onMounted(cargarLicencia)
 
         <div class="flex justify-end gap-2">
           <Button
+            label="Cambiar licencia"
+            icon="pi pi-key"
+            severity="warn"
+            @click="abrirCambiarLicencia"
+          />
+          <Button
             :label="licVerificando ? 'Verificando...' : 'Verificar ahora'"
             :icon="licVerificando ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'"
             severity="secondary"
@@ -368,6 +495,40 @@ onMounted(cargarLicencia)
         </p>
       </div>
     </div>
+
+    <Dialog
+      v-model:visible="dialogoCambiarLicencia"
+      header="Cambiar licencia"
+      modal
+      :style="{ width: 'min(26rem, 92vw)' }"
+      :draggable="false"
+    >
+      <div class="space-y-4 pt-2">
+        <div class="flex items-center gap-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg">
+          <i class="pi pi-exclamation-triangle text-amber-500"></i>
+          <p class="text-sm text-surface-600 dark:text-surface-300">Al cambiar la licencia se descargaran los datos de la nueva empresa desde la nube.</p>
+        </div>
+        <div>
+          <label class="text-xs text-surface-500 mb-1.5 block text-center">Codigo de licencia</label>
+          <input
+            ref="nuevaLicenciaInput"
+            :value="nuevaLicencia"
+            class="w-full px-3 py-3 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-800 text-surface-900 dark:text-surface-0 text-sm font-mono text-center tracking-[0.25em] placeholder-surface-400 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all uppercase"
+            maxlength="17"
+            autocomplete="off"
+            placeholder="XXXXX-XXXXX-XXXXX"
+            @input="onLicenciaInput"
+            @paste="onLicenciaPaste"
+            @keydown="onLicenciaKeydown"
+          />
+        </div>
+        <p v-if="nuevaLicenciaError" class="text-red-500 text-xs text-center">{{ nuevaLicenciaError }}</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogoCambiarLicencia = false" :disabled="nuevaLicenciaLoading" />
+        <Button label="Cambiar licencia" icon="pi pi-check" :loading="nuevaLicenciaLoading" @click="cambiarLicencia" />
+      </template>
+    </Dialog>
 
     <Dialog
       v-model:visible="verLicenciaVisible"

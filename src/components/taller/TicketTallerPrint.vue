@@ -4,6 +4,7 @@ import QRCode from 'qrcode'
 import JsBarcode from 'jsbarcode'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { formatSystemCurrency } from '@/i18n/localeProfiles'
 
 const toast = useToast()
 const printerName = ref('')
@@ -48,7 +49,7 @@ function isOn(value: any): boolean {
 }
 
 function formatCurrency(value: any): string {
-  return `RD$${toNumber(value).toFixed(2)}`
+  return formatSystemCurrency(value)
 }
 
 function generarBarcodeSVG(data: string): string {

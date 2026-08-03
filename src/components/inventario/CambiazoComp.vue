@@ -1,6 +1,17 @@
+<script setup lang="ts">
+import { onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+
+const router = useRouter()
+
+onMounted(() => {
+  router.replace('/ventas?tab=recibidos')
+})
+</script>
+
 <template>
-  <div>
-    <h3 class="text-xl font-bold mb-2">Cambiazo</h3>
-    <p class="text-surface-500 dark:text-surface-400">Gestion de cambiazos.</p>
+  <div class="flex flex-col items-center justify-center gap-3 py-12">
+    <i class="pi pi-sync text-4xl text-surface-400"></i>
+    <p class="text-surface-500">Redirigiendo a Recibidos...</p>
   </div>
 </template>

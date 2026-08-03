@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatSystemDateTime } from '@/i18n/localeProfiles'
 import { ref, onMounted } from 'vue'
 import Button from 'primevue/button'
 import DataTable from 'primevue/datatable'
@@ -30,7 +31,7 @@ function formatSize(bytes: number) {
 }
 
 function formatDate(value: string) {
-  return new Date(value).toLocaleString('es-DO', {
+  return formatSystemDateTime(value, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
