@@ -68,6 +68,11 @@ const tokenCorto = ref('')
 const form = ref({ nombre: '', imagen: '' })
 const fileInput = ref<HTMLInputElement | null>(null)
 const subiendoImagen = ref(false)
+const dialogBuscarImagen = ref(false)
+const consultaImagen = ref('')
+const resultadosImagen = ref<any[]>([])
+const buscandoImagen = ref(false)
+const importandoImagenUrl = ref('')
 const dialogMoverAlmacen = ref(false)
 const almacenDestino = ref<any>(null)
 const almacenesDestino = ref<any[]>([])
@@ -591,6 +596,158 @@ async function subirImagen() {
   }
 }
 
+function abrirBusquedaImagen() {
+  consultaImagen.value = String(form.value.nombre || selectedTelefono.value?.nombre || '').trim()
+  resultadosImagen.value = []
+  dialogBuscarImagen.value = true
+  if (consultaImagen.value) buscarImagenesInternet()
+}
+
+function textoPlanoMetadata(value: unknown): string {
+  return String(value || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#039;|&apos;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+async function buscarImagenesInternet() {
+  const termino = consultaImagen.value.trim()
+  if (!termino || buscandoImagen.value) return
+  buscandoImagen.value = true
+  resultadosImagen.value = []
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), 15000)
+  try {
+    const openverseParams = new URLSearchParams({
+      q: termino,
+      page_size: '30',
+      mature: 'false',
+    })
+    const commonsParams = new URLSearchParams({
+      action: 'query',
+      format: 'json',
+      origin: '*',
+      generator: 'search',
+      gsrsearch: `${termino} smartphone`,
+      gsrnamespace: '6',
+      gsrlimit: '24',
+      prop: 'imageinfo',
+      iiprop: 'url|mime|extmetadata',
+      iiurlwidth: '640',
+    })
+
+    const [openverseResult, commonsResult] = await Promise.allSettled([
+      fetch(`https://api.openverse.org/v1/images/?${openverseParams.toString()}`, { signal: controller.signal }).then(async response => {
+        if (!response.ok) throw new Error(`Openverse respondió HTTP ${response.status}`)
+        return response.json()
+      }),
+      fetch(`https://commons.wikimedia.org/w/api.php?${commonsParams.toString()}`, { signal: controller.signal }).then(async response => {
+        if (!response.ok) throw new Error(`Wikimedia respondió HTTP ${response.status}`)
+        return response.json()
+      }),
+    ])
+
+    const openverseData: any = openverseResult.status === 'fulfilled' ? openverseResult.value : null
+    const commonsData: any = commonsResult.status === 'fulfilled' ? commonsResult.value : null
+    if (!openverseData && !commonsData) {
+      const primerError = openverseResult.status === 'rejected' ? openverseResult.reason : commonsResult.status === 'rejected' ? commonsResult.reason : null
+      throw primerError || new Error('Los proveedores de imágenes no respondieron')
+    }
+
+    const resultadosOpenverse = (openverseData?.results || [])
+      .map((imagen: any) => ({
+        id: `openverse-${imagen?.id}`,
+        titulo: textoPlanoMetadata(imagen?.title) || 'Imagen sin título',
+        miniatura: imagen?.thumbnail || '',
+        url: imagen?.thumbnail || '',
+        fuente: imagen?.foreign_landing_url || imagen?.detail_url || '',
+        mime: 'image/jpeg',
+        autor: textoPlanoMetadata(imagen?.creator),
+        licencia: [imagen?.license, imagen?.license_version].filter(Boolean).join(' ').toUpperCase(),
+        proveedor: `Openverse · ${textoPlanoMetadata(imagen?.source || imagen?.provider || 'fuente abierta')}`,
+      }))
+      .filter((imagen: any) => imagen.url)
+
+    const paginasCommons = Object.values(commonsData?.query?.pages || {}) as any[]
+    const resultadosCommons = paginasCommons
+      .map((pagina: any) => {
+        const info = pagina?.imageinfo?.[0]
+        const metadata = info?.extmetadata || {}
+        return {
+          id: `commons-${pagina?.pageid}`,
+          titulo: String(pagina?.title || '').replace(/^File:/i, ''),
+          miniatura: info?.thumburl || info?.url || '',
+          url: info?.thumburl || info?.url || '',
+          fuente: info?.descriptionurl || '',
+          mime: info?.thumbmime || info?.mime || 'image/jpeg',
+          autor: textoPlanoMetadata(metadata?.Artist?.value),
+          licencia: textoPlanoMetadata(metadata?.LicenseShortName?.value || metadata?.UsageTerms?.value),
+          proveedor: 'Wikimedia Commons',
+        }
+      })
+      .filter((imagen: any) => imagen.url && /^image\/(jpeg|png|webp)$/i.test(imagen.mime))
+
+    const urlsVistas = new Set<string>()
+    resultadosImagen.value = [...resultadosOpenverse, ...resultadosCommons]
+      .filter((imagen: any) => {
+        const clave = String(imagen.fuente || imagen.titulo || imagen.url).toLowerCase()
+        if (urlsVistas.has(clave)) return false
+        urlsVistas.add(clave)
+        return true
+      })
+      .slice(0, 42)
+    if (!resultadosImagen.value.length) {
+      toast.add({ severity: 'info', summary: 'Sin resultados', detail: 'Prueba con la marca y el modelo exacto del teléfono', life: 3500 })
+    }
+  } catch (error: any) {
+    const mensaje = error?.name === 'AbortError' ? 'La búsqueda tardó demasiado. Intenta de nuevo.' : (error?.message || 'No se pudieron buscar imágenes')
+    toast.add({ severity: 'error', summary: 'Búsqueda no disponible', detail: mensaje, life: 4500 })
+  } finally {
+    window.clearTimeout(timeoutId)
+    buscandoImagen.value = false
+  }
+}
+
+async function importarImagenInternet(imagen: any) {
+  if (!imagen?.url || importandoImagenUrl.value) return
+  if (!tmCloudConnected()) {
+    toast.add({ severity: 'warn', summary: 'TM Cloud no configurado', detail: 'Configura TM Cloud para guardar la imagen encontrada', life: 3500 })
+    return
+  }
+  importandoImagenUrl.value = imagen.url
+  subiendoImagen.value = true
+  try {
+    const response = await fetch(imagen.url)
+    if (!response.ok) throw new Error(`No se pudo descargar la imagen (HTTP ${response.status})`)
+    const blob = await response.blob()
+    if (!blob.type.startsWith('image/')) throw new Error('El resultado seleccionado no es una imagen válida')
+    const extension = blob.type.includes('png') ? 'png' : blob.type.includes('webp') ? 'webp' : 'jpg'
+    const nombreArchivo = `${String(form.value.nombre || 'telefono').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'telefono'}.${extension}`
+    const file = new File([blob], nombreArchivo, { type: blob.type })
+    const uid = await uploadImage(file, 'telefonos')
+    form.value.imagen = uid
+    if (isEditing.value && selectedTelefono.value?.id) {
+      const actualizado = await window.db.update('telefonos', selectedTelefono.value.id, { imagen: uid })
+      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
+      selectedTelefono.value.imagen = uid
+      const local = telefonos.value.find((telefono: any) => telefono.id === selectedTelefono.value.id)
+      if (local) local.imagen = uid
+      if (isOnline()) await pushLocalRowToCloud('telefonos', selectedTelefono.value.id)
+    }
+    dialogBuscarImagen.value = false
+    toast.add({ severity: 'success', summary: 'Imagen agregada', detail: 'La imagen de internet fue guardada en el teléfono', life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'No se pudo traer la imagen', detail: error?.message || 'Intenta con otra imagen', life: 4500 })
+  } finally {
+    importandoImagenUrl.value = ''
+    subiendoImagen.value = false
+  }
+}
+
 async function eliminarImagen() {
   if (!form.value.imagen) return
   try {
@@ -1001,6 +1158,7 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
           <div class="flex gap-2">
             <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="subirImagen" />
             <Button :label="(form.imagen ? 'Cambiar ' : 'Subir ') + 'Imagen'" icon="pi pi-upload" severity="secondary" outlined :loading="subiendoImagen" @click="fileInput?.click()" />
+            <Button v-if="isEditing" label="Buscar en internet" icon="pi pi-globe" severity="info" outlined :disabled="subiendoImagen" @click="abrirBusquedaImagen" />
           </div>
         </div>
       </div>
@@ -1008,6 +1166,40 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
         <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="subiendoImagen" @click="guardarTelefono" />
       </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogBuscarImagen" header="Buscar imagen en internet" modal :style="{ width: 'min(58rem, 96vw)' }" :draggable="false">
+      <div class="space-y-4 pt-1">
+        <form class="flex flex-col sm:flex-row gap-2" @submit.prevent="buscarImagenesInternet">
+          <IconField class="flex-1">
+            <InputIcon class="pi pi-search" />
+            <InputText v-model="consultaImagen" placeholder="Ej.: Samsung Galaxy S24 Ultra" fluid autofocus />
+          </IconField>
+          <Button type="submit" label="Buscar" icon="pi pi-search" :loading="buscandoImagen" :disabled="!consultaImagen.trim()" />
+        </form>
+
+        <div v-if="buscandoImagen" class="py-12 text-center text-surface-500"><i class="pi pi-spin pi-spinner text-3xl block mb-3"></i>Buscando imágenes...</div>
+        <div v-else-if="resultadosImagen.length" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 max-h-[60vh] overflow-y-auto pr-1">
+          <div v-for="imagen in resultadosImagen" :key="imagen.id || imagen.url" class="group text-left rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 overflow-hidden hover:border-primary-400 hover:ring-2 hover:ring-primary-200 dark:hover:ring-primary-900 transition-all">
+            <button type="button" class="w-full text-left disabled:opacity-60" :disabled="Boolean(importandoImagenUrl)" @click="importarImagenInternet(imagen)">
+              <div class="aspect-square bg-surface-100 dark:bg-surface-900 flex items-center justify-center overflow-hidden">
+                <i v-if="importandoImagenUrl === imagen.url" class="pi pi-spin pi-spinner text-3xl text-primary"></i>
+                <img v-else :src="imagen.miniatura" :alt="imagen.titulo" loading="lazy" referrerpolicy="no-referrer" class="w-full h-full object-contain group-hover:scale-105 transition-transform" />
+              </div>
+              <div class="px-2.5 pt-2.5">
+                <p class="text-xs font-semibold line-clamp-2" :title="imagen.titulo">{{ imagen.titulo }}</p>
+                <p class="text-[10px] text-surface-500 mt-1 truncate" :title="imagen.proveedor">{{ imagen.proveedor }}</p>
+                <p v-if="imagen.licencia" class="text-[10px] text-surface-500 mt-0.5 truncate" :title="`${imagen.licencia}${imagen.autor ? ` · ${imagen.autor}` : ''}`">{{ imagen.licencia }}<span v-if="imagen.autor"> · {{ imagen.autor }}</span></p>
+              </div>
+            </button>
+            <a v-if="imagen.fuente" :href="imagen.fuente" target="_blank" rel="noopener noreferrer" class="text-[10px] text-primary hover:underline px-2.5 pb-2.5 pt-1 inline-block">Ver fuente</a>
+          </div>
+        </div>
+        <div v-else class="py-12 text-center text-surface-500"><i class="pi pi-images text-3xl block mb-3 text-surface-400"></i>Escribe la marca y el modelo para buscar imágenes.</div>
+
+        <p class="text-xs text-surface-500 border-t border-surface-200 dark:border-surface-700 pt-3">Resultados combinados de Openverse y Wikimedia Commons. Revisa la fuente y la licencia antes de usar una imagen.</p>
+      </div>
+      <template #footer><Button label="Cerrar" severity="secondary" text :disabled="Boolean(importandoImagenUrl)" @click="dialogBuscarImagen = false" /></template>
     </Dialog>
 
     <!-- Dialog Agregar IMEI -->

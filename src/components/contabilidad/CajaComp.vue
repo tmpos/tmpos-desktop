@@ -103,7 +103,24 @@
         <div class="xl:col-span-1 space-y-4 xl:sticky xl:top-4 xl:self-start">
           <div v-if="facturasPendientes.length" class="rounded-xl border-2 border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 overflow-hidden shadow-sm">
             <div class="flex items-center justify-between px-4 py-3 border-b border-amber-200 dark:border-amber-800"><div><h3 class="font-bold text-amber-800 dark:text-amber-300 flex items-center gap-2"><i class="pi pi-clock"></i>Facturas pendientes</h3><p class="text-[11px] text-amber-700 dark:text-amber-400">Enviadas por vendedores para cobrar</p></div><span class="px-2.5 py-1 rounded-full bg-amber-500 text-white text-xs font-bold">{{ facturasPendientes.length }}</span></div>
-            <div class="divide-y divide-amber-200 dark:divide-amber-800 max-h-64 overflow-auto"><div v-for="factura in facturasPendientes" :key="factura.id" class="p-3"><div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="font-bold text-sm">#{{ factura.no_factura }}</p><p class="text-xs text-surface-600 dark:text-surface-300 truncate">{{ factura.nombre_cliente || 'CONSUMIDOR FINAL' }}</p><p class="text-[10px] text-surface-500">Vendedor: {{ factura.vendedor || factura.usuario || '-' }}</p></div><div class="text-right shrink-0"><p class="font-extrabold text-amber-700 dark:text-amber-300">{{ formatMoney(factura.total) }}</p><button @click="cobrarFacturaPendiente(factura)" class="mt-1.5 px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 text-white text-xs font-bold flex items-center gap-1.5"><i class="pi pi-dollar"></i>Cobrar</button></div></div></div></div>
+            <div class="divide-y divide-amber-200 dark:divide-amber-800 max-h-64 overflow-auto">
+              <div v-for="factura in facturasPendientes" :key="factura.id" class="p-3">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <p class="font-bold text-sm">#{{ factura.no_factura }}</p>
+                    <p class="text-xs text-surface-600 dark:text-surface-300 truncate">{{ factura.nombre_cliente || 'CONSUMIDOR FINAL' }}</p>
+                    <p class="text-[10px] text-surface-500">Vendedor: {{ factura.vendedor || factura.usuario || '-' }}</p>
+                  </div>
+                  <div class="text-right shrink-0">
+                    <p class="font-extrabold text-amber-700 dark:text-amber-300">{{ formatMoney(factura.total) }}</p>
+                    <div class="mt-1.5 flex items-center justify-end gap-1.5">
+                      <button type="button" @click="verProductosFacturaPendiente(factura)" class="px-2.5 py-1.5 rounded-lg border border-amber-400 dark:border-amber-600 bg-white/70 dark:bg-surface-800 hover:bg-amber-100 dark:hover:bg-amber-900/40 text-amber-800 dark:text-amber-300 text-xs font-bold flex items-center gap-1.5 transition-colors" title="Ver productos de la factura"><i class="pi pi-shopping-bag"></i>Productos</button>
+                      <button type="button" @click="cobrarFacturaPendiente(factura)" class="px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 text-white text-xs font-bold flex items-center gap-1.5"><i class="pi pi-dollar"></i>Cobrar</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="grid grid-cols-3 gap-2">
             <button @click="abrirMovimiento('entrada')" class="px-2 py-3 rounded-xl font-semibold text-sm border border-green-200 dark:border-green-800 transition-all bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-900/50 flex flex-col sm:flex-row items-center justify-center gap-1.5"><i class="pi pi-plus-circle"></i>Entrada</button>
@@ -159,6 +176,37 @@
         <div class="flex flex-col gap-1"><label class="text-xs font-bold uppercase text-surface-500">Observación</label><textarea v-model="observacionCobroPendiente" rows="3" maxlength="500" placeholder="Referencia, autorización o detalle del cobro..." class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-800 resize-none"></textarea></div>
       </div>
       <template #footer><button @click="showCobroPendienteModal = false" class="px-4 py-2 rounded-lg text-sm font-semibold hover:bg-surface-100 dark:hover:bg-surface-800">Cancelar</button><button @click="confirmarCobroPendiente" :disabled="procesandoCobroPendiente || (metodoCobroPendiente === 'MIXTO' && !cobroMixtoValido) || (cobroPendienteRequiereBanco && !bancoCobroPendienteId)" class="px-5 py-2.5 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-bold disabled:opacity-50 flex items-center gap-2"><i class="pi" :class="procesandoCobroPendiente ? 'pi-spin pi-spinner' : 'pi-check'"></i>{{ procesandoCobroPendiente ? 'Cobrando...' : 'Confirmar cobro' }}</button></template>
+    </Dialog>
+
+    <Dialog v-model:visible="showProductosPendienteModal" :header="`Productos · Factura ${facturaProductosPendiente?.no_factura || ''}`" modal :style="{ width: 'min(48rem, 96vw)' }" :draggable="false">
+      <div v-if="facturaProductosPendiente" class="space-y-4 pt-1">
+        <div class="flex flex-wrap items-center justify-between gap-2 text-sm text-surface-500">
+          <span>{{ facturaProductosPendiente.nombre_cliente || 'CONSUMIDOR FINAL' }}</span>
+          <strong class="text-surface-900 dark:text-surface-0">Total: {{ formatMoney(facturaProductosPendiente.total || 0) }}</strong>
+        </div>
+        <div class="relative">
+          <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-surface-400"></i>
+          <input v-model="busquedaProductosPendiente" type="search" placeholder="Buscar por producto, código, IMEI o serial..." class="w-full rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-800 py-2.5 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary-500" />
+        </div>
+        <div v-if="productosFacturaPendiente.length" class="overflow-x-auto rounded-xl border border-surface-200 dark:border-surface-700">
+          <table class="w-full min-w-[38rem] text-sm border-collapse">
+            <thead class="bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-300">
+              <tr><th class="text-left px-3 py-2.5 font-semibold">Producto</th><th class="text-center px-3 py-2.5 font-semibold">Cant.</th><th class="text-right px-3 py-2.5 font-semibold">Precio</th><th class="text-right px-3 py-2.5 font-semibold">Total</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="(producto, index) in productosPendientesFiltrados" :key="producto.uid || producto.id || producto.imei || producto.serial || index" class="border-t border-surface-200 dark:border-surface-700">
+                <td class="px-3 py-3"><p class="font-medium text-surface-900 dark:text-surface-0">{{ nombreProductoPendiente(producto) }}</p><p v-if="producto.codigo || producto.codigo_barra" class="text-xs text-surface-500 mt-0.5">Código: {{ producto.codigo || producto.codigo_barra }}</p><p v-if="producto.imei || producto.serial" class="text-xs text-surface-500 mt-0.5">{{ producto.imei ? `IMEI: ${producto.imei}` : `Serial: ${producto.serial}` }}</p></td>
+                <td class="px-3 py-3 text-center">{{ cantidadProductoPendiente(producto) }}</td>
+                <td class="px-3 py-3 text-right">{{ formatMoney(precioProductoPendiente(producto)) }}</td>
+                <td class="px-3 py-3 text-right font-semibold">{{ formatMoney(totalProductoPendiente(producto)) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="productosPendientesFiltrados.length === 0" class="py-8 text-center text-surface-500">No hay productos que coincidan con la búsqueda.</div>
+        </div>
+        <div v-else class="py-10 text-center text-surface-500"><i class="pi pi-shopping-bag text-3xl block mb-3 text-surface-400"></i>Esta factura no tiene productos registrados.</div>
+      </div>
+      <template #footer><button type="button" @click="showProductosPendienteModal = false" class="px-4 py-2 rounded-lg text-sm font-medium border border-surface-300 dark:border-surface-600 hover:bg-surface-100 dark:hover:bg-surface-700">Cerrar</button></template>
     </Dialog>
 
     <TicketFacturaPrint ref="ticketFacturaRef" />
@@ -440,6 +488,9 @@ const gastosEfectivoTurno = ref(0)
 const gastosLista = ref([])
 const ultimasVentas = ref([])
 const facturasPendientes = ref([])
+const showProductosPendienteModal = ref(false)
+const facturaProductosPendiente = ref(null)
+const busquedaProductosPendiente = ref('')
 const showCobroPendienteModal = ref(false)
 const facturaPendienteCobro = ref(null)
 const metodoCobroPendiente = ref('EFECTIVO')
@@ -509,6 +560,57 @@ let pendientesInterval = null
 let pendientesInicializados = false
 let consultandoPendientes = false
 let idsPendientesConocidos = new Set()
+
+function parseProductosFactura(factura) {
+  const productos = factura?.productos
+  if (Array.isArray(productos)) return productos
+  if (typeof productos !== 'string') return []
+  try {
+    const parsed = JSON.parse(productos)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+const productosFacturaPendiente = computed(() => parseProductosFactura(facturaProductosPendiente.value))
+
+const productosPendientesFiltrados = computed(() => {
+  const texto = busquedaProductosPendiente.value.trim().toLowerCase()
+  if (!texto) return productosFacturaPendiente.value
+  return productosFacturaPendiente.value.filter(producto => [
+    producto?.nombre,
+    producto?.descripcion,
+    producto?.producto,
+    producto?.codigo,
+    producto?.codigo_barra,
+    producto?.imei,
+    producto?.serial,
+  ].some(valor => String(valor || '').toLowerCase().includes(texto)))
+})
+
+function verProductosFacturaPendiente(factura) {
+  if (!factura) return
+  facturaProductosPendiente.value = factura
+  busquedaProductosPendiente.value = ''
+  showProductosPendienteModal.value = true
+}
+
+function nombreProductoPendiente(producto) {
+  return String(producto?.nombre || producto?.descripcion || producto?.producto || 'Producto sin nombre')
+}
+
+function cantidadProductoPendiente(producto) {
+  return Number(producto?.cantidad ?? producto?.quantity ?? 1) || 1
+}
+
+function precioProductoPendiente(producto) {
+  return Number(producto?.precio_final ?? producto?.precio_venta ?? producto?.precio_unitario ?? producto?.precio ?? producto?.price ?? 0) || 0
+}
+
+function totalProductoPendiente(producto) {
+  return Number(producto?.total ?? (cantidadProductoPendiente(producto) * precioProductoPendiente(producto))) || 0
+}
 
 function perteneceAlmacenActual(factura) {
   if (almacenStore.activeUid && factura.almacen_uid) return String(factura.almacen_uid) === String(almacenStore.activeUid)

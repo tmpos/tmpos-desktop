@@ -27,6 +27,7 @@ import { useEmpresa } from '@/composables/useEmpresa'
 import { useSystemModeStore } from '@/stores/systemMode'
 import { useAuthStore } from '@/stores/auth.store'
 import { useCloudRefresh } from '@/composables/useCloudRefresh'
+import InternetImageSearchDialog from '@/components/shared/InternetImageSearchDialog.vue'
 
 const toast = useToast()
 const systemMode = useSystemModeStore()
@@ -90,6 +91,8 @@ const form = ref({
 })
 const fileInput = ref<HTMLInputElement | null>(null)
 const subiendoImagen = ref(false)
+const dialogBuscarImagen = ref(false)
+const importandoImagenInternet = ref(false)
 
 const link = ref('')
 const api = ref('')
@@ -687,6 +690,46 @@ async function subirImagen() {
   }
 }
 
+function abrirBusquedaImagen() {
+  dialogBuscarImagen.value = true
+}
+
+async function importarImagenInternet(image: any) {
+  if (!image?.url || importandoImagenInternet.value) return
+  if (!tmCloudConnected()) {
+    toast.add({ severity: 'warn', summary: 'TM Cloud no configurado', detail: 'Configura TM Cloud para guardar la imagen encontrada', life: 3500 })
+    return
+  }
+  importandoImagenInternet.value = true
+  subiendoImagen.value = true
+  try {
+    const response = await fetch(image.url)
+    if (!response.ok) throw new Error(`No se pudo descargar la imagen (HTTP ${response.status})`)
+    const blob = await response.blob()
+    if (!blob.type.startsWith('image/')) throw new Error('El resultado seleccionado no es una imagen válida')
+    const extension = blob.type.includes('png') ? 'png' : blob.type.includes('webp') ? 'webp' : 'jpg'
+    const baseName = String(form.value.nombre || 'accesorio').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'accesorio'
+    const file = new File([blob], `${baseName}.${extension}`, { type: blob.type })
+    const uid = await uploadImage(file, 'accesorios')
+    form.value.imagen = uid
+    if (isEditing.value && selectedAccesorio.value?.id) {
+      const actualizado = await window.db.update('accesorios', selectedAccesorio.value.id, { imagen: uid })
+      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
+      selectedAccesorio.value.imagen = uid
+      const local = accesorios.value.find((accesorio: any) => accesorio.id === selectedAccesorio.value.id)
+      if (local) local.imagen = uid
+      if (isOnline()) await pushLocalRowToCloud('accesorios', selectedAccesorio.value.id)
+    }
+    dialogBuscarImagen.value = false
+    toast.add({ severity: 'success', summary: 'Imagen agregada', detail: 'La imagen de internet fue guardada en el accesorio', life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'No se pudo traer la imagen', detail: error?.message || 'Intenta con otra imagen', life: 4500 })
+  } finally {
+    importandoImagenInternet.value = false
+    subiendoImagen.value = false
+  }
+}
+
 async function eliminarImagen() {
   if (!form.value.imagen) return
   try {
@@ -1040,9 +1083,10 @@ useCloudRefresh(['accesorios'], cargarAccesorios)
             <img :src="imagenUrl(form.imagen)" class="w-full h-full object-cover" alt="Imagen del accesorio" />
             <Button icon="pi pi-times" severity="danger" text rounded size="small" class="absolute top-1 right-1 !w-6 !h-6 !text-xs bg-white/80 dark:bg-surface-800/80" @click="eliminarImagen" />
           </div>
-          <div class="flex gap-2">
+          <div class="flex flex-wrap gap-2">
             <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="subirImagen" />
             <Button :label="(form.imagen ? 'Cambiar ' : 'Subir ') + 'Imagen'" icon="pi pi-upload" severity="secondary" outlined :loading="subiendoImagen" @click="fileInput?.click()" />
+            <Button v-if="isEditing" label="Buscar en internet" icon="pi pi-globe" severity="info" outlined :disabled="subiendoImagen" @click="abrirBusquedaImagen" />
           </div>
         </div>
       </div>
@@ -1051,6 +1095,8 @@ useCloudRefresh(['accesorios'], cargarAccesorios)
         <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="subiendoImagen" @click="guardar" />
       </template>
     </Dialog>
+
+    <InternetImageSearchDialog v-model:visible="dialogBuscarImagen" :initial-query="form.nombre" :importing="importandoImagenInternet" @select="importarImagenInternet" />
 
     <Dialog
       v-model:visible="deleteDialogVisible"
