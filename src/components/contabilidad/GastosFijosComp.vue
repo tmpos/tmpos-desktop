@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { getSystemLocale } from '@/i18n/localeProfiles'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -17,10 +17,13 @@ import Tag from 'primevue/tag'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useBulkWarehouseTransfer } from '@/composables/useBulkWarehouseTransfer'
 
 const toast = useToast()
-const { addAlmacenId, filterByAlmacen } = useAlmacenFilter()
+const { addAlmacenId, filterByAlmacen, store: almacenStore } = useAlmacenFilter()
 const gastos = ref<any[]>([])
+const selectedGastos = ref<any[]>([])
+const verTodosAlmacenes = ref(false)
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
 const dialogVisible = ref(false)
@@ -28,6 +31,15 @@ const deleteDialogVisible = ref(false)
 const isEditing = ref(false)
 const selectedGasto = ref<any>(null)
 const busqueda = ref('')
+
+const {
+  dialogMoverAlmacen, almacenDestino, almacenesDestino, moviendoAlmacen,
+  abrirMoverAlmacen, aplicarMoverAlmacen,
+} = useBulkWarehouseTransfer({
+  table: 'gastos_fijos', entity: 'gastos_fijos', label: 'gasto fijo',
+  selection: selectedGastos, reload: cargarGastos,
+  reference: (item: any) => item.nombre || String(item.id || ''),
+})
 
 const categorias = [
   { label: 'Alquiler', value: 'Alquiler' },
@@ -87,7 +99,7 @@ async function cargarGastos() {
   try {
     const res = await window.db.getAll('gastos_fijos')
     if (res.success) {
-      gastos.value = filterByAlmacen(res.data || [])
+      gastos.value = verTodosAlmacenes.value ? (res.data || []) : filterByAlmacen(res.data || [])
     } else {
       toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudieron cargar los gastos fijos', life: 3000 })
     }
@@ -95,6 +107,23 @@ async function cargarGastos() {
     console.error(error)
   } finally {
     loading.value = false
+  }
+}
+
+watch(verTodosAlmacenes, async () => {
+  selectedGastos.value = []
+  await cargarGastos()
+})
+
+function estaSeleccionado(gasto: any): boolean {
+  return selectedGastos.value.some((item: any) => Number(item.id) === Number(gasto.id))
+}
+
+function toggleSeleccion(gasto: any) {
+  if (estaSeleccionado(gasto)) {
+    selectedGastos.value = selectedGastos.value.filter((item: any) => Number(item.id) !== Number(gasto.id))
+  } else {
+    selectedGastos.value = [...selectedGastos.value, gasto]
   }
 }
 
@@ -196,7 +225,10 @@ async function toggleEstado(gasto: any) {
   }
 }
 
-onMounted(cargarGastos)
+onMounted(async () => {
+  await almacenStore.load()
+  await cargarGastos()
+})
 </script>
 
 <template>
@@ -211,6 +243,17 @@ onMounted(cargarGastos)
         </IconField>
 
         <div class="flex items-center gap-2">
+          <label class="flex items-center gap-2 text-sm text-surface-600 dark:text-surface-300 cursor-pointer">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            <span>Todos los almacenes</span>
+          </label>
+          <Button
+            v-if="selectedGastos.length"
+            :label="`Cambiar almacén (${selectedGastos.length})`"
+            icon="pi pi-warehouse"
+            severity="success"
+            @click="abrirMoverAlmacen"
+          />
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
             <button
               class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"
@@ -233,6 +276,7 @@ onMounted(cargarGastos)
 
       <DataTable
         v-if="viewMode === 'table'"
+        v-model:selection="selectedGastos"
         :value="gastosFiltrados"
         :loading="loading"
         stripedRows
@@ -242,6 +286,7 @@ onMounted(cargarGastos)
         dataKey="id"
         responsiveLayout="scroll"
       >
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column header="Acciones" style="width: 8rem">
           <template #body="{ data }">
             <div class="flex gap-1">
@@ -280,7 +325,18 @@ onMounted(cargarGastos)
             @click="abrirEditar(gasto)"
           >
             <div class="flex items-center justify-between">
-              <span class="text-xs font-mono text-surface-400">#{{ gasto.id }}</span>
+              <div class="flex items-center gap-1">
+                <Button
+                  :icon="estaSeleccionado(gasto) ? 'pi pi-check-square' : 'pi pi-square'"
+                  :severity="estaSeleccionado(gasto) ? 'success' : 'secondary'"
+                  text
+                  rounded
+                  size="small"
+                  @click.stop="toggleSeleccion(gasto)"
+                  v-tooltip="estaSeleccionado(gasto) ? 'Quitar de la selección' : 'Seleccionar gasto fijo'"
+                />
+                <span class="text-xs font-mono text-surface-400">#{{ gasto.id }}</span>
+              </div>
               <Tag :value="gasto.estado" :severity="getEstadoSeverity(gasto.estado)" />
             </div>
 
@@ -314,6 +370,35 @@ onMounted(cargarGastos)
         </div>
       </div>
     </Fieldset>
+
+    <Dialog v-model:visible="dialogMoverAlmacen" header="Cambiar almacén" modal :style="{ width: '28rem' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm text-surface-600 dark:text-surface-300">
+          Se moverán {{ selectedGastos.length }} gasto(s) fijo(s) al almacén seleccionado.
+        </p>
+        <Select
+          v-model="almacenDestino"
+          :options="almacenesDestino"
+          optionLabel="nombre"
+          placeholder="Seleccionar almacén destino"
+          fluid
+        />
+        <p v-if="almacenesDestino.length === 0" class="text-sm text-orange-600">
+          No hay otro almacén disponible como destino.
+        </p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogMoverAlmacen = false" />
+        <Button
+          label="Cambiar almacén"
+          icon="pi pi-warehouse"
+          severity="success"
+          :loading="moviendoAlmacen"
+          :disabled="!almacenDestino"
+          @click="aplicarMoverAlmacen"
+        />
+      </template>
+    </Dialog>
 
     <Dialog
       v-model:visible="dialogVisible"

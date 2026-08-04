@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { getSystemLocale } from '@/i18n/localeProfiles'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import Button from 'primevue/button'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
@@ -13,11 +13,15 @@ import Textarea from 'primevue/textarea'
 import TabView from 'primevue/tabview'
 import TabPanel from 'primevue/tabpanel'
 import Toast from 'primevue/toast'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useAuthStore } from '@/stores/auth.store'
+import { useBulkWarehouseTransfer } from '@/composables/useBulkWarehouseTransfer'
 
 const toast = useToast()
 const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
+const auth = useAuthStore()
 const reclamaciones = ref<any[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
@@ -26,6 +30,18 @@ const selectedId = ref<number | null>(null)
 const busqueda = ref('')
 const buscandoFactura = ref(false)
 const facturaEncontrada = ref<any>(null)
+const verTodosAlmacenes = ref(false)
+const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
+const selectedReclamaciones = ref<any[]>([])
+
+const {
+  dialogMoverAlmacen, almacenDestino, almacenesDestino, moviendoAlmacen,
+  abrirMoverAlmacen, aplicarMoverAlmacen,
+} = useBulkWarehouseTransfer({
+  table: 'reclamaciones', entity: 'reclamaciones', label: 'reclamación',
+  selection: selectedReclamaciones, reload: cargar,
+  reference: (item: any) => item.no_reclamacion || String(item.id || ''),
+})
 
 const estados = [
   { label: 'Abierta', value: 'ABIERTA' },
@@ -149,7 +165,7 @@ async function buscarFactura() {
   try {
     const res = await (window as any).db.getAll('facturas')
     if (res.success) {
-      const factura = (res.data || []).find((f: any) =>
+      const factura = filterByAlmacen(res.data || []).find((f: any) =>
         String(f.no_factura || '').toLowerCase() === nf.toLowerCase()
       )
       if (factura) {
@@ -221,11 +237,20 @@ async function cargar() {
   loading.value = true
   try {
     const res = await (window as any).db.getAll('reclamaciones')
-    if (res.success) reclamaciones.value = filterByAlmacen(res.data || [])
+    if (res.success) {
+      reclamaciones.value = puedeVerTodosAlmacenes.value && verTodosAlmacenes.value
+        ? (res.data || [])
+        : filterByAlmacen(res.data || [])
+    }
   } catch {} finally {
     loading.value = false
   }
 }
+
+watch(verTodosAlmacenes, () => {
+  selectedReclamaciones.value = []
+  cargar()
+})
 
 function formatFecha(fecha: string): string {
   if (!fecha) return ''
@@ -243,8 +268,13 @@ onMounted(cargar)
 <template>
   <div>
     <Toast />
-    <div class="flex items-center gap-3 mb-4">
+    <div class="flex items-center gap-3 mb-4 flex-wrap">
       <InputText v-model="busqueda" placeholder="Buscar..." class="w-64" />
+      <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+        <ToggleSwitch v-model="verTodosAlmacenes" />
+        Todos los almacenes
+      </label>
+      <Button v-if="selectedReclamaciones.length" :label="`Cambiar almacén (${selectedReclamaciones.length})`" icon="pi pi-warehouse" severity="success" @click="abrirMoverAlmacen" />
       <Button label="Nueva Reclamacion" icon="pi pi-plus" @click="abrirCrear" />
     </div>
 
@@ -258,10 +288,12 @@ onMounted(cargar)
       responsiveLayout="scroll"
       sortField="fecha_emision"
       :sortOrder="-1"
+      dataKey="id"
+      v-model:selection="selectedReclamaciones"
       class="!text-xs"
       @row-click="abrirEditar($event.data)"
-      selectionMode="single"
     >
+      <Column selectionMode="multiple" headerStyle="width: 3rem" />
       <Column field="no_reclamacion" header="No." sortable style="width: 9rem" />
       <Column field="fecha_emision" header="Fecha" sortable style="width: 7rem">
         <template #body="{ data }">{{ formatFecha(data.fecha_emision) }}</template>
@@ -286,6 +318,18 @@ onMounted(cargar)
         <div class="text-center py-8 text-surface-400">No hay reclamaciones registradas.</div>
       </template>
     </DataTable>
+
+    <Dialog v-model:visible="dialogMoverAlmacen" header="Cambiar almacén" modal :style="{ width: '28rem' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm">Mover <strong>{{ selectedReclamaciones.length }}</strong> reclamación(es) a otro almacén:</p>
+        <Select v-model="almacenDestino" :options="almacenesDestino" optionLabel="nombre" placeholder="Seleccionar almacén destino..." fluid />
+        <p v-if="almacenesDestino.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacén disponible.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacen" @click="dialogMoverAlmacen = false" />
+        <Button label="Mover reclamaciones" icon="pi pi-warehouse" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="aplicarMoverAlmacen" />
+      </template>
+    </Dialog>
 
     <Dialog v-model:visible="dialogVisible" :header="isEditing ? 'Editar Reclamacion' : 'Nueva Reclamacion'" :modal="true" :style="{ width: 'min(48rem, 95vw)' }" :dismissableMask="false">
       <TabView>

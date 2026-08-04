@@ -19,6 +19,7 @@ import Tab from 'primevue/tab'
 import TabPanels from 'primevue/tabpanels'
 import TabPanel from 'primevue/tabpanel'
 import Fieldset from 'primevue/fieldset'
+import ToggleSwitch from 'primevue/toggleswitch'
 import Tooltip from 'primevue/tooltip'
 import Chip from 'primevue/chip'
 import Tag from 'primevue/tag'
@@ -37,7 +38,7 @@ import { envioElectron, encryptarPassword } from '@/funciones/funciones.js'
 const toast = useToast()
 const route = useRoute()
 const { nombre: nombreEmpresa, cargar: cargarEmpresa } = useEmpresa()
-const { addAlmacenId, store: almacenStore } = useAlmacenFilter()
+const { addAlmacenId, filterByAlmacen, store: almacenStore } = useAlmacenFilter()
 
 // ─── Estado general ───
 const ordenes = ref<any[]>([])
@@ -49,6 +50,7 @@ const viewMode = ref<'table' | 'cards'>('cards')
 const isEditing = ref(false)
 const selectedOrden = ref<any>(null)
 const selectedOrdenes = ref<any[]>([])
+const verTodosAlmacenes = ref(false)
 const dialogMoverAlmacenMulti = ref(false)
 const almacenDestinoMulti = ref<any>(null)
 const almacenesDestinoMulti = ref<any[]>([])
@@ -344,7 +346,9 @@ async function cargarOrdenes() {
     window.db.getAll('tecnicos'),
   ])
   if (ordenesRes.success) {
-    ordenes.value = ordenesRes.data || []
+    ordenes.value = verTodosAlmacenes.value
+      ? (ordenesRes.data || [])
+      : filterByAlmacen(ordenesRes.data || [])
   }
   if (tecnicosRes.success) {
     tecnicos.value = (tecnicosRes.data || [])
@@ -364,6 +368,12 @@ async function cargarOrdenes() {
     loading.value = false
   }
 }
+
+watch(verTodosAlmacenes, () => {
+  selectedOrdenes.value = []
+  selectedOrden.value = null
+  cargarOrdenes()
+})
 
 async function abrirCrear() {
   editingOrderId.value = null
@@ -1105,6 +1115,10 @@ defineExpose({ cargarOrdenes })
             <InputText v-model="busqueda" placeholder="Buscar orden..." />
           </IconField>
           <div class="flex items-center gap-2">
+            <label class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+              <ToggleSwitch v-model="verTodosAlmacenes" />
+              Todos los almacenes
+            </label>
             <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
               <button
                 class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"

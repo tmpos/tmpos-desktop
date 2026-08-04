@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { getSystemLocale } from '@/i18n/localeProfiles'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
@@ -9,14 +9,27 @@ import Select from 'primevue/select'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Tag from 'primevue/tag'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useBulkWarehouseTransfer } from '@/composables/useBulkWarehouseTransfer'
 
 const toast = useToast()
-const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
+const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
 const cuentas = ref<any[]>([])
+const selectedCuentas = ref<any[]>([])
+const verTodosAlmacenes = ref(false)
 const loading = ref(false)
+
+const {
+  dialogMoverAlmacen, almacenDestino, almacenesDestino, moviendoAlmacen,
+  abrirMoverAlmacen, aplicarMoverAlmacen,
+} = useBulkWarehouseTransfer({
+  table: 'bancos', entity: 'bancos', label: 'cuenta bancaria',
+  selection: selectedCuentas, reload: cargarCuentas,
+  reference: (item: any) => item.nombre || item.numero_cuenta || String(item.id || ''),
+})
 
 const dialogVisible = ref(false)
 const isEditing = ref(false)
@@ -60,10 +73,15 @@ async function cargarCuentas() {
   loading.value = true
   try {
     const res = await window.db.getAll('bancos')
-    if (res.success) cuentas.value = filterByAlmacen(res.data || [])
+    if (res.success) cuentas.value = verTodosAlmacenes.value ? (res.data || []) : filterByAlmacen(res.data || [])
   } catch (_) {}
   loading.value = false
 }
+
+watch(verTodosAlmacenes, async () => {
+  selectedCuentas.value = []
+  await cargarCuentas()
+})
 
 function abrirNueva() {
   isEditing.value = false
@@ -132,6 +150,7 @@ async function eliminar(cuenta: any) {
 
 onMounted(async () => {
   await ensureTable()
+  await almacenStore.load()
   await cargarCuentas()
 })
 </script>
@@ -141,15 +160,29 @@ onMounted(async () => {
     <Toast />
 
     <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-5">
-      <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <div>
           <h3 class="text-xl font-bold">Bancos</h3>
           <p class="text-sm text-surface-500">Cuentas bancarias y saldos</p>
         </div>
-        <Button label="Nueva Cuenta" icon="pi pi-plus" @click="abrirNueva" />
+        <div class="flex items-center gap-2 flex-wrap">
+          <label class="flex items-center gap-2 text-sm text-surface-600 dark:text-surface-300 cursor-pointer">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            <span>Todos los almacenes</span>
+          </label>
+          <Button
+            v-if="selectedCuentas.length"
+            :label="`Cambiar almacén (${selectedCuentas.length})`"
+            icon="pi pi-warehouse"
+            severity="success"
+            @click="abrirMoverAlmacen"
+          />
+          <Button label="Nueva Cuenta" icon="pi pi-plus" @click="abrirNueva" />
+        </div>
       </div>
 
-      <DataTable :value="cuentas" :loading="loading" stripedRows paginator :rows="10" dataKey="id" responsiveLayout="scroll">
+      <DataTable v-model:selection="selectedCuentas" :value="cuentas" :loading="loading" stripedRows paginator :rows="10" dataKey="id" responsiveLayout="scroll">
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column header="Acciones" style="width: 7rem">
           <template #body="{ data }">
             <div class="flex gap-1">
@@ -182,6 +215,35 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+
+    <Dialog v-model:visible="dialogMoverAlmacen" header="Cambiar almacén" modal :style="{ width: '28rem' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm text-surface-600 dark:text-surface-300">
+          Se moverán {{ selectedCuentas.length }} cuenta(s) bancaria(s) al almacén seleccionado.
+        </p>
+        <Select
+          v-model="almacenDestino"
+          :options="almacenesDestino"
+          optionLabel="nombre"
+          placeholder="Seleccionar almacén destino"
+          fluid
+        />
+        <p v-if="almacenesDestino.length === 0" class="text-sm text-orange-600">
+          No hay otro almacén disponible como destino.
+        </p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogMoverAlmacen = false" />
+        <Button
+          label="Cambiar almacén"
+          icon="pi pi-warehouse"
+          severity="success"
+          :loading="moviendoAlmacen"
+          :disabled="!almacenDestino"
+          @click="aplicarMoverAlmacen"
+        />
+      </template>
+    </Dialog>
 
     <Dialog v-model:visible="dialogVisible" :header="isEditing ? 'Editar Cuenta Bancaria' : 'Nueva Cuenta Bancaria'" modal :style="{ width: 'min(22rem, calc(100vw - 2rem))' }" :draggable="false">
       <div class="space-y-4 pt-2">

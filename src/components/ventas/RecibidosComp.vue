@@ -2,7 +2,7 @@
 import { useLocaleProfile } from '@/composables/useLocaleProfile'
 
 const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
@@ -18,12 +18,14 @@ import Fieldset from 'primevue/fieldset'
 import TabView from 'primevue/tabview'
 import TabPanel from 'primevue/tabpanel'
 import InputOtp from 'primevue/inputotp'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
 import { envioElectron, encryptarPassword, peticionesFetch } from '@/funciones/funciones.js'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { ensureRecibidoCreditNote } from '@/services/recibidosCreditNoteService'
+import { useBulkWarehouseTransfer } from '@/composables/useBulkWarehouseTransfer'
 
 const toast = useToast()
 const route = useRoute()
@@ -45,12 +47,22 @@ const deleteOtpConfirmando = ref(false)
 const busqueda = ref(String(route.query.search || ''))
 const estadoFiltro = ref(route.query.estado === 'todos' ? 'TODOS' : 'RECIBIDO')
 const viewMode = ref<'table' | 'cards'>('table')
+const verTodosAlmacenes = ref(false)
 const dialogNuevoTelefono = ref(false)
 const nuevoTelefonoForm = ref({ nombre: '' })
 const guardandoTelefono = ref(false)
 const generandoNC = ref(false)
 const enviandoTaller = ref(false)
 const publicandoImei = ref(false)
+
+const {
+  dialogMoverAlmacen, almacenDestino, almacenesDestino, moviendoAlmacen,
+  abrirMoverAlmacen, aplicarMoverAlmacen,
+} = useBulkWarehouseTransfer({
+  table: 'imei', entity: 'imei', label: 'equipo recibido',
+  selection: recibidosSeleccionados, reload: cargarRecibidos,
+  reference: (item: any) => item.nombre || String(item.id || ''),
+})
 
 const clientesLista = ref<any[]>([])
 const clienteSeleccionadoBusqueda = ref<any | null>(null)
@@ -220,7 +232,10 @@ async function cargarRecibidos() {
   try {
     const res = await window.db.getAll('imei')
     if (res.success) {
-      recibidos.value = filterByAlmacen(res.data || []).filter(esEquipoRecibido)
+      const lista = verTodosAlmacenes.value
+        ? (res.data || [])
+        : filterByAlmacen(res.data || [])
+      recibidos.value = lista.filter(esEquipoRecibido)
       const ids = new Set(recibidos.value.map((item: any) => item.id))
       recibidosSeleccionados.value = recibidosSeleccionados.value.filter((item: any) => ids.has(item.id))
     }
@@ -231,9 +246,15 @@ async function cargarRecibidos() {
 async function cargarTelefonos() {
   try {
     const res = await window.db.getAll('telefonos')
-    if (res.success) telefonos.value = filterByAlmacen(res.data || [])
+    if (res.success) telefonos.value = res.data || []
   } catch (_) {}
 }
+
+watch(verTodosAlmacenes, () => {
+  recibidosSeleccionados.value = []
+  selectedRecibido.value = null
+  cargarRecibidos()
+})
 
 function abrirRecibir() {
   form.value = formDefault()
@@ -897,6 +918,11 @@ onMounted(async () => {
         </div>
 
         <div class="flex items-center gap-2">
+          <label class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
+          <Button v-if="recibidosSeleccionados.length" :label="`Cambiar almacén (${recibidosSeleccionados.length})`" icon="pi pi-warehouse" severity="success" @click="abrirMoverAlmacen" />
           <Button
             v-if="recibidosSeleccionados.length"
             :label="`Eliminar (${recibidosSeleccionados.length})`"
@@ -1067,6 +1093,18 @@ onMounted(async () => {
         </div>
       </div>
     </Fieldset>
+
+    <Dialog v-model:visible="dialogMoverAlmacen" header="Cambiar almacén" modal :style="{ width: '28rem' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm">Mover <strong>{{ recibidosSeleccionados.length }}</strong> equipo(s) recibido(s) a otro almacén:</p>
+        <Select v-model="almacenDestino" :options="almacenesDestino" optionLabel="nombre" placeholder="Seleccionar almacén destino..." fluid />
+        <p v-if="almacenesDestino.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacén disponible.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacen" @click="dialogMoverAlmacen = false" />
+        <Button label="Mover recibidos" icon="pi pi-warehouse" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="aplicarMoverAlmacen" />
+      </template>
+    </Dialog>
 
     <Dialog
       v-model:visible="dialogVisible"

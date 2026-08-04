@@ -6,6 +6,17 @@
           <p class="text-sm text-surface-500">Registra y da seguimiento a las garantias de productos</p>
         </div>
         <div class="flex items-center gap-2">
+          <label class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
+          <Button
+            v-if="selectedGarantias.length"
+            :label="`Cambiar almacén (${selectedGarantias.length})`"
+            icon="pi pi-warehouse"
+            severity="success"
+            @click="abrirMoverAlmacen"
+          />
           <Button
             v-if="selectedGarantias.length"
             :label="`Eliminar (${selectedGarantias.length})`"
@@ -68,6 +79,18 @@
         </template>
       </DataTable>
     </template>
+
+    <Dialog v-model:visible="dialogMoverAlmacen" header="Cambiar almacén" modal :style="{ width: '28rem' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm">Mover <strong>{{ selectedGarantias.length }}</strong> garantía(s) a otro almacén:</p>
+        <Select v-model="almacenDestino" :options="almacenesDestino" optionLabel="nombre" placeholder="Seleccionar almacén destino..." fluid />
+        <p v-if="almacenesDestino.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacén disponible.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacen" @click="dialogMoverAlmacen = false" />
+        <Button label="Mover garantías" icon="pi pi-warehouse" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="aplicarMoverAlmacen" />
+      </template>
+    </Dialog>
 
     <Dialog v-model:visible="dialogGarantia" :header="editandoId ? 'Editar Garantia' : 'Registrar Garantia'" modal :style="{ width: 'min(36rem, 95vw)' }" :draggable="false">
       <div class="flex flex-col gap-3 pt-2">
@@ -263,7 +286,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useSystemModeStore } from '@/stores/systemMode'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
@@ -275,10 +298,13 @@ import InputNumber from 'primevue/inputnumber'
 import InputOtp from 'primevue/inputotp'
 import Calendar from 'primevue/calendar'
 import Textarea from 'primevue/textarea'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import { useAlmacenStore } from '@/stores/almacen.store'
 import OrdenTallerForm from '@/components/taller/OrdenTallerForm.vue'
 import Swal from 'sweetalert2'
+import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useBulkWarehouseTransfer } from '@/composables/useBulkWarehouseTransfer'
 
 const toast = useToast()
 const systemMode = useSystemModeStore()
@@ -286,6 +312,7 @@ const productTypes = computed(() => systemMode.isGeneralStore
   ? ['SERIAL', 'PRODUCTO', 'ELECTRODOMESTICO', 'PIEZA']
   : ['IMEI', 'SERIAL', 'ACCESORIO', 'ELECTRODOMESTICO', 'PIEZA'])
 const almacenStore = useAlmacenStore()
+const { filterByAlmacen } = useAlmacenFilter()
 
 const loading = ref(true)
 const garantias = ref<any[]>([])
@@ -319,6 +346,16 @@ const estadosReclamo = [
 
 const editandoId = ref<number | null>(null)
 const selectedGarantias = ref<any[]>([])
+const verTodosAlmacenes = ref(false)
+
+const {
+  dialogMoverAlmacen, almacenDestino, almacenesDestino, moviendoAlmacen,
+  abrirMoverAlmacen, aplicarMoverAlmacen,
+} = useBulkWarehouseTransfer({
+  table: 'garantias', entity: 'garantias', label: 'garantía',
+  selection: selectedGarantias, reload: cargar,
+  reference: (item: any) => item.no_factura || item.imei || item.serial || String(item.id || ''),
+})
 const deleteDialogVisible = ref(false)
 const deleteOtpEnviado = ref(false)
 const deleteOtpLoading = ref(false)
@@ -390,7 +427,11 @@ async function cargar() {
       (window as any).electron.invoke('db:getAll', 'clientes'),
     ])
     if (resGar.success) {
-      const ids = (resGar.data || []).map((g: any) => g.id)
+      const lista = verTodosAlmacenes.value
+        ? (resGar.data || [])
+        : filterByAlmacen(resGar.data || [])
+      garantias.value = lista
+      const ids = lista.map((g: any) => g.id)
       if (ids.length > 0) {
         const resRec = await (window as any).electron.invoke('db:getWhere', 'reclamos_garantia', `garantia_id IN (${ids.join(',')})`)
         if (resRec.success) {
@@ -403,17 +444,21 @@ async function cargar() {
             const fechaNueva = new Date(r.created_at || r.fecha_ingreso || 0).getTime()
             if (!actual || fechaNueva >= fechaActual) ultimos.set(r.garantia_id, r)
           }
-          garantias.value = (resGar.data || []).map((g: any) => ({ ...g, reclamos_count: counts.get(g.id) || 0, ultimo_reclamo: ultimos.get(g.id) || null }))
+          garantias.value = lista.map((g: any) => ({ ...g, reclamos_count: counts.get(g.id) || 0, ultimo_reclamo: ultimos.get(g.id) || null }))
         }
-      } else {
-        garantias.value = resGar.data || []
       }
     }
-    if (resCli.success) clientes.value = resCli.data || []
+    if (resCli.success) clientes.value = filterByAlmacen(resCli.data || [])
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al cargar garantias', life: 3000 })
   } finally { loading.value = false }
 }
+
+watch(verTodosAlmacenes, () => {
+  selectedGarantias.value = []
+  garantiaParaEliminar.value = null
+  cargar()
+})
 
 function productoVendido(item: any): boolean {
   return String(item?.estado || '').toUpperCase() === 'VENDIDO'
@@ -467,7 +512,7 @@ async function cargarProductos() {
   if (!tabla) return
   const res = await (window as any).electron.invoke('db:getAll', tabla)
   if (res.success) {
-    let productos = res.data || []
+    let productos = filterByAlmacen(res.data || [])
     if (form.value.tipo_producto === 'IMEI') {
       productos = productos.filter((p: any) =>
         productoVendido(p) || Number(p.id) === Number(form.value.producto_id)

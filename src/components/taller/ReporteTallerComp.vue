@@ -11,10 +11,12 @@ import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import { useAuthStore } from '@/stores/auth.store'
+import { useAlmacenStore } from '@/stores/almacen.store'
 import * as XLSX from 'xlsx'
 
 const toast = useToast()
 const auth = useAuthStore()
+const almacenStore = useAlmacenStore()
 const loading = ref(false)
 const generandoPdf = ref(false)
 const generandoExcel = ref(false)
@@ -26,18 +28,50 @@ const periodo = ref('mes')
 const fechaDesde = ref<Date | null>(null)
 const fechaHasta = ref<Date | null>(null)
 const tecnicoFiltro = ref('')
+const TODOS_ALMACENES = '__TODOS__'
+const almacenFiltro = ref(TODOS_ALMACENES)
 
-const resumen = ref({
-  total: 0,
-  pendientes: 0,
-  enProgreso: 0,
-  completadas: 0,
-  ingresos: 0,
-  ganancia: 0,
-  costoPiezas: 0,
-})
+function almacenKey(almacen: any): string {
+  return almacen?.uid ? `uid:${almacen.uid}` : `id:${Number(almacen?.id || 0)}`
+}
 
-const tecnicos = ref<string[]>([])
+const almacenesOptions = computed(() => [
+  { label: 'Todos los almacenes', value: TODOS_ALMACENES },
+  ...almacenStore.almacenes.map((almacen: any) => ({
+    label: almacen.nombre || `Almacén ${almacen.id}`,
+    value: almacenKey(almacen),
+  })),
+])
+
+const almacenSeleccionado = computed(() =>
+  almacenStore.almacenes.find((almacen: any) => almacenKey(almacen) === almacenFiltro.value) || null
+)
+
+const almacenReporteNombre = computed(() => almacenSeleccionado.value?.nombre || 'Todos los almacenes')
+
+function coincideAlmacen(orden: any): boolean {
+  if (almacenFiltro.value === TODOS_ALMACENES) return true
+  const almacen = almacenSeleccionado.value
+  if (!almacen) return false
+  if (almacen.uid && orden.almacen_uid) return String(orden.almacen_uid) === String(almacen.uid)
+  return Number(orden.almacen_id || 0) === Number(almacen.id || 0)
+}
+
+function nombreAlmacenOrden(orden: any): string {
+  const almacen = almacenStore.almacenes.find((item: any) =>
+    (orden.almacen_uid && item.uid && String(item.uid) === String(orden.almacen_uid)) ||
+    Number(item.id || 0) === Number(orden.almacen_id || 0)
+  )
+  return almacen?.nombre || 'Sin almacén'
+}
+
+function almacenArchivo(): string {
+  return almacenReporteNombre.value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'Todos'
+}
 
 function formatCurrency(n: number): string {
   return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -74,6 +108,7 @@ function buildReporteTallerHtml(emp: any, fechaActual: string, fmtNum: (n: numbe
       <td><strong>${escapeHtml(o.nombre || '-')}</strong><span>${escapeHtml(o.telefono || '')}</span></td>
       <td>${escapeHtml(o.equipo || '-')}</td>
       <td>${escapeHtml(o.tecnico || '-')}</td>
+      <td>${escapeHtml(nombreAlmacenOrden(o))}</td>
       <td class="money">${getSystemCurrencyCode()} ${fmtNum(o.precio_pieza || 0)}</td>
       <td class="money">${getSystemCurrencyCode()} ${fmtNum(o.total || 0)}</td>
       <td><span class="status">${escapeHtml(o.estado || '-')}</span></td>
@@ -134,6 +169,7 @@ function buildReporteTallerHtml(emp: any, fechaActual: string, fmtNum: (n: numbe
       <div class="title">Reporte de Taller</div>
       <div class="line"><span>Fecha</span><strong>${fechaActual}</strong></div>
       <div class="line"><span>Periodo</span><strong>${escapeHtml(periodoTexto)}</strong></div>
+      <div class="line"><span>Almacén</span><strong>${escapeHtml(almacenReporteNombre.value)}</strong></div>
       <div class="line"><span>Usuario</span><strong>${escapeHtml(auth.user?.nombre || '-')}</strong></div>
     </div>
   </div>
@@ -161,8 +197,8 @@ function buildReporteTallerHtml(emp: any, fechaActual: string, fmtNum: (n: numbe
 
   <div class="section">Detalle de ordenes (${ordenesFiltradas.value.length})</div>
   <table class="data">
-    <thead><tr><th>#</th><th>Orden</th><th>Cliente</th><th>Equipo</th><th>Tecnico</th><th class="money">Piezas</th><th class="money">Total</th><th>Estado</th></tr></thead>
-    <tbody>${ordenesHtml || '<tr><td colspan="8">Sin ordenes para mostrar</td></tr>'}</tbody>
+    <thead><tr><th>#</th><th>Orden</th><th>Cliente</th><th>Equipo</th><th>Tecnico</th><th>Almacén</th><th class="money">Piezas</th><th class="money">Total</th><th>Estado</th></tr></thead>
+    <tbody>${ordenesHtml || '<tr><td colspan="9">Sin ordenes para mostrar</td></tr>'}</tbody>
   </table>
 
   <div class="footer"><span>MrCuttiTechnology</span><span>Generado el ${fechaActual}</span></div>
@@ -200,12 +236,16 @@ async function abrirPdfEmbebido(url: string, nombre: string) {
 }
 
 const ordenesFiltradas = computed(() => {
-  let data = ordenes.value
+  let data = ordenes.value.filter(coincideAlmacen)
   if (tecnicoFiltro.value) {
     data = data.filter(o => o.tecnico === tecnicoFiltro.value)
   }
   return data
 })
+
+const tecnicosDisponibles = computed(() => Array.from(new Set(
+  ordenes.value.filter(coincideAlmacen).map((orden: any) => orden.tecnico).filter(Boolean)
+)).sort((a: any, b: any) => String(a).localeCompare(String(b), 'es')) as string[])
 
 const resumenFiltrado = computed(() => {
   const data = ordenesFiltradas.value
@@ -262,23 +302,6 @@ async function cargarDatos() {
         return true
       })
 
-      const t = new Set(res.data?.map((o: any) => o.tecnico).filter(Boolean) || [])
-      tecnicos.value = Array.from(t) as string[]
-
-      const all = ordenes.value
-      const pendientes = all.filter(o => o.estado === 'RECIBIDO' || o.estado === 'PENDIENTE')
-      const enProgreso = all.filter(o => o.estado === 'EN PROCESO')
-      const completadas = all.filter(o => o.estado === 'COMPLETADO' || o.estado === 'ENTREGADO')
-
-      resumen.value = {
-        total: all.length,
-        pendientes: pendientes.length,
-        enProgreso: enProgreso.length,
-        completadas: completadas.length,
-        ingresos: all.reduce((s, o) => s + (o.total || 0), 0),
-        ganancia: completadas.reduce((s, o) => s + (o.beneficio_empresa || 0), 0),
-        costoPiezas: all.reduce((s, o) => s + (o.precio_pieza || 0), 0),
-      }
     }
   } catch (error) {
     console.error(error)
@@ -317,15 +340,15 @@ async function generarPDF() {
       + '</div>'
       + '<div class="sec">Resumen General</div>'
       + '<table><tr>'
-      + '<td style="background:#f8f9fa;border:1px solid #dee2e6;text-align:center;padding:8px 10px"><div style="font-size:10px;color:#666">Total</div><div style="font-size:18px;font-weight:bold">' + resumen.value.total + '</div></td>'
-      + '<td style="background:#fff3cd;border:1px solid #dee2e6;text-align:center;padding:8px 10px"><div style="font-size:10px;color:#666">Pendientes</div><div style="font-size:18px;font-weight:bold;color:#856404">' + resumen.value.pendientes + '</div></td>'
-      + '<td style="background:#cce5ff;border:1px solid #dee2e6;text-align:center;padding:8px 10px"><div style="font-size:10px;color:#666">En Proceso</div><div style="font-size:18px;font-weight:bold;color:#004085">' + resumen.value.enProgreso + '</div></td>'
-      + '<td style="background:#d4edda;border:1px solid #dee2e6;text-align:center;padding:8px 10px"><div style="font-size:10px;color:#666">Completadas</div><div style="font-size:18px;font-weight:bold;color:#155724">' + resumen.value.completadas + '</div></td>'
+      + '<td style="background:#f8f9fa;border:1px solid #dee2e6;text-align:center;padding:8px 10px"><div style="font-size:10px;color:#666">Total</div><div style="font-size:18px;font-weight:bold">' + resumenFiltrado.value.total + '</div></td>'
+      + '<td style="background:#fff3cd;border:1px solid #dee2e6;text-align:center;padding:8px 10px"><div style="font-size:10px;color:#666">Pendientes</div><div style="font-size:18px;font-weight:bold;color:#856404">' + resumenFiltrado.value.pendientes + '</div></td>'
+      + '<td style="background:#cce5ff;border:1px solid #dee2e6;text-align:center;padding:8px 10px"><div style="font-size:10px;color:#666">En Proceso</div><div style="font-size:18px;font-weight:bold;color:#004085">' + resumenFiltrado.value.enProgreso + '</div></td>'
+      + '<td style="background:#d4edda;border:1px solid #dee2e6;text-align:center;padding:8px 10px"><div style="font-size:10px;color:#666">Completadas</div><div style="font-size:18px;font-weight:bold;color:#155724">' + resumenFiltrado.value.completadas + '</div></td>'
       + '</tr></table>'
       + '<table><tr>'
-      + '<td style="padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6"><div style="font-size:10px;color:#666">Ingresos</div><div style="font-size:20px;font-weight:bold">RD$ ' + fmtNum(resumen.value.ingresos) + '</div></td>'
-      + '<td style="padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6"><div style="font-size:10px;color:#666">Costo Piezas</div><div style="font-size:20px;font-weight:bold">RD$ ' + fmtNum(resumen.value.costoPiezas) + '</div></td>'
-      + '<td style="padding:10px 14px;background:#d4edda;border:1px solid #c3e6cb"><div style="font-size:10px;color:#666">Ganancia</div><div style="font-size:24px;font-weight:bold;color:#155724">RD$ ' + fmtNum(resumen.value.ganancia) + '</div></td>'
+      + '<td style="padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6"><div style="font-size:10px;color:#666">Ingresos</div><div style="font-size:20px;font-weight:bold">RD$ ' + fmtNum(resumenFiltrado.value.ingresos) + '</div></td>'
+      + '<td style="padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6"><div style="font-size:10px;color:#666">Costo Piezas</div><div style="font-size:20px;font-weight:bold">RD$ ' + fmtNum(resumenFiltrado.value.costoPiezas) + '</div></td>'
+      + '<td style="padding:10px 14px;background:#d4edda;border:1px solid #c3e6cb"><div style="font-size:10px;color:#666">Ganancia</div><div style="font-size:24px;font-weight:bold;color:#155724">RD$ ' + fmtNum(resumenFiltrado.value.ganancia) + '</div></td>'
       + '</tr></table>'
       + '<div class="sec">Ordenes por Estado</div>'
       + '<table style="width:50%;margin:0 auto"><thead><tr><th style="text-align:left">Estado</th><th style="text-align:center">Cantidad</th></tr></thead><tbody>' + estHtml + '</tbody></table>'
@@ -334,7 +357,7 @@ async function generarPDF() {
       + '<div class="ftr">MrCuttiTechnology — ' + fechaActual + '</div>'
       + '</body></html>'
 
-    const nombrePdf = 'Reporte_Taller_' + new Date().toISOString().split('T')[0] + '.pdf'
+    const nombrePdf = 'Reporte_Taller_' + almacenArchivo() + '_' + new Date().toISOString().split('T')[0] + '.pdf'
     const htmlProfesional = buildReporteTallerHtml(emp, fechaActual, fmtNum)
     toast.add({ severity: 'info', summary: 'Generando PDF', detail: 'Espere un momento...', life: 2000 })
     const res = await window.electron.invoke('generate:pdf', htmlProfesional, nombrePdf) as { success: boolean; dataUrl?: string; error?: string }
@@ -382,6 +405,7 @@ async function generarExcel() {
       ['REPORTE DE TALLER'],
       ['Período', textoPeriodo()],
       ['Técnico', tecnicoFiltro.value || 'Todos'],
+      ['Almacén', almacenReporteNombre.value],
       ['Generado', fechaGeneracion],
       ['Usuario', auth.user?.nombre || '-'],
       [],
@@ -415,6 +439,7 @@ async function generarExcel() {
       IMEI: orden.imei || '',
       Serial: orden.serial || '',
       Técnico: orden.tecnico || '',
+      Almacén: nombreAlmacenOrden(orden),
       Estado: orden.estado || '',
       'Costo piezas': Number(orden.precio_pieza || 0),
       'Mano de obra': Number(orden.mano_obra || 0),
@@ -432,24 +457,24 @@ async function generarExcel() {
     resumenSheet['!merges'] = [
       XLSX.utils.decode_range('A1:B1'),
       XLSX.utils.decode_range('A2:B2'),
-      XLSX.utils.decode_range('A8:B8'),
-      XLSX.utils.decode_range('A15:B15'),
-      XLSX.utils.decode_range('A21:B21'),
+      XLSX.utils.decode_range('A9:B9'),
+      XLSX.utils.decode_range('A16:B16'),
+      XLSX.utils.decode_range('A22:B22'),
     ]
-    resumenSheet['!autofilter'] = { ref: `A22:B${Math.max(22, 22 + ordenesPorEstado.value.length)}` }
+    resumenSheet['!autofilter'] = { ref: `A23:B${Math.max(23, 23 + ordenesPorEstado.value.length)}` }
 
     detalleSheet['!cols'] = [
       { wch: 6 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 24 }, { wch: 16 },
-      { wch: 20 }, { wch: 22 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 16 },
-      { wch: 15 }, { wch: 15 }, { wch: 13 }, { wch: 13 }, { wch: 15 }, { wch: 18 },
+      { wch: 20 }, { wch: 22 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 },
+      { wch: 16 }, { wch: 15 }, { wch: 15 }, { wch: 13 }, { wch: 13 }, { wch: 15 }, { wch: 18 },
     ]
-    detalleSheet['!autofilter'] = { ref: detalleSheet['!ref'] || 'A1:R1' }
+    detalleSheet['!autofilter'] = { ref: detalleSheet['!ref'] || 'A1:S1' }
 
-    for (const cell of ['B17', 'B18', 'B19']) {
+    for (const cell of ['B18', 'B19', 'B20']) {
       if (resumenSheet[cell]) resumenSheet[cell].z = '"RD$" #,##0.00'
     }
     for (let row = 2; row <= detalleRows.length + 1; row++) {
-      for (const column of ['M', 'N', 'O', 'P', 'Q', 'R']) {
+      for (const column of ['N', 'O', 'P', 'Q', 'R', 'S']) {
         const cell = detalleSheet[`${column}${row}`]
         if (cell) cell.z = '"RD$" #,##0.00'
       }
@@ -459,7 +484,7 @@ async function generarExcel() {
     XLSX.utils.book_append_sheet(workbook, detalleSheet, 'Órdenes')
 
     const fechaArchivo = new Date().toISOString().slice(0, 10)
-    XLSX.writeFile(workbook, `Reporte_Taller_${fechaArchivo}.xlsx`, { compression: true })
+    XLSX.writeFile(workbook, `Reporte_Taller_${almacenArchivo()}_${fechaArchivo}.xlsx`, { compression: true })
     toast.add({
       severity: 'success',
       summary: 'Excel generado',
@@ -504,7 +529,19 @@ watch(periodo, (val) => {
   if (val !== 'rango') cargarDatos()
 })
 
-onMounted(cargarDatos)
+watch(almacenFiltro, () => {
+  tecnicoFiltro.value = ''
+})
+
+onMounted(async () => {
+  await almacenStore.load()
+  const almacenActivo = almacenStore.almacenes.find((almacen: any) =>
+    (almacenStore.activeUid && String(almacen.uid || '') === String(almacenStore.activeUid)) ||
+    Number(almacen.id || 0) === Number(almacenStore.activeId || 0)
+  )
+  almacenFiltro.value = almacenActivo ? almacenKey(almacenActivo) : TODOS_ALMACENES
+  await cargarDatos()
+})
 </script>
 
 <template>
@@ -523,6 +560,14 @@ onMounted(cargarDatos)
           </div>
         </div>
         <div class="flex items-center gap-2">
+          <Select
+            v-model="almacenFiltro"
+            :options="almacenesOptions"
+            optionLabel="label"
+            optionValue="value"
+            placeholder="Seleccionar almacén"
+            class="w-56"
+          />
           <Select v-model="periodo" :options="[{ label: 'Este Mes', value: 'mes' }, { label: 'Rango', value: 'rango' }, { label: 'Todos', value: 'todo' }]" optionLabel="label" optionValue="value" class="w-28" fluid />
           <div v-if="periodo === 'rango'" key="filtros-rango" class="contents">
             <Calendar v-model="fechaDesde" placeholder="Desde" dateFormat="dd/mm/yy" fluid showIcon />
@@ -543,27 +588,27 @@ onMounted(cargarDatos)
         <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-surface-400">Ordenes</span>
-            <p class="text-2xl font-bold mt-1">{{ resumen.total }}</p>
+            <p class="text-2xl font-bold mt-1">{{ resumenFiltrado.total }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-amber-500 font-semibold">Pendientes</span>
-            <p class="text-2xl font-bold mt-1">{{ resumen.pendientes }}</p>
+            <p class="text-2xl font-bold mt-1">{{ resumenFiltrado.pendientes }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-blue-500 font-semibold">En Proceso</span>
-            <p class="text-2xl font-bold mt-1">{{ resumen.enProgreso }}</p>
+            <p class="text-2xl font-bold mt-1">{{ resumenFiltrado.enProgreso }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-green-500 font-semibold">Completadas</span>
-            <p class="text-2xl font-bold mt-1">{{ resumen.completadas }}</p>
+            <p class="text-2xl font-bold mt-1">{{ resumenFiltrado.completadas }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-surface-400">Ingresos</span>
-            <p class="text-2xl font-bold mt-1 text-primary">{{ $formatMoney(resumen.ingresos) }}</p>
+            <p class="text-2xl font-bold mt-1 text-primary">{{ $formatMoney(resumenFiltrado.ingresos) }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-green-600 font-semibold">Ganancia</span>
-            <p class="text-2xl font-bold mt-1 text-green-600">{{ $formatMoney(resumen.ganancia) }}</p>
+            <p class="text-2xl font-bold mt-1 text-green-600">{{ $formatMoney(resumenFiltrado.ganancia) }}</p>
           </div>
         </div>
 
@@ -572,7 +617,7 @@ onMounted(cargarDatos)
             <div class="flex items-center justify-between mb-3">
               <h3 class="font-semibold text-sm">Ordenes Recientes</h3>
               <div class="flex items-center gap-2">
-                <Select v-model="tecnicoFiltro" :options="['', ...tecnicos]" optionLabel="label" optionValue="value" placeholder="Todos los tecnicos" class="w-40" fluid>
+                <Select v-model="tecnicoFiltro" :options="['', ...tecnicosDisponibles]" optionLabel="label" optionValue="value" placeholder="Todos los tecnicos" class="w-40" fluid>
                   <template #value="{ value }">
                     <span class="text-xs">{{ value || 'Todos' }}</span>
                   </template>
@@ -596,6 +641,9 @@ onMounted(cargarDatos)
               <Column field="nombre" header="Cliente" sortable />
               <Column field="equipo" header="Equipo" sortable />
               <Column field="tecnico" header="Tecnico" sortable style="width: 8rem" />
+              <Column v-if="almacenFiltro === TODOS_ALMACENES" header="Almacén" sortable style="width: 9rem">
+                <template #body="{ data }">{{ nombreAlmacenOrden(data) }}</template>
+              </Column>
               <Column field="total" header="Total" sortable style="width: 7rem">
                 <template #body="{ data }">{{ $formatMoney(data.total) }}</template>
               </Column>
@@ -627,15 +675,15 @@ onMounted(cargarDatos)
               <div class="space-y-2 text-sm">
                 <div class="flex justify-between">
                   <span class="text-surface-500">Ingresos</span>
-                  <span class="font-semibold">{{ $formatMoney(resumen.ingresos) }}</span>
+                  <span class="font-semibold">{{ $formatMoney(resumenFiltrado.ingresos) }}</span>
                 </div>
                 <div class="flex justify-between">
                   <span class="text-surface-500">Costo Piezas</span>
-                  <span class="font-semibold">{{ $formatMoney(resumen.costoPiezas) }}</span>
+                  <span class="font-semibold">{{ $formatMoney(resumenFiltrado.costoPiezas) }}</span>
                 </div>
                 <div class="flex justify-between border-t border-surface-200 dark:border-surface-700 pt-2 mt-2">
                   <span class="text-green-600 font-semibold">Ganancia</span>
-                  <span class="text-green-600 font-bold text-lg">{{ $formatMoney(resumen.ganancia) }}</span>
+                  <span class="text-green-600 font-bold text-lg">{{ $formatMoney(resumenFiltrado.ganancia) }}</span>
                 </div>
               </div>
             </div>

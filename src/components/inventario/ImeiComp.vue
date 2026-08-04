@@ -58,6 +58,7 @@ const imeiActionMenu = ref()
 const imeiAccion = ref<any>(null)
 const busqueda = ref(String(route.query.search || ''))
 const estadoFiltro = ref(route.query.estado === 'todos' ? '' : 'DISPONIBLE')
+const telefonoFiltro = ref<any>(null)
 const verTodosAlmacenes = ref(false)
 const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const dialogAccionVenta = ref(false)
@@ -194,6 +195,18 @@ const telefonosAlmacenActual = computed(() => {
     .sort((a: any, b: any) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'))
 })
 
+const telefonosParaFiltro = computed(() => {
+  const mostrarTodos = puedeVerTodosAlmacenes.value && verTodosAlmacenes.value
+  const almacenUid = String(almacenStore.activeUid || '')
+  const lista = mostrarTodos
+    ? telefonos.value
+    : telefonos.value.filter((telefono: any) => String(telefono.almacen_uid || '') === almacenUid)
+
+  return [...lista].sort((a: any, b: any) =>
+    String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es')
+  )
+})
+
 watch(() => form.value.nombre, async (val) => {
   if (!val || val.length < 10) { imeiDuplicado.value = false; return }
   try {
@@ -220,9 +233,16 @@ const empresaNombre = ref('MI EMPRESA')
 const imeisFiltrados = computed(() => {
   return imeis.value.filter(i => {
     const coincideEstado = !estadoFiltro.value || i.estado === estadoFiltro.value
-    const coincideTexto = matchesSearch(i, busqueda.value, ['nombre', 'color', 'capacidad', 'equipo', 'no_factura', 'comprador'])
+    const coincideTexto = matchesSearch(i, busqueda.value, ['nombre', 'color', 'capacidad', 'equipo', 'telefono_nombre', 'no_factura', 'comprador'])
+    const telefono = telefonoFiltro.value
+    const coincideTelefono = !telefono ||
+      Number(i.id_equi) === Number(telefono.id) ||
+      (!!telefono.uid && String(i.telefono_uid || '') === String(telefono.uid)) ||
+      ((!i.id_equi && !i.telefono_uid) &&
+        String(i.equipo || i.telefono_nombre || '').trim().toLocaleLowerCase() ===
+        String(telefono.nombre || '').trim().toLocaleLowerCase())
 
-    return coincideEstado && coincideTexto
+    return coincideEstado && coincideTexto && coincideTelefono
   })
 })
 
@@ -300,7 +320,12 @@ async function cargarImeis() {
 
 watch(verTodosAlmacenes, () => {
   selectedImeis.value = []
+  telefonoFiltro.value = null
   cargarImeis()
+})
+
+watch(telefonoFiltro, () => {
+  selectedImeis.value = []
 })
 
 function abrirAccionVenta(imei: any) {
@@ -1454,8 +1479,18 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
         <div class="flex items-center gap-2 flex-wrap">
           <IconField>
             <InputIcon class="pi pi-search" />
-            <InputText v-model="busqueda" placeholder="Buscar IMEI..." />
+            <InputText v-model="busqueda" placeholder="Buscar IMEI o teléfono..." />
           </IconField>
+          <Select
+            v-model="telefonoFiltro"
+            :options="telefonosParaFiltro"
+            optionLabel="nombre"
+            placeholder="Filtrar por teléfono"
+            filter
+            filterPlaceholder="Buscar teléfono..."
+            showClear
+            class="w-64"
+          />
           <Select
             v-model="estadoFiltro"
             :options="estadosFiltro"

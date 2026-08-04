@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { getSystemCurrencyCode, getSystemLocale } from '@/i18n/localeProfiles'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
@@ -13,6 +13,7 @@ import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Fieldset from 'primevue/fieldset'
 import Menu from 'primevue/menu'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import TicketCuentaCobrarPrint from './TicketCuentaCobrarPrint.vue'
@@ -20,6 +21,7 @@ import { matchesSearch } from '@/composables/useSearch'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import Swal from 'sweetalert2'
 import { resolvePrintableImage } from '@/services/printImageService'
+import { useBulkWarehouseTransfer } from '@/composables/useBulkWarehouseTransfer'
 
 const toast = useToast()
 const router = useRouter()
@@ -28,8 +30,19 @@ const cuentas = ref<any[]>([])
 const loading = ref(false)
 const busqueda = ref('')
 const filtroEstado = ref('')
+const verTodosAlmacenes = ref(false)
 
 const selectedCuentas = ref<any[]>([])
+
+const {
+  dialogMoverAlmacen, almacenDestino, almacenesDestino, moviendoAlmacen,
+  abrirMoverAlmacen, aplicarMoverAlmacen,
+} = useBulkWarehouseTransfer({
+  table: 'cuentas_cobrar', entity: 'cuentas_cobrar', label: 'cuenta por cobrar',
+  selection: selectedCuentas, reload: cargarCuentas,
+  reference: (item: any) => item.no_factura || String(item.id || ''),
+  afterUpdate: moverFacturaRelacionada,
+})
 const deleteDialogVisible = ref(false)
 const deleteOtpEnviado = ref(false)
 const deleteOtpLoading = ref(false)
@@ -69,12 +82,31 @@ const actionMenuItems = ref([
   { label: 'Eliminar', icon: 'pi pi-trash', command: () => confirmarBorrar(cuentaAccion.value) },
 ])
 
+function perteneceMismoAlmacen(item: any, cuenta: any): boolean {
+  if (cuenta?.almacen_uid && item?.almacen_uid) return String(item.almacen_uid) === String(cuenta.almacen_uid)
+  return Number(item?.almacen_id || 0) === Number(cuenta?.almacen_id || 0)
+}
+
+async function moverFacturaRelacionada(cuenta: any, destino: { id: number; uid: string }) {
+  const res = await window.db.getAll('facturas')
+  if (!res.success) throw new Error(res.error || 'No se pudo localizar la factura relacionada')
+  const factura = (res.data || []).find((item: any) =>
+    String(item.no_factura || '') === String(cuenta.no_factura || '') && perteneceMismoAlmacen(item, cuenta)
+  )
+  if (!factura?.id) return
+  const actualizado = await window.db.update('facturas', factura.id, {
+    almacen_id: destino.id,
+    almacen_uid: destino.uid,
+  })
+  if (!actualizado.success) throw new Error(actualizado.error || `No se pudo mover la factura ${cuenta.no_factura || ''}`)
+}
+
 async function editarCuenta(cuenta: any) {
   if (!cuenta) return
   try {
     const res = await window.db.getAll('facturas')
     const factura = res.success
-      ? (res.data || []).find((item: any) => String(item.no_factura || '') === String(cuenta.no_factura || ''))
+      ? (res.data || []).find((item: any) => String(item.no_factura || '') === String(cuenta.no_factura || '') && perteneceMismoAlmacen(item, cuenta))
       : null
     if (!factura?.id) {
       toast.add({ severity: 'warn', summary: 'Factura no encontrada', detail: 'No se encontro la factura relacionada con esta cuenta', life: 3500 })
@@ -222,7 +254,7 @@ async function generarPdfEstadoCuenta(cuenta: any) {
     try {
       const facturasRes = await window.db.getAll('facturas')
       const factura = facturasRes.success
-        ? (facturasRes.data || []).find((item: any) => String(item.no_factura || '') === String(cuenta.no_factura || ''))
+        ? (facturasRes.data || []).find((item: any) => String(item.no_factura || '') === String(cuenta.no_factura || '') && perteneceMismoAlmacen(item, cuenta))
         : null
       const detalle = typeof factura?.productos === 'string' ? JSON.parse(factura.productos || '[]') : factura?.productos
       productos = Array.isArray(detalle) ? detalle : []
@@ -282,10 +314,20 @@ async function cargarCuentas() {
   loading.value = true
   try {
     const res = await window.db.getAll('cuentas_cobrar')
-    if (res.success) cuentas.value = filterByAlmacen(res.data || [])
+    if (res.success) {
+      cuentas.value = verTodosAlmacenes.value
+        ? (res.data || [])
+        : filterByAlmacen(res.data || [])
+    }
   } catch (_) {}
   loading.value = false
 }
+
+watch(verTodosAlmacenes, () => {
+  selectedCuentas.value = []
+  cuentaSelected.value = null
+  cargarCuentas()
+})
 
 function confirmarBorrar(cuenta: any) {
   cuentaParaEliminar.value = cuenta
@@ -401,7 +443,7 @@ async function abrirPago(cuenta: any) {
   try {
     const res = await window.db.getAll('facturas')
     if (res.success && res.data) {
-      const factura = res.data.find((f: any) => f.no_factura === cuenta.no_factura)
+      const factura = res.data.find((f: any) => f.no_factura === cuenta.no_factura && perteneceMismoAlmacen(f, cuenta))
       if (factura) {
         facturaRelacionada.value = factura
         try {
@@ -427,7 +469,8 @@ async function registrarPago() {
   }
   guardando.value = true
   try {
-    const turnoRes = await window.electron.invoke('caja:getTurnoActivo', almacenStore.activeUid || '') as any
+    const cuentaAlmacenUid = cuentaSelected.value.almacen_uid || almacenStore.activeUid || ''
+    const turnoRes = await window.electron.invoke('caja:getTurnoActivo', cuentaAlmacenUid) as any
     if (!turnoRes?.success || !turnoRes.data?.id) {
       toast.add({ severity: 'warn', summary: 'Caja cerrada', detail: 'Abre un turno de caja antes de registrar el pago', life: 3500 })
       return
@@ -447,7 +490,7 @@ async function registrarPago() {
       hora: `${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`,
       metodo: metodoPago.value,
       turno_id: Number(turnoRes.data.id),
-      almacen_uid: almacenStore.activeUid || cuentaSelected.value.almacen_uid || '',
+      almacen_uid: cuentaAlmacenUid,
       created_at: ahora.toISOString(),
     })
 
@@ -598,7 +641,10 @@ async function cambiarEstado(cuenta: any, estado: string) {
   toast.add({ severity: 'success', summary: 'Estado actualizado', detail: estado, life: 2000 })
 }
 
-onMounted(cargarCuentas)
+onMounted(async () => {
+  await almacenStore.load()
+  await cargarCuentas()
+})
 </script>
 
 <template>
@@ -616,6 +662,11 @@ onMounted(cargarCuentas)
           <Select v-model="filtroEstado" :options="estados" optionLabel="label" optionValue="value" placeholder="Estado" class="w-32" fluid />
         </div>
         <div class="flex items-center gap-2">
+          <label class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
+          <Button v-if="selectedCuentas.length" :label="`Cambiar almacén (${selectedCuentas.length})`" icon="pi pi-warehouse" severity="success" @click="abrirMoverAlmacen" />
           <Button
             v-if="selectedCuentas.length"
             :label="`Eliminar (${selectedCuentas.length})`"
@@ -672,6 +723,18 @@ onMounted(cargarCuentas)
         </template>
       </DataTable>
     </Fieldset>
+
+    <Dialog v-model:visible="dialogMoverAlmacen" header="Cambiar almacén" modal :style="{ width: '28rem' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm">Mover <strong>{{ selectedCuentas.length }}</strong> cuenta(s) por cobrar y sus facturas relacionadas:</p>
+        <Select v-model="almacenDestino" :options="almacenesDestino" optionLabel="nombre" placeholder="Seleccionar almacén destino..." fluid />
+        <p v-if="almacenesDestino.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacén disponible.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacen" @click="dialogMoverAlmacen = false" />
+        <Button label="Mover cuentas" icon="pi pi-warehouse" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="aplicarMoverAlmacen" />
+      </template>
+    </Dialog>
 
     <Dialog v-model:visible="dialogPago" header="Registrar Pago" modal :style="{ width: '50rem' }">
       <div v-if="cuentaSelected" class="space-y-4 pt-2">

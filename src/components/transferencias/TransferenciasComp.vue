@@ -5,20 +5,38 @@
         <h1 class="text-2xl font-bold">Transferencias entre Almacenes</h1>
         <p class="text-sm text-surface-500">Mueve inventario de un almacen a otro</p>
       </div>
-      <button @click="abrirNueva" class="flex items-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-semibold transition-all hover:opacity-90" :style="{ background: 'var(--p-primary-500)' }">
-        <i class="pi pi-plus"></i>Nueva Transferencia
-      </button>
+      <div class="flex items-center gap-2 flex-wrap">
+        <Select
+          v-model="almacenFiltro"
+          :options="almacenesFiltroOptions"
+          optionLabel="label"
+          optionValue="value"
+          placeholder="Filtrar por almacén"
+          class="w-56"
+        />
+        <button @click="abrirNueva" class="flex items-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-semibold transition-all hover:opacity-90" :style="{ background: 'var(--p-primary-500)' }">
+          <i class="pi pi-plus"></i>Nueva Transferencia
+        </button>
+      </div>
     </div>
 
     <div v-if="loading" class="text-center py-16 text-surface-500"><i class="pi pi-spin pi-spinner text-2xl mb-2 block"></i>Cargando...</div>
 
     <template v-else>
-      <DataTable :value="transferencias" stripedRows paginator :rows="15" dataKey="id" responsiveLayout="scroll" sortField="created_at" :sortOrder="-1">
+      <DataTable :value="transferenciasFiltradas" stripedRows paginator :rows="15" dataKey="id" responsiveLayout="scroll" sortField="created_at" :sortOrder="-1">
         <Column field="no_transferencia" header="Transf." sortable style="width:8rem">
           <template #body="{ data }"><span class="font-semibold">{{ data.no_transferencia }}</span></template>
         </Column>
         <Column field="origen_nombre" header="Origen" sortable />
         <Column field="destino_nombre" header="Destino" sortable />
+        <Column v-if="almacenFiltro !== TODOS_ALMACENES" header="Movimiento" style="width:7rem">
+          <template #body="{ data }">
+            <span class="inline-flex items-center gap-1 text-xs font-semibold" :class="direccionTransferencia(data) === 'SALIDA' ? 'text-orange-600' : 'text-green-600'">
+              <i :class="direccionTransferencia(data) === 'SALIDA' ? 'pi pi-arrow-up-right' : 'pi pi-arrow-down-left'"></i>
+              {{ direccionTransferencia(data) }}
+            </span>
+          </template>
+        </Column>
         <Column field="estado" header="Estado" sortable style="width:8rem">
           <template #body="{ data }">
             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
@@ -127,6 +145,8 @@ const transfSeleccionada = ref<any>(null)
 const tablaOrigen = ref('')
 const busquedaProd = ref('')
 const productosOrigen = ref<any[]>([])
+const TODOS_ALMACENES = '__TODOS__'
+const almacenFiltro = ref('')
 
 const tablasInventario = computed(() => [
   { label: systemMode.productLabel, value: 'accesorios' },
@@ -137,6 +157,49 @@ const tablasInventario = computed(() => [
 const almacenesDestino = computed(() =>
   almacenesDisponibles.value.filter((a: any) => a.id !== form.value.origen_id)
 )
+
+function almacenKey(almacen: any): string {
+  return almacen?.uid ? `uid:${almacen.uid}` : `id:${Number(almacen?.id || 0)}`
+}
+
+const almacenesFiltroOptions = computed(() => [
+  { label: 'Todos los almacenes', value: TODOS_ALMACENES },
+  ...almacenesDisponibles.value.map((almacen: any) => ({
+    label: almacen.nombre || `Almacén ${almacen.id}`,
+    value: almacenKey(almacen),
+  })),
+])
+
+const almacenSeleccionado = computed(() =>
+  almacenesDisponibles.value.find((almacen: any) => almacenKey(almacen) === almacenFiltro.value) || null
+)
+
+function transferenciaPerteneceAlmacen(transferencia: any, almacen: any): boolean {
+  if (!almacen) return false
+  const coincideOrigen = almacen.uid && transferencia.origen_uid
+    ? String(transferencia.origen_uid) === String(almacen.uid)
+    : Number(transferencia.origen_id || 0) === Number(almacen.id || 0)
+  const coincideDestino = almacen.uid && transferencia.destino_uid
+    ? String(transferencia.destino_uid) === String(almacen.uid)
+    : Number(transferencia.destino_id || 0) === Number(almacen.id || 0)
+  return coincideOrigen || coincideDestino
+}
+
+const transferenciasFiltradas = computed(() => {
+  if (almacenFiltro.value === TODOS_ALMACENES) return transferencias.value
+  return transferencias.value.filter((transferencia: any) =>
+    transferenciaPerteneceAlmacen(transferencia, almacenSeleccionado.value)
+  )
+})
+
+function direccionTransferencia(transferencia: any): 'ENTRADA' | 'SALIDA' {
+  const almacen = almacenSeleccionado.value
+  if (!almacen) return 'SALIDA'
+  const esOrigen = almacen.uid && transferencia.origen_uid
+    ? String(transferencia.origen_uid) === String(almacen.uid)
+    : Number(transferencia.origen_id || 0) === Number(almacen.id || 0)
+  return esOrigen ? 'SALIDA' : 'ENTRADA'
+}
 
 const productosParseados = computed(() => {
   if (!transfSeleccionada.value?.productos) return []
@@ -156,6 +219,13 @@ async function cargar() {
     ])
     if (resTrans.success) transferencias.value = resTrans.data || []
     almacenesDisponibles.value = almacenStore.almacenes
+    if (!almacenFiltro.value) {
+      const activo = almacenesDisponibles.value.find((almacen: any) =>
+        (almacenStore.activeUid && String(almacen.uid || '') === String(almacenStore.activeUid)) ||
+        Number(almacen.id || 0) === Number(almacenStore.activeId || 0)
+      )
+      almacenFiltro.value = activo ? almacenKey(activo) : TODOS_ALMACENES
+    }
   } catch {} finally { loading.value = false }
 }
 
@@ -176,7 +246,11 @@ async function cargarProductosOrigen() {
 }
 
 function abrirNueva() {
-  form.value = { origen_id: null, destino_id: null }
+  const origen = almacenSeleccionado.value || almacenesDisponibles.value.find((almacen: any) =>
+    (almacenStore.activeUid && String(almacen.uid || '') === String(almacenStore.activeUid)) ||
+    Number(almacen.id || 0) === Number(almacenStore.activeId || 0)
+  )
+  form.value = { origen_id: origen?.id || null, destino_id: null }
   tablaOrigen.value = ''
   busquedaProd.value = ''
   productosOrigen.value = []

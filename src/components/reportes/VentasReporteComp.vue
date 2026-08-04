@@ -10,9 +10,13 @@ import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
+import { useAlmacenStore } from '@/stores/almacen.store'
 
 const toast = useToast()
 const fiscal = getFiscalLabels()
+const almacenStore = useAlmacenStore()
+const TODOS_ALMACENES = '__TODOS__'
+const almacenFiltro = ref(TODOS_ALMACENES)
 const facturas = ref<any[]>([])
 const loading = ref(false)
 const busqueda = ref('')
@@ -28,6 +32,40 @@ const tipos = [
   { label: 'Consumo', value: 'FACTURA_CONSUMO' },
   { label: 'Nota Credito', value: 'NOTA_CREDITO' },
 ]
+
+function almacenKey(almacen: any): string {
+  return almacen?.uid ? `uid:${almacen.uid}` : `id:${Number(almacen?.id || 0)}`
+}
+
+const almacenesOptions = computed(() => [
+  { label: 'Todos los almacenes', value: TODOS_ALMACENES },
+  ...almacenStore.almacenes.map((almacen: any) => ({
+    label: almacen.nombre || `Almacén ${almacen.id}`,
+    value: almacenKey(almacen),
+  })),
+])
+
+const almacenSeleccionado = computed(() =>
+  almacenStore.almacenes.find((almacen: any) => almacenKey(almacen) === almacenFiltro.value) || null
+)
+
+const almacenReporteNombre = computed(() => almacenSeleccionado.value?.nombre || 'Todos los almacenes')
+
+function coincideAlmacen(registro: any): boolean {
+  if (almacenFiltro.value === TODOS_ALMACENES) return true
+  const almacen = almacenSeleccionado.value
+  if (!almacen) return false
+  if (almacen.uid && registro.almacen_uid) return String(registro.almacen_uid) === String(almacen.uid)
+  return Number(registro.almacen_id || 0) === Number(almacen.id || 0)
+}
+
+function nombreAlmacen(registro: any): string {
+  const almacen = almacenStore.almacenes.find((item: any) =>
+    (registro.almacen_uid && item.uid && String(item.uid) === String(registro.almacen_uid)) ||
+    Number(item.id || 0) === Number(registro.almacen_id || 0)
+  )
+  return almacen?.nombre || 'Sin almacén'
+}
 
 const facturasFiltradas = computed(() => {
   const q = busqueda.value.toLowerCase().trim()
@@ -75,6 +113,7 @@ async function cargar() {
     if (res.success) {
       facturas.value = (res.data || []).filter((f: any) =>
         f.fecha_emision >= inicio && f.fecha_emision <= fin &&
+        coincideAlmacen(f) &&
         (tipoFiltro.value === 'TODAS'
           ? f.tipo_factura !== 'FACTURA_COMPRA' && f.tipo_factura !== 'COTIZACION'
           : f.tipo_factura === tipoFiltro.value)
@@ -92,21 +131,31 @@ function formatCurrency(n: number): string {
 }
 
 function exportarCSV() {
-  let csv = `Factura,Fecha,Cliente,${fiscal.fiscalDocumentLabel},Metodo,Subtotal,Descuento,${fiscal.shortName},Total,Ganancia\n`
+  const mostrarAlmacen = almacenFiltro.value === TODOS_ALMACENES
+  let csv = `${mostrarAlmacen ? 'Almacen,' : ''}Factura,Fecha,Cliente,${fiscal.fiscalDocumentLabel},Metodo,Subtotal,Descuento,${fiscal.shortName},Total,Ganancia\n`
   for (const f of facturasFiltradas.value) {
-    csv += `"${f.no_factura || ''}","${f.fecha_emision || ''}","${f.nombre_cliente || ''}","${f.ncf || ''}","${f.metodo_pago || ''}","${Number(f.subtotal) || 0}","${Number(f.descuento) || 0}","${Number(f.impuesto) || 0}","${Number(f.total) || 0}","${Number(f.ganancia) || 0}"\n`
+    csv += `${mostrarAlmacen ? `"${nombreAlmacen(f)}",` : ''}"${f.no_factura || ''}","${f.fecha_emision || ''}","${f.nombre_cliente || ''}","${f.ncf || ''}","${f.metodo_pago || ''}","${Number(f.subtotal) || 0}","${Number(f.descuento) || 0}","${Number(f.impuesto) || 0}","${Number(f.total) || 0}","${Number(f.ganancia) || 0}"\n`
   }
   const blob = new Blob([csv], { type: 'text/csv' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `ventas_${year.value}_${String(mes.value).padStart(2, '0')}.csv`
+  const almacenArchivo = almacenReporteNombre.value.replace(/[^a-z0-9]+/gi, '_')
+  a.download = `ventas_${almacenArchivo}_${year.value}_${String(mes.value).padStart(2, '0')}.csv`
   a.click()
   URL.revokeObjectURL(url)
   toast.add({ severity: 'success', summary: 'Exportado', detail: 'Archivo CSV descargado', life: 3000 })
 }
 
-onMounted(cargar)
+onMounted(async () => {
+  await almacenStore.load()
+  const almacenActivo = almacenStore.almacenes.find((almacen: any) =>
+    (almacenStore.activeUid && String(almacen.uid || '') === String(almacenStore.activeUid)) ||
+    Number(almacen.id || 0) === Number(almacenStore.activeId || 0)
+  )
+  almacenFiltro.value = almacenActivo ? almacenKey(almacenActivo) : TODOS_ALMACENES
+  await cargar()
+})
 </script>
 
 <template>
@@ -115,12 +164,25 @@ onMounted(cargar)
     <div class="flex items-center gap-3 mb-4 flex-wrap">
       <Select v-model="mes" :options="meses" optionLabel="label" optionValue="value" class="w-40" @change="cargar" />
       <Select v-model="year" :options="years" optionLabel="label" optionValue="value" class="w-28" @change="cargar" />
+      <Select
+        v-model="almacenFiltro"
+        :options="almacenesOptions"
+        optionLabel="label"
+        optionValue="value"
+        placeholder="Seleccionar almacén"
+        class="w-56"
+        @change="cargar"
+      />
       <Select v-model="tipoFiltro" :options="tipos" optionLabel="label" optionValue="value" class="w-40" @change="cargar" />
       <IconField class="w-64">
         <InputIcon class="pi pi-search" />
         <InputText v-model="busqueda" placeholder="Buscar..." fluid />
       </IconField>
       <Button label="Exportar CSV" icon="pi pi-download" severity="info" @click="exportarCSV" />
+    </div>
+
+    <div class="mb-4 text-sm text-surface-500">
+      Reporte de: <span class="font-semibold text-surface-700 dark:text-surface-200">{{ almacenReporteNombre }}</span>
     </div>
 
     <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
@@ -159,6 +221,9 @@ onMounted(cargar)
       class="!text-xs"
       scrollable
     >
+      <Column v-if="almacenFiltro === TODOS_ALMACENES" header="Almacén" sortable style="width: 10rem">
+        <template #body="{ data }">{{ nombreAlmacen(data) }}</template>
+      </Column>
       <Column field="no_factura" header="Factura" sortable style="width: 9rem" />
       <Column field="fecha_emision" header="Fecha" sortable style="width: 7rem" />
       <Column field="nombre_cliente" header="Cliente" sortable />

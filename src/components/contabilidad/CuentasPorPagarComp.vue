@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { getSystemCurrencyCode, getSystemLocale } from '@/i18n/localeProfiles'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
@@ -10,19 +10,32 @@ import Tag from 'primevue/tag'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Fieldset from 'primevue/fieldset'
+import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import Swal from 'sweetalert2'
+import { useBulkWarehouseTransfer } from '@/composables/useBulkWarehouseTransfer'
 
 const toast = useToast()
-const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
+const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
 const cuentas = ref<any[]>([])
+const selectedCuentas = ref<any[]>([])
 const proveedores = ref<any[]>([])
 const loading = ref(false)
 const busqueda = ref('')
 const filtroEstado = ref('')
 const viewMode = ref<'table' | 'cards'>('cards')
+const verTodosAlmacenes = ref(false)
+
+const {
+  dialogMoverAlmacen, almacenDestino, almacenesDestino, moviendoAlmacen,
+  abrirMoverAlmacen, aplicarMoverAlmacen,
+} = useBulkWarehouseTransfer({
+  table: 'cuentas_pagar', entity: 'cuentas_pagar', label: 'cuenta por pagar',
+  selection: selectedCuentas, reload: cargarCuentas,
+  reference: (item: any) => item.no_factura || String(item.id || ''),
+})
 
 const dialogPago = ref(false)
 const cuentaSelected = ref<any>(null)
@@ -134,9 +147,29 @@ async function cargarCuentas() {
   loading.value = true
   try {
     const res = await window.db.getAll('cuentas_pagar')
-    if (res.success) cuentas.value = filterByAlmacen(res.data || [])
+    if (res.success) {
+      cuentas.value = verTodosAlmacenes.value
+        ? (res.data || [])
+        : filterByAlmacen(res.data || [])
+    }
   } catch (_) {}
   loading.value = false
+}
+
+watch(verTodosAlmacenes, () => {
+  selectedCuentas.value = []
+  cuentaSelected.value = null
+  cargarCuentas()
+})
+
+function estaCuentaSeleccionada(cuenta: any): boolean {
+  return selectedCuentas.value.some((item: any) => item.id === cuenta.id)
+}
+
+function toggleSeleccionCuenta(cuenta: any) {
+  selectedCuentas.value = estaCuentaSeleccionada(cuenta)
+    ? selectedCuentas.value.filter((item: any) => item.id !== cuenta.id)
+    : [...selectedCuentas.value, cuenta]
 }
 
 async function cargarProveedores() {
@@ -191,6 +224,7 @@ async function registrarPago() {
       cantidad: monto,
       fecha: now.toLocaleDateString(getSystemLocale()),
       hora: now.toLocaleTimeString(getSystemLocale(), { hour: '2-digit', minute: '2-digit' }),
+      almacen_uid: cuentaSelected.value.almacen_uid || almacenStore.activeUid || '',
     })
 
     await window.db.update('cuentas_pagar', cuentaSelected.value.id, {
@@ -303,6 +337,7 @@ async function guardarNueva() {
 }
 
 onMounted(async () => {
+  await almacenStore.load()
   await Promise.all([cargarCuentas(), cargarProveedores()])
 })
 </script>
@@ -321,6 +356,17 @@ onMounted(async () => {
           <Select v-model="filtroEstado" :options="estados" optionLabel="label" optionValue="value" placeholder="Estado" class="w-32" fluid />
         </div>
         <div class="flex items-center gap-2">
+          <label class="flex items-center gap-2 text-sm text-surface-600 dark:text-surface-300 cursor-pointer">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            <span>Todos los almacenes</span>
+          </label>
+          <Button
+            v-if="selectedCuentas.length"
+            :label="`Cambiar almacén (${selectedCuentas.length})`"
+            icon="pi pi-warehouse"
+            severity="success"
+            @click="abrirMoverAlmacen"
+          />
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
             <button
               class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"
@@ -348,6 +394,7 @@ onMounted(async () => {
 
       <DataTable
         v-if="viewMode === 'table'"
+        v-model:selection="selectedCuentas"
         :value="cuentasFiltradas"
         :loading="loading"
         stripedRows
@@ -358,6 +405,7 @@ onMounted(async () => {
         responsiveLayout="scroll"
         @row-click="abrirPago($event.data)"
       >
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column field="no_factura" header="Factura" sortable style="width: 8rem" />
         <Column field="nombre_proveedor" header="Proveedor" sortable />
         <Column field="total" header="Total" sortable style="width: 8rem">
@@ -396,7 +444,18 @@ onMounted(async () => {
             @click="abrirPago(cuenta)"
           >
             <div class="flex items-center justify-between">
-              <span class="text-xs font-mono text-surface-400">#{{ cuenta.id }}</span>
+              <div class="flex items-center gap-1">
+                <Button
+                  :icon="estaCuentaSeleccionada(cuenta) ? 'pi pi-check-square' : 'pi pi-square'"
+                  :severity="estaCuentaSeleccionada(cuenta) ? 'success' : 'secondary'"
+                  text
+                  rounded
+                  size="small"
+                  @click.stop="toggleSeleccionCuenta(cuenta)"
+                  v-tooltip="estaCuentaSeleccionada(cuenta) ? 'Quitar de la selección' : 'Seleccionar cuenta'"
+                />
+                <span class="text-xs font-mono text-surface-400">#{{ cuenta.id }}</span>
+              </div>
               <Tag :value="cuenta.estado" :severity="getEstadoSeverity(cuenta.estado)" />
             </div>
 
@@ -431,6 +490,35 @@ onMounted(async () => {
         </div>
       </div>
     </Fieldset>
+
+    <Dialog v-model:visible="dialogMoverAlmacen" header="Cambiar almacén" modal :style="{ width: '28rem' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm text-surface-600 dark:text-surface-300">
+          Se moverán {{ selectedCuentas.length }} cuenta(s) por pagar al almacén seleccionado.
+        </p>
+        <Select
+          v-model="almacenDestino"
+          :options="almacenesDestino"
+          optionLabel="nombre"
+          placeholder="Seleccionar almacén destino"
+          fluid
+        />
+        <p v-if="almacenesDestino.length === 0" class="text-sm text-orange-600">
+          No hay otro almacén disponible como destino.
+        </p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="dialogMoverAlmacen = false" />
+        <Button
+          label="Cambiar almacén"
+          icon="pi pi-warehouse"
+          severity="success"
+          :loading="moviendoAlmacen"
+          :disabled="!almacenDestino"
+          @click="aplicarMoverAlmacen"
+        />
+      </template>
+    </Dialog>
 
     <Dialog v-model:visible="dialogPago" header="Registrar Pago" modal :style="{ width: '36rem' }">
       <div v-if="cuentaSelected" class="space-y-4 pt-2">

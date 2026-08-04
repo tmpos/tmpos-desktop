@@ -6,6 +6,7 @@ import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import InputText from 'primevue/inputtext'
 import Calendar from 'primevue/calendar'
+import Select from 'primevue/select'
 import Fieldset from 'primevue/fieldset'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
@@ -19,6 +20,42 @@ Chart.register(...registerables)
 
 const toast = useToast()
 const almacenStore = useAlmacenStore()
+const TODOS_ALMACENES = '__TODOS__'
+const almacenFiltro = ref(TODOS_ALMACENES)
+
+function almacenKey(almacen: any): string {
+  return almacen?.uid ? `uid:${almacen.uid}` : `id:${Number(almacen?.id || 0)}`
+}
+
+const almacenesOptions = computed(() => [
+  { label: 'Todos los almacenes', value: TODOS_ALMACENES },
+  ...almacenStore.almacenes.map((almacen: any) => ({
+    label: almacen.nombre || `Almacén ${almacen.id}`,
+    value: almacenKey(almacen),
+  })),
+])
+
+const almacenSeleccionado = computed(() =>
+  almacenStore.almacenes.find((almacen: any) => almacenKey(almacen) === almacenFiltro.value) || null
+)
+
+const almacenReporteNombre = computed(() => almacenSeleccionado.value?.nombre || 'Todos los almacenes')
+
+function coincideAlmacen(registro: any): boolean {
+  if (almacenFiltro.value === TODOS_ALMACENES) return true
+  const almacen = almacenSeleccionado.value
+  if (!almacen) return false
+  if (almacen.uid && registro.almacen_uid) return String(registro.almacen_uid) === String(almacen.uid)
+  return Number(registro.almacen_id || 0) === Number(almacen.id || 0)
+}
+
+function nombreAlmacen(registro: any): string {
+  const almacen = almacenStore.almacenes.find((item: any) =>
+    (registro.almacen_uid && item.uid && String(item.uid) === String(registro.almacen_uid)) ||
+    Number(item.id || 0) === Number(registro.almacen_id || 0)
+  )
+  return almacen?.nombre || 'Sin almacén'
+}
 
 const facturas = ref<any[]>([])
 const taller = ref<any[]>([])
@@ -343,6 +380,8 @@ const productosVendidos = computed(() => {
         precio: toNumber(p.precio) || toNumber(p.precio_venta) || 0,
         costo: toNumber(p.costo) || 0,
         total: toNumber(p.total) || ((toNumber(p.precio) || toNumber(p.precio_venta) || 0) * toNumber(p.cantidad)),
+        almacen_id: f.almacen_id || 0,
+        almacen_uid: f.almacen_uid || '',
       })
     }
   }
@@ -497,7 +536,7 @@ const topClientes = computed(() => {
 
 async function cargarDatos() {
   if (rangoActivo.value === 'personalizado' && rangoPersonalizado.value.length !== 2) return
-  if (!almacenStore.activeUid) await almacenStore.load()
+  if (!almacenStore.almacenes.length) await almacenStore.load()
 
   const rango = getRango(rangoActivo.value)
   if (!rango.inicio || !rango.fin) return
@@ -520,15 +559,14 @@ async function cargarDatos() {
     }
     clientesMap.value = cm
 
-    const almacenUid = almacenStore.activeUid || ''
     if (resFact.success) {
       facturas.value = (resFact.data || []).filter((f: any) =>
         fechaEfectivaFactura(f) >= rango.inicio && fechaEfectivaFactura(f) <= rango.fin &&
-        Boolean(almacenUid) && String(f.almacen_uid || '') === almacenUid && esFacturaVenta(f)
+        coincideAlmacen(f) && esFacturaVenta(f)
       )
     }
     if (resTaller.success) {
-      tallerTodas.value = resTaller.data || []
+      tallerTodas.value = (resTaller.data || []).filter(coincideAlmacen)
       taller.value = tallerTodas.value.filter((t: any) =>
         getTallerFecha(t) >= rango.inicio && getTallerFecha(t) <= rango.fin
       )
@@ -536,12 +574,12 @@ async function cargarDatos() {
     if (resGastos.success) {
       gastos.value = (resGastos.data || []).filter((g: any) =>
         getGastoFecha(g) >= rango.inicio && getGastoFecha(g) <= rango.fin &&
-        Boolean(almacenUid) && String(g.almacen_uid || '') === almacenUid
+        coincideAlmacen(g)
       )
     }
     if (resCuentas.success) {
       abonosCuentas.value = (resCuentas.data || [])
-        .filter((cuenta: any) => Boolean(almacenUid) && String(cuenta.almacen_uid || '') === almacenUid)
+        .filter(coincideAlmacen)
         .flatMap((cuenta: any) => parsePagosCuenta(cuenta).map((pago: any, index: number) => ({
           id: `${cuenta.id}-${index}`,
           no_factura: cuenta.no_factura || '',
@@ -550,6 +588,8 @@ async function cargarDatos() {
           hora: pago.hora || '',
           metodo: String(pago.metodo || 'EFECTIVO').toUpperCase(),
           monto: toNumber(pago.monto ?? pago.cantidad),
+          almacen_id: cuenta.almacen_id || 0,
+          almacen_uid: cuenta.almacen_uid || '',
         })))
         .filter((pago: any) => pago.fecha >= rango.inicio && pago.fecha <= rango.fin)
         .sort((a: any, b: any) => `${b.fecha} ${b.hora}`.localeCompare(`${a.fecha} ${a.hora}`))
@@ -795,7 +835,8 @@ async function generarReportePDF() {
   })
 
   const rango = getRango(rangoActivo.value)
-  const filename = `Reporte_General_${rango.inicio}_al_${rango.fin}.pdf`
+  const almacenArchivo = almacenReporteNombre.value.replace(/[^a-z0-9]+/gi, '_')
+  const filename = `Reporte_General_${almacenArchivo}_${rango.inicio}_al_${rango.fin}.pdf`
 
   const doc = new jsPDF('landscape', 'mm', 'letter')
   const pageW = doc.internal.pageSize.getWidth()
@@ -822,7 +863,7 @@ async function generarReportePDF() {
   doc.setFontSize(9)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(100, 116, 139)
-  doc.text(`${rango.inicio} al ${rango.fin}`, margin, y + 12)
+  doc.text(`${almacenReporteNombre.value} · ${rango.inicio} al ${rango.fin}`, margin, y + 12)
   y += 18
 
   // Summary cards
@@ -888,10 +929,12 @@ async function generarReportePDF() {
 
   // Table
   const cols = facturasFiltradas.value.length
+  const mostrarAlmacen = almacenFiltro.value === TODOS_ALMACENES
   autoTable(doc, {
     startY: y,
-    head: [['Factura', 'Fecha', 'Cliente', 'Pago', 'Costo', 'Total', 'Ganancia']],
+    head: [[...(mostrarAlmacen ? ['Almacén'] : []), 'Factura', 'Fecha', 'Cliente', 'Pago', 'Costo', 'Total', 'Ganancia']],
     body: facturasFiltradas.value.slice(0, cols).map((f: any) => [
+      ...(mostrarAlmacen ? [nombreAlmacen(f)] : []),
       f.no_factura || '',
       fechaEfectivaFactura(f),
       f.nombre_cliente || '',
@@ -908,8 +951,9 @@ async function generarReportePDF() {
 
   autoTable(doc, {
     startY: (doc as any).lastAutoTable.finalY + 8,
-    head: [['Abonos CxC', 'Fecha', 'Cliente', 'Metodo', 'Monto']],
+    head: [[...(mostrarAlmacen ? ['Almacén'] : []), 'Abonos CxC', 'Fecha', 'Cliente', 'Metodo', 'Monto']],
     body: abonosCuentas.value.map((pago: any) => [
+      ...(mostrarAlmacen ? [nombreAlmacen(pago)] : []),
       pago.no_factura || '',
       `${pago.fecha || ''} ${pago.hora || ''}`,
       pago.cliente || '',
@@ -924,8 +968,9 @@ async function generarReportePDF() {
 
   autoTable(doc, {
     startY: (doc as any).lastAutoTable.finalY + 8,
-    head: [['Factura', 'Fecha', 'Cliente', 'Producto', 'Cant.', 'Precio', 'Costo', 'Total']],
+    head: [[...(mostrarAlmacen ? ['Almacén'] : []), 'Factura', 'Fecha', 'Cliente', 'Producto', 'Cant.', 'Precio', 'Costo', 'Total']],
     body: productosVendidos.value.slice(0, 500).map((p: any) => [
+      ...(mostrarAlmacen ? [nombreAlmacen(p)] : []),
       p.no_factura || '',
       p.fecha || '',
       p.cliente || '',
@@ -958,8 +1003,9 @@ async function generarReportePDF() {
 
   autoTable(doc, {
     startY: (doc as any).lastAutoTable.finalY + 8,
-    head: [['Orden', 'Fecha', 'Cliente', 'Tecnico', 'Estado', 'Total', 'Ganancia']],
+    head: [[...(mostrarAlmacen ? ['Almacén'] : []), 'Orden', 'Fecha', 'Cliente', 'Tecnico', 'Estado', 'Total', 'Ganancia']],
     body: tallerFiltrado.value.map((t: any) => [
+      ...(mostrarAlmacen ? [nombreAlmacen(t)] : []),
       t.no_orden || t.no_factura || '',
       getTallerFecha(t),
       t.nombre || t.nombre_cliente || '',
@@ -1001,7 +1047,15 @@ function formatCurrency(n: number): string {
   return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-onMounted(() => cargarDatos())
+onMounted(async () => {
+  await almacenStore.load()
+  const almacenActivo = almacenStore.almacenes.find((almacen: any) =>
+    (almacenStore.activeUid && String(almacen.uid || '') === String(almacenStore.activeUid)) ||
+    Number(almacen.id || 0) === Number(almacenStore.activeId || 0)
+  )
+  almacenFiltro.value = almacenActivo ? almacenKey(almacenActivo) : TODOS_ALMACENES
+  await cargarDatos()
+})
 </script>
 
 <template>
@@ -1027,7 +1081,20 @@ onMounted(() => cargarDatos())
           size="small"
           @click="seleccionarRango(item.key)"
         />
-        <Button label="Generar PDF" icon="pi pi-file-pdf" severity="danger" size="small" @click="generarReportePDF" class="ml-auto" />
+        <Select
+          v-model="almacenFiltro"
+          :options="almacenesOptions"
+          optionLabel="label"
+          optionValue="value"
+          placeholder="Seleccionar almacén"
+          class="w-56 ml-auto"
+          @change="cargarDatos"
+        />
+        <Button label="Generar PDF" icon="pi pi-file-pdf" severity="danger" size="small" @click="generarReportePDF" />
+      </div>
+
+      <div class="mb-4 text-sm text-surface-500">
+        Reporte de: <span class="font-semibold text-surface-700 dark:text-surface-200">{{ almacenReporteNombre }}</span>
       </div>
 
       <div v-if="rangoActivo === 'personalizado'" class="flex items-center gap-3 mb-4">
@@ -1236,6 +1303,9 @@ onMounted(() => cargarDatos())
         class="mb-6"
       >
         <Column field="no_factura" header="Factura" sortable style="width: 8rem" />
+        <Column v-if="almacenFiltro === TODOS_ALMACENES" header="Almacén" sortable style="width: 10rem">
+          <template #body="{ data }">{{ nombreAlmacen(data) }}</template>
+        </Column>
         <Column field="fecha" header="Fecha" sortable style="width: 8rem">
           <template #body="{ data }">{{ data.fecha }} {{ data.hora }}</template>
         </Column>
@@ -1261,6 +1331,9 @@ onMounted(() => cargarDatos())
         :sortOrder="-1"
       >
         <Column field="no_factura" header="Factura" sortable style="width: 8rem" />
+        <Column v-if="almacenFiltro === TODOS_ALMACENES" header="Almacén" sortable style="width: 10rem">
+          <template #body="{ data }">{{ nombreAlmacen(data) }}</template>
+        </Column>
         <Column field="fecha_emision" header="Fecha" sortable style="width: 7rem">
           <template #body="{ data }">{{ fechaEfectivaFactura(data) }}</template>
         </Column>
@@ -1310,6 +1383,9 @@ onMounted(() => cargarDatos())
           <template #body="{ data }">
             <span class="font-semibold">{{ data.no_orden || data.no_factura || '-' }}</span>
           </template>
+        </Column>
+        <Column v-if="almacenFiltro === TODOS_ALMACENES" header="Almacén" sortable style="width: 10rem">
+          <template #body="{ data }">{{ nombreAlmacen(data) }}</template>
         </Column>
         <Column header="Fecha" sortable style="width: 7rem">
           <template #body="{ data }">{{ getTallerFecha(data) || '-' }}</template>

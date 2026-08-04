@@ -2,7 +2,7 @@
 import { useLocaleProfile } from '@/composables/useLocaleProfile'
 
 const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
@@ -17,6 +17,7 @@ import SelectButton from 'primevue/selectbutton'
 import Calendar from 'primevue/calendar'
 import Textarea from 'primevue/textarea'
 import Fieldset from 'primevue/fieldset'
+import ToggleSwitch from 'primevue/toggleswitch'
 import TabView from 'primevue/tabview'
 import TabPanel from 'primevue/tabpanel'
 import { useToast } from 'primevue/usetoast'
@@ -26,10 +27,13 @@ import ApartadoPdfPrint from './ApartadoPdfPrint.vue'
 
 import { envioElectron, peticionesFetch, encryptarPassword } from '@/funciones/funciones.js'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useAuthStore } from '@/stores/auth.store'
+import { useBulkWarehouseTransfer } from '@/composables/useBulkWarehouseTransfer'
 
 const toast = useToast()
 const route = useRoute()
 const { addAlmacenId, filterByAlmacen } = useAlmacenFilter()
+const auth = useAuthStore()
 const ticketApartadoRef = ref<any>(null)
 const apartadoPdfRef = ref<any>(null)
 const apartados = ref<any[]>([])
@@ -45,6 +49,17 @@ const selectedApartado = ref<any>(null)
 const selectedApartados = ref<any[]>([])
 const busqueda = ref(String(route.query.search || ''))
 const viewMode = ref<'table' | 'cards'>('table')
+const verTodosAlmacenes = ref(false)
+const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
+
+const {
+  dialogMoverAlmacen, almacenDestino, almacenesDestino, moviendoAlmacen,
+  abrirMoverAlmacen, aplicarMoverAlmacen,
+} = useBulkWarehouseTransfer({
+  table: 'cuentas_cobrar', entity: 'cuentas_cobrar', label: 'apartado',
+  selection: selectedApartados, reload: cargarApartados,
+  reference: (item: any) => item.no_factura || item.no_apartado || String(item.id || ''),
+})
 
 const now = new Date()
 const form = ref({
@@ -164,11 +179,20 @@ async function cargarApartados() {
   try {
     const res = await window.db.getAll('cuentas_cobrar')
     if (res.success) {
-      apartados.value = filterByAlmacen(res.data || []).filter((c: any) => c.estado === 'APARTADO' || c.estado === 'ACTIVO')
+      const lista = puedeVerTodosAlmacenes.value && verTodosAlmacenes.value
+        ? (res.data || [])
+        : filterByAlmacen(res.data || [])
+      apartados.value = lista.filter((c: any) => c.estado === 'APARTADO' || c.estado === 'ACTIVO')
     }
   } catch (_) {}
   loading.value = false
 }
+
+watch(verTodosAlmacenes, () => {
+  selectedApartados.value = []
+  selectedApartado.value = null
+  cargarApartados()
+})
 
 async function cargarImeis() {
   try {
@@ -551,6 +575,11 @@ onMounted(async () => {
         </IconField>
 
         <div class="flex items-center gap-2">
+          <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
+            <ToggleSwitch v-model="verTodosAlmacenes" />
+            Todos los almacenes
+          </label>
+          <Button v-if="selectedApartados.length" :label="`Cambiar almacén (${selectedApartados.length})`" icon="pi pi-warehouse" severity="success" @click="abrirMoverAlmacen" />
           <div class="inline-flex rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
             <button
               class="px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer"
@@ -577,7 +606,9 @@ onMounted(async () => {
         :rowsPerPageOptions="[10, 25, 50]"
         dataKey="id"
         responsiveLayout="scroll"
+        v-model:selection="selectedApartados"
       >
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column field="no_factura" header="No. Apartado" sortable style="width: 10rem" />
         <Column field="nombre_cliente" header="Cliente" sortable />
         <Column field="total" header="Total" sortable style="width: 8rem">
@@ -655,6 +686,18 @@ onMounted(async () => {
         </div>
       </div>
     </Fieldset>
+
+    <Dialog v-model:visible="dialogMoverAlmacen" header="Cambiar almacén" modal :style="{ width: '28rem' }">
+      <div class="space-y-4 pt-2">
+        <p class="text-sm">Mover <strong>{{ selectedApartados.length }}</strong> apartado(s) seleccionado(s) a otro almacén:</p>
+        <Select v-model="almacenDestino" :options="almacenesDestino" optionLabel="nombre" placeholder="Seleccionar almacén destino..." fluid />
+        <p v-if="almacenesDestino.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacén disponible.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacen" @click="dialogMoverAlmacen = false" />
+        <Button label="Mover apartados" icon="pi pi-warehouse" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="aplicarMoverAlmacen" />
+      </template>
+    </Dialog>
 
     <Dialog v-model:visible="dialogNuevo" header="Nuevo Apartado" modal :style="{ width: 'min(34rem, 94vw)' }">
       <TabView>
