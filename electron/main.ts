@@ -1174,6 +1174,56 @@ function setupIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('almacen:asignarTodosLosDatos', (_event, payload: any = {}) => {
+    try {
+      const almacenId = Number(payload.almacen_id || 0)
+      const almacenUid = String(payload.almacen_uid || '').trim()
+      if (!almacenId || !almacenUid) throw new Error('El almacen actual no tiene ID o UID valido')
+
+      const empresa = db!.prepare(`SELECT id FROM empresa WHERE id = ? AND (uid = ? OR almacen_uid = ?) LIMIT 1`).get(almacenId, almacenUid, almacenUid)
+      if (!empresa) throw new Error('El almacen actual no coincide con una empresa registrada')
+
+      const excluidas = new Set([
+        'empresa', 'schema_migrations', 'configuracion', 'licencia', 'tmcloud_config',
+        'otp_local_config', 'sync_deletes', 'bitacora', 'auditoria_acciones',
+      ])
+      const tablas = (db!.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all() as any[])
+        .map(item => String(item.name || ''))
+        .filter(nombre => nombre && !excluidas.has(nombre))
+      const ahora = new Date().toISOString()
+
+      const asignar = db!.transaction(() => {
+        const resumen: Record<string, number> = {}
+        let registros = 0
+        for (const tabla of tablas) {
+          const columnas = new Set(tableColumns(tabla))
+          if (!columnas.has('almacen_uid')) continue
+
+          const cambios = ['almacen_uid = ?']
+          const valores: any[] = [almacenUid]
+          if (columnas.has('almacen_id')) {
+            cambios.push('almacen_id = ?')
+            valores.push(almacenId)
+          }
+          if (columnas.has('updated_at')) {
+            cambios.push('updated_at = ?')
+            valores.push(ahora)
+          }
+
+          const resultado = db!.prepare(`UPDATE "${tabla}" SET ${cambios.join(', ')}`).run(...valores)
+          const cantidad = Number(resultado.changes || 0)
+          if (cantidad > 0) resumen[tabla] = cantidad
+          registros += cantidad
+        }
+        return { registros, tablas: Object.keys(resumen).length, resumen }
+      })()
+
+      return { success: true, data: asignar }
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'No se pudieron asignar los datos al almacen actual' }
+    }
+  })
+
   ipcMain.handle('db:getPath', () => {
     try {
       return { success: true, data: getDbPath() }

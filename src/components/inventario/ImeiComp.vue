@@ -238,9 +238,8 @@ const imeisFiltrados = computed(() => {
     const coincideTelefono = !telefono ||
       Number(i.id_equi) === Number(telefono.id) ||
       (!!telefono.uid && String(i.telefono_uid || '') === String(telefono.uid)) ||
-      ((!i.id_equi && !i.telefono_uid) &&
-        String(i.equipo || i.telefono_nombre || '').trim().toLocaleLowerCase() ===
-        String(telefono.nombre || '').trim().toLocaleLowerCase())
+      String(i.equipo || i.telefono_nombre || '').trim().toLocaleLowerCase() ===
+        String(telefono.nombre || '').trim().toLocaleLowerCase()
 
     return coincideEstado && coincideTexto && coincideTelefono
   })
@@ -298,18 +297,57 @@ async function cargarImeis() {
     if (resProv.success) proveedores.value = resProv.data || []
     if (resClientes.success) clientes.value = resClientes.data || []
     if (resImei.success) {
-      const telMap = new Map((resTel.data || []).map((t: any) => [t.id, t]))
-      const telUidMap = new Map((resTel.data || []).map((t: any) => [t.uid, t]))
+      const listaTelefonos = resTel.data || []
+      const telMap = new Map(listaTelefonos.map((t: any) => [String(t.id ?? ''), t]))
+      const telUidMap = new Map(listaTelefonos.filter((t: any) => t.uid).map((t: any) => [String(t.uid), t]))
+      const telefonosPorNombre = new Map<string, any[]>()
+      for (const telefono of listaTelefonos) {
+        const nombre = String(telefono.nombre || '').trim().toLocaleUpperCase()
+        if (!nombre) continue
+        const grupo = telefonosPorNombre.get(nombre) || []
+        grupo.push(telefono)
+        telefonosPorNombre.set(nombre, grupo)
+      }
+      const mismoAlmacen = (imei: any, telefono: any) => {
+        const imeiUid = String(imei.almacen_uid || '')
+        const telefonoUid = String(telefono.almacen_uid || '')
+        if (imeiUid && telefonoUid) return imeiUid === telefonoUid
+        const imeiId = Number(imei.almacen_id || 0)
+        const telefonoId = Number(telefono.almacen_id || 0)
+        return !imeiId || !telefonoId || imeiId === telefonoId
+      }
+      const resolverTelefono = (imei: any) => {
+        const telefonoUid = String(imei.telefono_uid || '')
+        const referenciaAnterior = String(imei.id_equi || '')
+        // Algunas sincronizaciones antiguas guardaron el UID del telefono en
+        // id_equi. Aceptamos ambos campos antes de intentar el ID numerico.
+        const porUid = (telefonoUid && telUidMap.get(telefonoUid)) ||
+          (referenciaAnterior && telUidMap.get(referenciaAnterior))
+        if (porUid && mismoAlmacen(imei, porUid)) return porUid
+
+        const porId = referenciaAnterior ? telMap.get(referenciaAnterior) : null
+        if (porId && mismoAlmacen(imei, porId)) return porId
+
+        const nombre = String(imei.equipo || '').trim().toLocaleUpperCase()
+        const candidatos = telefonosPorNombre.get(nombre) || []
+        return candidatos.find((telefono: any) => mismoAlmacen(imei, telefono)) || candidatos[0] || porUid || porId || null
+      }
       const almacenMap = new Map(almacenStore.almacenes.map((item: any) => [Number(item.id), item.nombre]))
       const lista = puedeVerTodosAlmacenes.value && verTodosAlmacenes.value
         ? (resImei.data || [])
         : filterByAlmacen(resImei.data || [])
-      imeis.value = lista.map((i: any) => ({
-        ...i,
-        telefono_nombre: telMap.get(i.id_equi)?.nombre || telUidMap.get(i.telefono_uid)?.nombre || '',
-        telefono_imagen: telMap.get(i.id_equi)?.imagen || telUidMap.get(i.telefono_uid)?.imagen || '',
-    almacen_nombre: almacenStore.almacenes.find((almacen: any) => String(almacen.uid) === String(i.almacen_uid))?.nombre || almacenMap.get(Number(i.almacen_id)) || 'Sin empresa asignada',
-      }))
+      imeis.value = lista.map((i: any) => {
+        const telefono = resolverTelefono(i)
+        return {
+          ...i,
+          id_equi: telefono?.id ?? i.id_equi,
+          telefono_uid: telefono?.uid || i.telefono_uid || '',
+          equipo: telefono?.nombre || i.equipo || '',
+          telefono_nombre: telefono?.nombre || i.equipo || '',
+          telefono_imagen: telefono?.imagen || '',
+          almacen_nombre: almacenStore.almacenes.find((almacen: any) => String(almacen.uid) === String(i.almacen_uid))?.nombre || almacenMap.get(Number(i.almacen_id)) || 'Sin empresa asignada',
+        }
+      })
     }
   } catch (error) {
     console.error(error)

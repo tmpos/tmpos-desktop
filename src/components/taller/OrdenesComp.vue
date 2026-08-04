@@ -409,11 +409,16 @@ async function abrirMoverAlmacenSeleccionadas() {
   almacenDestinoMulti.value = null
   try {
     await almacenStore.load()
-    const origenUids = new Set(selectedOrdenes.value.map((orden: any) => String(orden.almacen_uid || '')).filter(Boolean))
-    const origenIds = new Set(selectedOrdenes.value.map((orden: any) => Number(orden.almacen_id || 0)).filter(Boolean))
-    almacenesDestinoMulti.value = almacenStore.almacenes.filter((almacen: any) =>
-      !origenUids.has(String(almacen.uid || '')) && !origenIds.has(Number(almacen.id || 0))
-    )
+    const activeUid = String(almacenStore.activeUid || '')
+    almacenesDestinoMulti.value = almacenStore.almacenes.map((almacen: any) => {
+      const uid = String(almacen.uid || almacen.almacen_uid || '')
+      return {
+        ...almacen,
+        nombreOpcion: uid && uid === activeUid
+          ? `${almacen.nombre || 'Almacen'} (Actual)`
+          : almacen.nombre || 'Almacen',
+      }
+    })
     dialogMoverAlmacenMulti.value = true
   } catch (error: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron cargar los almacenes', life: 4000 })
@@ -1576,9 +1581,9 @@ defineExpose({ cargarOrdenes })
 
     <Dialog v-model:visible="dialogMoverAlmacenMulti" header="Cambiar Almacen" modal :style="{ width: 'min(30rem, 95vw)' }">
       <div class="space-y-4 pt-2">
-        <p class="text-sm">Mover <strong>{{ selectedOrdenes.length }}</strong> orden(es) de taller a otro almacen:</p>
-        <Select v-model="almacenDestinoMulti" :options="almacenesDestinoMulti" optionLabel="nombre" placeholder="Seleccionar almacen destino..." fluid />
-        <p v-if="almacenesDestinoMulti.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay otro almacen disponible para el traslado.</p>
+        <p class="text-sm">Asignar <strong>{{ selectedOrdenes.length }}</strong> orden(es) de taller al almacen seleccionado:</p>
+        <Select v-model="almacenDestinoMulti" :options="almacenesDestinoMulti" optionLabel="nombreOpcion" placeholder="Seleccionar almacen destino..." fluid />
+        <p v-if="almacenesDestinoMulti.length === 0" class="text-xs text-amber-600 dark:text-amber-400">No hay almacenes registrados.</p>
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacenMulti" @click="dialogMoverAlmacenMulti = false" />

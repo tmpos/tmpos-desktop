@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
 import Button from 'primevue/button'
@@ -27,6 +27,9 @@ const deleteDialogVisible = ref(false)
 const eliminandoEmpresa = ref(false)
 const nuevoAlmacenDialogVisible = ref(false)
 const creandoAlmacen = ref(false)
+const registrandoEmpresaAlmacen = ref(false)
+const marcarTodosDialogVisible = ref(false)
+const marcandoTodosLosDatos = ref(false)
 const nuevoAlmacenForm = ref({
   nombre: '',
   legal: '',
@@ -48,6 +51,17 @@ const form = ref({
   email: '',
   direccion: '',
   logo: '',
+})
+
+const empresaActualEsAlmacen = computed(() => {
+  const empresaId = Number(empresa.value?.id || 0)
+  if (!empresaId) return false
+
+  return almacenStore.almacenes.some((item: any) =>
+    Number(item.empresa_id || 0) === empresaId
+    && Number(item.almacen_id || 0) > 0
+    && Boolean(String(item.uid || item.almacen_uid || '').trim())
+  )
 })
 
 async function cargar() {
@@ -181,6 +195,86 @@ async function crearAlmacen() {
     toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo crear el almacen', life: 4000 })
   } finally {
     creandoAlmacen.value = false
+  }
+}
+
+async function registrarEmpresaActualComoAlmacen() {
+  if ((!auth.isAdmin && !auth.isSoporte) || registrandoEmpresaAlmacen.value || empresaActualEsAlmacen.value) return
+  const empresaId = Number(empresa.value?.id || 0)
+  if (!empresaId) {
+    toast.add({ severity: 'warn', summary: 'Empresa requerida', detail: 'Guarda primero los datos de la empresa', life: 3000 })
+    return
+  }
+
+  registrandoEmpresaAlmacen.value = true
+  try {
+    const almacenUid = String(empresa.value?.uid || empresa.value?.almacen_uid || '') || crypto.randomUUID()
+    const cambios: Record<string, any> = {
+      almacen_id: empresaId,
+      almacen_uid: almacenUid,
+    }
+    if (!empresa.value?.uid) cambios.uid = almacenUid
+
+    const res = await window.db.update('empresa', empresaId, cambios)
+    if (!res.success) throw new Error(res.error || 'No se pudo registrar la empresa como almacen')
+
+    empresa.value = { ...empresa.value, ...cambios }
+    await almacenStore.load()
+    almacenStore.setDefault(almacenUid)
+    tiendaSeleccionada.value = almacenUid
+    await (window as any).config.set('empresa_id', String(empresaId))
+
+    if (isOnline()) {
+      const syncResult = await pushLocalRowToCloud('empresa', empresaId)
+      if (!syncResult.success) {
+        toast.add({ severity: 'warn', summary: 'Registrado localmente', detail: syncResult.error || 'No se pudo sincronizar el almacen con TM Cloud', life: 5000 })
+      }
+    }
+
+    toast.add({ severity: 'success', summary: 'Almacen registrado', detail: `${empresa.value?.nombre || 'La empresa actual'} ahora es el almacen principal`, life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo registrar la empresa como almacen', life: 4000 })
+  } finally {
+    registrandoEmpresaAlmacen.value = false
+  }
+}
+
+function confirmarMarcarTodosLosDatos() {
+  if (!auth.isAdmin && !auth.isSoporte) return
+  if (!empresaActualEsAlmacen.value || !almacenStore.activeUid) {
+    toast.add({ severity: 'warn', summary: 'Almacen requerido', detail: 'Primero agrega la empresa actual como almacen', life: 3500 })
+    return
+  }
+  marcarTodosDialogVisible.value = true
+}
+
+async function marcarTodosLosDatosConAlmacenActual() {
+  if ((!auth.isAdmin && !auth.isSoporte) || marcandoTodosLosDatos.value) return
+  const almacenId = Number(empresa.value?.id || almacenStore.activeId || 0)
+  const almacenUid = String(almacenStore.activeUid || empresa.value?.uid || empresa.value?.almacen_uid || '')
+  if (!almacenId || !almacenUid) return
+
+  marcandoTodosLosDatos.value = true
+  try {
+    const res = await window.electron.invoke('almacen:asignarTodosLosDatos', {
+      almacen_id: almacenId,
+      almacen_uid: almacenUid,
+    })
+    if (!res?.success) throw new Error(res?.error || 'No se pudieron marcar los datos')
+
+    marcarTodosDialogVisible.value = false
+    const registros = Number(res.data?.registros || 0)
+    const tablas = Number(res.data?.tablas || 0)
+    toast.add({
+      severity: 'success',
+      summary: 'Datos asignados',
+      detail: `${registros} registro(s) de ${tablas} tabla(s) fueron marcados con el almacen actual`,
+      life: 5000,
+    })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron marcar los datos', life: 5000 })
+  } finally {
+    marcandoTodosLosDatos.value = false
   }
 }
 
@@ -319,7 +413,18 @@ onMounted(async () => {
             <p class="text-sm text-surface-500">Informacion general del negocio</p>
           </div>
         </div>
-        <Button v-if="auth.isAdmin || auth.isSoporte" label="Agregar Almacen" icon="pi pi-plus" severity="success" outlined @click="abrirNuevoAlmacen" />
+        <div v-if="auth.isAdmin || auth.isSoporte" class="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            :label="empresaActualEsAlmacen ? 'Empresa actual ya esta en Almacen' : 'Agregar la empresa actual a Almacen'"
+            :icon="empresaActualEsAlmacen ? 'pi pi-check-circle' : 'pi pi-building'"
+            :severity="empresaActualEsAlmacen ? 'secondary' : 'info'"
+            outlined
+            :loading="registrandoEmpresaAlmacen"
+            :disabled="empresaActualEsAlmacen"
+            @click="registrarEmpresaActualComoAlmacen"
+          />
+          <Button label="Agregar Almacen" icon="pi pi-plus" severity="success" outlined @click="abrirNuevoAlmacen" />
+        </div>
       </div>
 
       <div class="flex flex-col sm:flex-row gap-8">
@@ -397,7 +502,16 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div class="flex items-center justify-end gap-3 pt-4 border-t border-surface-200 dark:border-surface-700">
+      <div class="flex flex-wrap items-center justify-end gap-3 pt-4 border-t border-surface-200 dark:border-surface-700">
+        <Button
+          v-if="auth.isAdmin || auth.isSoporte"
+          label="Marcar todos los datos con el Almacen actual"
+          icon="pi pi-tags"
+          severity="warn"
+          outlined
+          :disabled="!empresaActualEsAlmacen"
+          @click="confirmarMarcarTodosLosDatos"
+        />
         <Button
           v-if="auth.isAdmin || auth.isSoporte"
           label="Eliminar Empresa"
@@ -410,6 +524,24 @@ onMounted(async () => {
         <Button label="Guardar Cambios" icon="pi pi-check" :loading="guardando" @click="guardar" />
       </div>
     </div>
+
+    <Dialog v-model:visible="marcarTodosDialogVisible" header="Asignar todos los datos" modal :style="{ width: 'min(32rem, 94vw)' }" :draggable="false" :closable="!marcandoTodosLosDatos">
+      <div class="flex items-start gap-3">
+        <i class="pi pi-exclamation-triangle text-amber-500 text-2xl mt-1"></i>
+        <div>
+          <p class="font-semibold">Marcar todos los registros con {{ almacenStore.activeAlmacen?.nombre || empresa?.nombre }}?</p>
+          <p class="text-sm text-surface-500 mt-2">
+            Se reemplazara el almacen asignado a todos los datos compatibles por el UID del almacen actual.
+            Esto incluye registros que actualmente pertenezcan a otros almacenes.
+          </p>
+          <p class="text-xs font-mono text-surface-400 mt-3 break-all">UID: {{ almacenStore.activeUid }}</p>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="marcandoTodosLosDatos" @click="marcarTodosDialogVisible = false" />
+        <Button label="Si, marcar todos" icon="pi pi-tags" severity="warn" :loading="marcandoTodosLosDatos" @click="marcarTodosLosDatosConAlmacenActual" />
+      </template>
+    </Dialog>
 
     <Dialog v-model:visible="deleteDialogVisible" header="Eliminar Empresa" modal :style="{ width: 'min(26rem, 92vw)' }">
       <div class="flex items-start gap-3">

@@ -19,6 +19,7 @@ export const useAlmacenStore = defineStore('almacen', () => {
           ...empresa,
           empresa_id: Number(empresa.id),
           id: Number(empresa.almacen_id) || Number(empresa.id),
+          uid: String(empresa.uid || empresa.almacen_uid || ''),
           almacen_uid: String(empresa.uid || empresa.almacen_uid || ''),
         }))
         const savedUid = localStorage.getItem('almacen_default_uid') || localStorage.getItem('almacen_uid') || ''

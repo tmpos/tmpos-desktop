@@ -68,7 +68,7 @@ const rangoPersonalizado = ref<Date[]>([])
 const rangoActivo = ref<string>('hoy')
 
 const rangoLabel = computed(() => {
-  const labels: Record<string, string> = { hoy: 'Hoy', semana: 'Esta semana', mes: 'Este mes', trimestre: 'Este trimestre', ano: 'Este año' }
+  const labels: Record<string, string> = { hoy: 'Hoy', ayer: 'Ayer', semana: 'Esta semana', mes: 'Este mes', mes_pasado: 'Mes pasado', trimestre: 'Este trimestre', ano: 'Este año' }
   return labels[rangoActivo.value] || 'Rango personalizado'
 })
 
@@ -223,6 +223,11 @@ function getRango(key: string): { inicio: string; fin: string } {
     case 'mes': {
       const inicio = new Date(now.getFullYear(), now.getMonth(), 1)
       const fin = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+      return { inicio: y(inicio), fin: y(fin) }
+    }
+    case 'mes_pasado': {
+      const inicio = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      const fin = new Date(now.getFullYear(), now.getMonth(), 0)
       return { inicio: y(inicio), fin: y(fin) }
     }
     case 'ano': {
@@ -1070,6 +1075,7 @@ onMounted(async () => {
             { label: 'Ayer', key: 'ayer', icon: 'pi pi-calendar' },
             { label: 'Esta Semana', key: 'semana', icon: 'pi pi-calendar' },
             { label: 'Este Mes', key: 'mes', icon: 'pi pi-calendar' },
+            { label: 'Mes Pasado', key: 'mes_pasado', icon: 'pi pi-calendar' },
             { label: 'Este Año', key: 'ano', icon: 'pi pi-calendar' },
             { label: 'Rango', key: 'personalizado', icon: 'pi pi-sliders-h' },
           ]"

@@ -20,7 +20,8 @@
       const isElectron = !!(window.electron && window.electron.invoke)
       const isCapacitor = typeof window.Capacitor !== 'undefined'
 
-      if (!isElectron && !isCapacitor) {
+      const isProjectSystem = /^\/sistema\/[^/]+\/?$/.test(window.location.pathname)
+      if (!isElectron && !isCapacitor && !isProjectSystem) {
         // Fallback para acceso via red (browser) - window.db y window.electron via API local
         console.log('[Browser] Modo red detectado, configurando API via HTTP...')
         window.__isElectron = false

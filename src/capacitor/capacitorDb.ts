@@ -1151,6 +1151,57 @@ export function dbGetAllTables(): string[] {
   }
 }
 
+export function dbAssignAllWarehouse(almacenId: number, almacenUid: string): { success: boolean; data?: { registros: number; tablas: number; resumen: Record<string, number> }; error?: string } {
+  const id = Number(almacenId || 0)
+  const uid = String(almacenUid || '').trim()
+  if (!id || !uid) return { success: false, error: 'El almacen actual no tiene ID o UID valido' }
+
+  const d = getDb()
+  try {
+    const empresaStmt = d.prepare(`SELECT id FROM empresa WHERE id = ? AND (uid = ? OR almacen_uid = ?) LIMIT 1`)
+    empresaStmt.bind([id, uid, uid])
+    const empresaExiste = empresaStmt.step()
+    empresaStmt.free()
+    if (!empresaExiste) return { success: false, error: 'El almacen actual no coincide con una empresa registrada' }
+
+    const excluidas = new Set([
+      'empresa', 'schema_migrations', 'configuracion', 'licencia', 'tmcloud_config',
+      'otp_local_config', 'sync_deletes', 'bitacora', 'auditoria_acciones',
+    ])
+    const ahora = nowISO()
+    const resumen: Record<string, number> = {}
+    let registros = 0
+
+    d.run('BEGIN TRANSACTION')
+    for (const tabla of dbGetAllTables().filter(nombre => !excluidas.has(nombre))) {
+      const columnas = new Set(dbGetTableColumns(tabla).map((columna: any) => String(columna.name || '')))
+      if (!columnas.has('almacen_uid')) continue
+
+      const cambios = ['almacen_uid = ?']
+      const valores: any[] = [uid]
+      if (columnas.has('almacen_id')) {
+        cambios.push('almacen_id = ?')
+        valores.push(id)
+      }
+      if (columnas.has('updated_at')) {
+        cambios.push('updated_at = ?')
+        valores.push(ahora)
+      }
+
+      d.run(`UPDATE ${escapeId(tabla)} SET ${cambios.join(', ')}`, valores)
+      const cantidad = Number(d.getRowsModified() || 0)
+      if (cantidad > 0) resumen[tabla] = cantidad
+      registros += cantidad
+    }
+    d.run('COMMIT')
+    saveDb()
+    return { success: true, data: { registros, tablas: Object.keys(resumen).length, resumen } }
+  } catch (e: any) {
+    try { d.run('ROLLBACK') } catch {}
+    return { success: false, error: e?.message || 'No se pudieron asignar los datos al almacen actual' }
+  }
+}
+
 export function dbTableExists(tabla: string): boolean {
   try {
     const result = getDb().exec(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, [tabla])

@@ -12,6 +12,7 @@ import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
+import InputOtp from 'primevue/inputotp'
 import Select from 'primevue/select'
 import Chip from 'primevue/chip'
 import SelectButton from 'primevue/selectbutton'
@@ -26,6 +27,7 @@ import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected 
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAuthStore } from '@/stores/auth.store'
 import { useCloudRefresh } from '@/composables/useCloudRefresh'
+import { imeiBelongsToPhone } from '@/domain/phoneImeiRelation'
 
 const toast = useToast()
 const router = useRouter()
@@ -43,6 +45,13 @@ const deleteDialogVisible = ref(false)
 const detalleDialogVisible = ref(false)
 const imeiDialogVisible = ref(false)
 const imeiAccionesVisible = ref(false)
+const eliminarImeiDialogVisible = ref(false)
+const eliminarImeiOtpEnviado = ref(false)
+const eliminarImeiOtpLoading = ref(false)
+const eliminandoImei = ref(false)
+const eliminarImeiOtp = ref('')
+const eliminarImeiOtpEmail = ref('')
+const eliminarImeiError = ref('')
 const reubicarImeiVisible = ref(false)
 const imeiSeleccionado = ref<any>(null)
 const telefonoDestinoImei = ref<any>(null)
@@ -117,7 +126,7 @@ const imeisDelTelefonoFiltrados = computed(() => {
   )
 })
 
-const telefonosDestinoImei = computed(() => telefonos.value.filter((telefono: any) => Number(telefono.id) !== Number(imeiSeleccionado.value?.id_equi)))
+const telefonosDestinoImei = computed(() => telefonos.value.filter((telefono: any) => !imeiBelongsToPhone(imeiSeleccionado.value, telefono)))
 
 const camposArray = ['nombre']
 const imeiCamposArray = [
@@ -142,12 +151,14 @@ const imeiCamposArray = [
 ]
 
 function imeiCount(telefonoId: number) {
-  return imeisDisponibles.value.filter((i: any) => Number(i.id_equi) === telefonoId && i.estado === 'DISPONIBLE').length
+  const telefono = telefonos.value.find((item: any) => String(item.id) === String(telefonoId))
+  return imeisDisponibles.value.filter((i: any) => imeiBelongsToPhone(i, telefono) && String(i.estado || '').toUpperCase() === 'DISPONIBLE').length
 }
 
 function imeisDelTel(telefonoId: number) {
   const texto = imeiSearch.value.toLowerCase().trim()
-  let list = imeisDisponibles.value.filter((i: any) => Number(i.id_equi) === telefonoId && i.estado === 'DISPONIBLE')
+  const telefono = telefonos.value.find((item: any) => String(item.id) === String(telefonoId))
+  let list = imeisDisponibles.value.filter((i: any) => imeiBelongsToPhone(i, telefono) && String(i.estado || '').toUpperCase() === 'DISPONIBLE')
   if (texto) list = list.filter((i: any) => i.nombre?.toLowerCase().includes(texto))
   return list
 }
@@ -274,7 +285,7 @@ async function abrirMoverAlmacen(telefono?: any) {
     almacenesDestino.value = almacenStore.almacenes.filter((almacen: any) => String(almacen.uid || '') !== almacenOrigenUid)
     if (imeiRes.success) {
       cantidadImeisATrasladar.value = (imeiRes.data || []).filter((imei: any) =>
-        Number(imei.id_equi) === Number(seleccionado.id) && String(imei.estado || '').toUpperCase() === 'DISPONIBLE').length
+        imeiBelongsToPhone(imei, seleccionado) && String(imei.estado || '').toUpperCase() === 'DISPONIBLE').length
     }
     dialogMoverAlmacen.value = true
   } catch (error: any) {
@@ -296,7 +307,7 @@ async function moverTelefonoAlmacen() {
 
     for (const telefono of telefonosAMover) {
       const imeisDisponibles = (imeiRes.data || []).filter((imei: any) =>
-        Number(imei.id_equi) === Number(telefono.id) && String(imei.estado || '').toUpperCase() === 'DISPONIBLE')
+        imeiBelongsToPhone(imei, telefono) && String(imei.estado || '').toUpperCase() === 'DISPONIBLE')
 
       const resTel = await window.db.update('telefonos', telefono.id, { almacen_id: destinoId, almacen_uid: destinoUid })
       if (!resTel.success) throw new Error(resTel.error || `No se pudo mover ${telefono.nombre}`)
@@ -362,13 +373,17 @@ async function guardarTelefono() {
 
 async function cargarImeisDelTelefono(telefonoId: number) {
   const res = await window.db.getAll('imei')
-    if (res.success) imeisDelTelefono.value = filterByAlmacen(res.data || []).filter((i: any) => i.id_equi === telefonoId && i.estado === 'DISPONIBLE')
+  if (res.success) {
+    const telefono = telefonos.value.find((item: any) => String(item.id) === String(telefonoId)) || selectedTelefono.value
+    imeisDelTelefono.value = filterByAlmacen(res.data || []).filter((i: any) =>
+      imeiBelongsToPhone(i, telefono) && String(i.estado || '').toUpperCase() === 'DISPONIBLE')
+  }
 }
 
 function itemPosDesdeImei(imei: any) {
   return {
     tipo: 'imei', imei_id: imei.id, imei_ids: [imei.id], imei: imei.nombre, imeis: [imei.nombre],
-    codigo: imei.nombre || '', nombre: selectedTelefono.value?.nombre || imei.equipo || '', telefono_id: imei.id_equi,
+    codigo: imei.nombre || '', nombre: selectedTelefono.value?.nombre || imei.equipo || '', telefono_id: selectedTelefono.value?.id ?? imei.id_equi,
     color: imei.color || '', colores: imei.color ? [imei.color] : [],
     capacidad: imei.capacidad || '', capacidades: imei.capacidad ? [imei.capacidad] : [],
     precio: Number(imei.precio_venta || 0), precio_normal: Number(imei.precio_venta || 0),
@@ -379,6 +394,79 @@ function itemPosDesdeImei(imei: any) {
 function abrirAccionesImei(imei: any) {
   imeiSeleccionado.value = imei
   imeiAccionesVisible.value = true
+}
+
+function confirmarEliminarImeiDesdeAcciones() {
+  if (!imeiSeleccionado.value?.id) return
+  eliminarImeiOtpEnviado.value = false
+  eliminarImeiOtpLoading.value = false
+  eliminandoImei.value = false
+  eliminarImeiOtp.value = ''
+  eliminarImeiOtpEmail.value = ''
+  eliminarImeiError.value = ''
+  imeiAccionesVisible.value = false
+  eliminarImeiDialogVisible.value = true
+}
+
+async function solicitarOtpEliminarImeiDesdeTelefono() {
+  const imei = imeiSeleccionado.value
+  if (!imei?.id || eliminarImeiOtpLoading.value) return
+  eliminarImeiError.value = ''
+  eliminarImeiOtp.value = ''
+  eliminarImeiOtpLoading.value = true
+  try {
+    const res = await window.electron.invoke('imei:solicitarOtpEliminar', {
+      id: imei.id,
+      imeiIds: [imei.id],
+      nombre: imei.nombre || '',
+      cantidad: 1,
+      entidad: 'IMEI',
+      entidadPlural: 'IMEI',
+    }) as any
+    if (!res?.success) throw new Error(res?.error || 'No se pudo generar el codigo')
+    eliminarImeiOtpEmail.value = res.data?.networkUrl || ''
+    eliminarImeiOtpEnviado.value = true
+    toast.add({ severity: 'success', summary: 'Codigo generado', detail: 'Consulta el codigo en el Centro OTP', life: 3000 })
+  } catch (error: any) {
+    eliminarImeiError.value = error?.message || 'No se pudo generar el codigo'
+  } finally {
+    eliminarImeiOtpLoading.value = false
+  }
+}
+
+async function eliminarImeiDesdeTelefono() {
+  const imei = imeiSeleccionado.value
+  if (!imei?.id || eliminandoImei.value) return
+  eliminarImeiError.value = ''
+  const codigo = String(eliminarImeiOtp.value || '').replace(/\D/g, '')
+  if (!/^\d{4}$/.test(codigo)) {
+    eliminarImeiError.value = 'Introduce el codigo de 4 digitos'
+    return
+  }
+
+  eliminandoImei.value = true
+  try {
+    const otpRes = await window.electron.invoke('imei:confirmarOtpEliminar', {
+      imeiId: imei.id,
+      imeiIds: [imei.id],
+      codigo,
+    }) as any
+    if (!otpRes?.success) throw new Error(otpRes?.error || 'Codigo no valido')
+
+    const res = await window.db.delete('imei', imei.id)
+    if (!res.success) throw new Error(res.error || 'No se pudo eliminar el IMEI')
+
+    eliminarImeiDialogVisible.value = false
+    imeiSeleccionado.value = null
+    if (selectedTelefono.value?.id) await cargarImeisDelTelefono(selectedTelefono.value.id)
+    await cargarTelefonos()
+    window.dispatchEvent(new CustomEvent('inventory-changed', { detail: { table: 'imei' } }))
+    toast.add({ severity: 'success', summary: 'IMEI eliminado', detail: 'El IMEI fue eliminado correctamente', life: 3000 })
+  } catch (error: any) {
+    eliminarImeiError.value = error?.message || 'No se pudo eliminar el IMEI'
+  } finally {
+    eliminandoImei.value = false
+  }
 }
 
 function validarImeiParaVenta(imei: any): boolean {
@@ -443,6 +531,8 @@ async function reubicarImei() {
 }
 
 function abrirAgregarImei() {
+  batchImeis.value = []
+  batchImeiInput.value = ''
   imeiForm.value = {
     nombre: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0,
     color: '', capacidad: '', bateria: '', estado: 'DISPONIBLE',
@@ -462,7 +552,8 @@ function onBatchInput(e: Event) {
     raw = raw.substring(15)
     added++
   }
-  if (added > 0 && target) target.value = ''
+  batchImeiInput.value = raw
+  if (target) target.value = raw
 }
 
 async function crearProveedorTel() {
@@ -1120,9 +1211,29 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
           <Button label="Vender express" icon="pi pi-bolt" severity="success" @click="venderImeiExpress" />
           <Button label="Agregar al carrito" icon="pi pi-cart-plus" outlined @click="agregarImeiAlCarrito" />
           <Button label="Reubicar en otro teléfono" icon="pi pi-mobile" severity="warn" outlined @click="abrirReubicarImei" />
+          <Button label="Eliminar IMEI" icon="pi pi-trash" severity="danger" outlined @click="confirmarEliminarImeiDesdeAcciones" />
         </div>
       </div>
       <template #footer><Button label="Cerrar" severity="secondary" text @click="imeiAccionesVisible = false" /></template>
+    </Dialog>
+
+    <Dialog v-model:visible="eliminarImeiDialogVisible" header="Eliminar IMEI" modal :style="{ width: 'min(27rem, 95vw)' }" :closable="!eliminandoImei">
+      <div class="space-y-4">
+        <div class="flex items-center gap-3">
+          <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
+          <span>Seguro que deseas eliminar el IMEI <strong class="font-mono">{{ imeiSeleccionado?.nombre }}</strong>?</span>
+        </div>
+        <div v-if="eliminarImeiOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
+          <p class="text-xs text-surface-500 text-center">Consulta el codigo de 4 digitos en el Centro OTP: {{ eliminarImeiOtpEmail || 'Configuracion > OTP Local' }}.</p>
+          <InputOtp v-model="eliminarImeiOtp" :length="4" integerOnly />
+        </div>
+        <p v-if="eliminarImeiError" class="text-red-500 text-xs text-center">{{ eliminarImeiError }}</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="eliminandoImei" @click="eliminarImeiDialogVisible = false" />
+        <Button v-if="!eliminarImeiOtpEnviado" label="Generar OTP" icon="pi pi-key" severity="danger" :loading="eliminarImeiOtpLoading" @click="solicitarOtpEliminarImeiDesdeTelefono" />
+        <Button v-else label="Eliminar IMEI" icon="pi pi-trash" severity="danger" :loading="eliminandoImei" @click="eliminarImeiDesdeTelefono" />
+      </template>
     </Dialog>
 
     <Dialog v-model:visible="reubicarImeiVisible" header="Reubicar IMEI" modal :style="{ width: 'min(28rem, 95vw)' }">
@@ -1284,6 +1395,7 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">IMEIs (escribe o pega, se agregan automaticamente)</label>
           <input
+            v-model="batchImeiInput"
             placeholder="356307044521235"
             inputmode="numeric"
             class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm font-mono outline-none focus:ring-2 focus:ring-primary-500"

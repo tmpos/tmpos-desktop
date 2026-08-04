@@ -53,6 +53,7 @@ import { useLocaleProfile } from '@/composables/useLocaleProfile'
 import { sanitizePrintableHtml } from '@/utils/htmlSecurity'
 import { matchesSearch } from '@/composables/useSearch'
 import { filterPosCatalog, filterPosCustomers, searchGlobalPosCatalog } from '@/domain/posCatalog'
+import { imeiBelongsToPhone, resolvePhoneForImei } from '@/domain/phoneImeiRelation'
 const { store: almacenActivoStore, filterByAlmacen, addAlmacenId: addAlmacenIdFilter } = useAlmacenFilter()
 const { taxName, currency: systemCurrency, locale: systemLocale, currencySymbol, isDominicanFiscal } = useLocaleProfile()
 
@@ -428,10 +429,11 @@ function serialPerteneceEquipo(serial: any, equipo: any): boolean {
 }
 
 function imeiPerteneceTelefono(imei: any, telefono: any): boolean {
-  if (!imei || !telefono) return false
-  return imei.telefono_uid
-    ? String(imei.telefono_uid) === String(telefono.uid || '')
-    : Number(imei.id_equi) === Number(telefono.id)
+  return imeiBelongsToPhone(imei, telefono)
+}
+
+function telefonoDeImei(imei: any): any | null {
+  return resolvePhoneForImei(imei, telefonos.value)
 }
 
 function equipoDeSerial(serial: any): any | null {
@@ -444,7 +446,7 @@ const productosFiltradosCombo = computed(() => {
   let lista: any[] = []
   if (tipo === 'telefono') {
     lista = telefonos.value.map(t => {
-      const imeis = imeisDisponibles.value.filter((i: any) => Number(i.id_equi) === Number(t.id))
+      const imeis = imeisDisponibles.value.filter((i: any) => imeiPerteneceTelefono(i, t))
       return { ...t, precio_venta: imeis[0]?.precio_venta || 0, costo: imeis[0]?.costo || 0, stock: imeis.length }
     })
   } else if (tipo === 'accesorio') {
@@ -457,7 +459,7 @@ const productosFiltradosCombo = computed(() => {
   } else {
     lista = [
       ...telefonos.value.map(t => {
-        const imeis = imeisDisponibles.value.filter((i: any) => Number(i.id_equi) === Number(t.id))
+        const imeis = imeisDisponibles.value.filter((i: any) => imeiPerteneceTelefono(i, t))
         return { ...t, precio_venta: imeis[0]?.precio_venta || 0, costo: imeis[0]?.costo || 0, _tipo: 'telefono' }
       }),
       ...accesorios.value.map(a => ({ ...a, _tipo: 'accesorio' })),
@@ -921,7 +923,6 @@ const productosFactCotiFiltrados = computed(() => {
 
 const productosDbFactCotiFiltrados = computed(() => {
   const texto = busquedaProductoDbFactCoti.value.toLowerCase().trim()
-  const telefonoMap = new Map(telefonos.value.map((tel: any) => [tel.id, tel.nombre]))
   const electroMap = new Map(electrodomesticos.value.map((elec: any) => [elec.id, elec.nombre]))
 
   const items = [
@@ -940,7 +941,7 @@ const productosDbFactCotiFiltrados = computed(() => {
       dbKey: `imei-${imei.id}`,
       origen: 'imei',
       id: imei.id,
-      nombre: telefonoMap.get(imei.id_equi) || imei.nombre,
+      nombre: telefonoDeImei(imei)?.nombre || imei.equipo || imei.nombre,
       detalle: `IMEI: ${imei.nombre}${imei.color ? ' · ' + imei.color : ''}${imei.capacidad ? ' · ' + imei.capacidad : ''}`,
       cantidadDisponible: 1,
       precio: Number(imei.precio_venta || 0),
@@ -2592,7 +2593,7 @@ function seleccionarImeiDirecto(imei: any) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Este IMEI ya esta en el carrito', life: 2000 })
     return
   }
-  const telefono = telefonos.value.find(t => t.id === imei.id_equi)
+  const telefono = telefonoDeImei(imei)
   if (!telefono) return
   imeiParaPrecio.value = imei
   selectedTelefono.value = telefono
@@ -2831,8 +2832,9 @@ function prepararCambioImeiAgrupado(posicion: number) {
     normalizarListaIds(cartItem.imei_ids || cartItem.imei_id).forEach((id: number) => idsEnCarrito.add(id))
   })
   const detalle = getImeisDetalleItem(item)[posicion]
+  const telefono = telefonos.value.find((t: any) => String(t.id) === String(item.telefono_id || ''))
   imeisDisponiblesParaCambio.value = imeisDisponibles.value.filter((i: any) => {
-    if (String(i.id_equi) !== String(item.telefono_id || 0)) return false
+    if (!imeiPerteneceTelefono(i, telefono)) return false
     if (idsEnCarrito.has(Number(i.id))) return false
     return !idsActuales.has(Number(i.id)) || Number(i.id) === Number(detalle?.id || 0)
   })
@@ -3019,8 +3021,9 @@ function abrirCambiarImei(item: any, index: number) {
     if (cartIndex === index || cartItem?.tipo !== 'imei') return
     normalizarListaIds(cartItem.imei_ids || cartItem.imei_id).forEach((id: number) => idsEnCarrito.add(id))
   })
+  const telefono = telefonos.value.find((t: any) => String(t.id) === String(item.telefono_id || ''))
   const imeis = imeisDisponibles.value.filter((i: any) =>
-    String(i.id_equi) === String(item.telefono_id || 0) &&
+    imeiPerteneceTelefono(i, telefono) &&
     !idsEnCarrito.has(Number(i.id)) &&
     i.nombre !== item.imei
   )
@@ -4855,7 +4858,7 @@ onMounted(async () => {
       sonidos.playScan()
       const imeiMatch = imeisDisponibles.value.find((i: any) => i.nombre?.trim() === code)
       if (imeiMatch) {
-        const tel = telefonos.value.find((t: any) => t.id === imeiMatch.id_equi)
+        const tel = telefonoDeImei(imeiMatch)
         if (tel) {
           imeiParaPrecio.value = imeiMatch
           selectedTelefono.value = tel

@@ -22,6 +22,12 @@ async function initApp() {
     await capacitorApp.initCapacitorApp()
   }
 
+  const isSystemWeb = !isCapacitor && !(window as any).__isElectron && /^\/sistema\/[^/]+\/?$/.test(window.location.pathname)
+  if (isSystemWeb) {
+    const { initSystemRuntime } = await import('@/web/systemRuntime')
+    await initSystemRuntime()
+  }
+
   const app = createApp(App)
 
   // Available in every template/DataTable and always resolved from the active country.

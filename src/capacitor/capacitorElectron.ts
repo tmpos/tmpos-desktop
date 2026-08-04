@@ -1,5 +1,5 @@
 import { uuidv4 } from './util'
-import { dbExecuteSQL } from './capacitorDb'
+import { dbAssignAllWarehouse, dbExecuteSQL } from './capacitorDb'
 
 function getOpenAIError(data: any, status: number): string {
   const code = String(data?.error?.code || data?.error?.type || '')
@@ -71,6 +71,9 @@ export async function handleElectronInvoke(channel: string, ...args: any[]): Pro
 
     case 'db:exec':
       return dbExecuteSQL(String(args[0] || ''))
+
+    case 'almacen:asignarTodosLosDatos':
+      return dbAssignAllWarehouse(Number(args[0]?.almacen_id || 0), String(args[0]?.almacen_uid || ''))
 
     case 'config:get':
       return (window as any).config.get(args[0])

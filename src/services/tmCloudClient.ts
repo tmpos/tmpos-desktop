@@ -274,9 +274,12 @@ export async function uploadImage(file: File, directory: string): Promise<string
 }
 
 export function getImageUrl(uid: string): string | null {
-  const storageUrl = getStorageUrl()
-  if (!storageUrl || !uid) return null
+  if (!uid) return null
   if (/^(data:|https?:\/\/|blob:)/i.test(uid)) return uid
+  const systemProjectApi = String((window as any).__systemProjectApiBase || '').replace(/\/+$/, '')
+  if (systemProjectApi && /^fil_[A-Za-z0-9]+$/i.test(uid)) return `${systemProjectApi}/storage/${encodeURIComponent(uid)}`
+  const storageUrl = getStorageUrl()
+  if (!storageUrl) return null
   return `${storageUrl}/${uid}`
 }
 
