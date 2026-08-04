@@ -14,11 +14,11 @@ El instalador es compatible con Windows 10 y Windows 11 de 64 bits. Los datos ex
 
 ## Descargar TMPOS para macOS
 
-[![Descargar TMPOS v2.13.1 para macOS](https://img.shields.io/badge/Descargar_TMPOS-v2.13.1_macOS-111827?style=for-the-badge&logo=apple)](https://github.com/tmpos/tmpos-desktop/releases/download/v2.13.1/TMPOS-2.13.1-x64.dmg)
+[![Descargar TMPOS v2.13.3 para macOS](https://img.shields.io/badge/Descargar_TMPOS-v2.13.3_macOS-111827?style=for-the-badge&logo=apple)](https://github.com/tmpos/tmpos-desktop/releases/download/v2.13.3/TMPOS-2.13.3-x64.dmg)
 
 Compatible con Macs Intel de 64 bits. Al no estar notarizada esta compilación, la primera apertura puede requerir clic derecho sobre TMPOS, seleccionar **Abrir** y confirmar.
 
-También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/tmpos-desktop/releases/download/v2.13.1/TMPOS-2.13.1-x64.zip).
+También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/tmpos-desktop/releases/download/v2.13.3/TMPOS-2.13.3-x64.zip).
 
 ## Novedades de v2.13.3
 
